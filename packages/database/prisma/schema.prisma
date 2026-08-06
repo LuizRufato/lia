@@ -1,0 +1,85 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AdminUser {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Tenant {
+  id        String    @id @default(uuid())
+  name      String
+  products  Product[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+enum MarketplaceType {
+  SHOPEE
+  MERCADO_LIVRE
+}
+
+model Marketplace {
+  id        String          @id @default(uuid())
+  name      String
+  type      MarketplaceType @unique
+  offers    Offer[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  offers      Offer[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum OfferStatus {
+  ACTIVE
+  PAUSED
+}
+
+model Offer {
+  id            String       @id @default(uuid())
+  productId     String
+  product       Product      @relation(fields: [productId], references: [id])
+  marketplaceId String
+  marketplace   Marketplace  @relation(fields: [marketplaceId], references: [id])
+  price         Int          // Stored in cents
+  commission    Int          // Stored in cents
+  externalId    String?      // ID on the marketplace
+  url           String?
+  status        OfferStatus  @default(ACTIVE)
+  links         TrackedLink[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+enum LinkStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model TrackedLink {
+  id        String     @id @default(uuid())
+  offerId   String
+  offer     Offer      @relation(fields: [offerId], references: [id])
+  slug      String     @unique
+  targetUrl String
+  status    LinkStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}

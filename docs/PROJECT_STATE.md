@@ -20,14 +20,24 @@
 * Nenhuma ação necessária no momento.
 
 ## Não iniciado
-* Autenticação e Banco de Dados Real (Fase 1) - **Ainda NÃO iniciada**.
 * Módulos, Tracker, Shopee, ML, WhatsApp, Telegram, etc.
 
 ## Problemas conhecidos
 * Nenhum no momento (Dependências básicas e hardening de ambiente resolvidos).
 
-## Próximo passo recomendado
-* Iniciar a Fase 1 (Autenticação e Modelagem Base do DB).
+## Status do Projeto
+- **Fase 0 (Setup & Hardening):** Concluída.
+- [x] Concluída Fase 1 (Banco de Dados + API + Autenticação Admin + Estrutura inicial do Painel).
+- [ ] Fase 2: Criar as integrações básicas (Shopee/Mercado Livre).
+- [ ] Fase 3: Rastreamento.
+- **Fase 3 (Automação LIA):** Não iniciada.
+- **Fase 4 (Tracker):** Não iniciada.
+- **Fase 5 (SaaS):** Não iniciada.
+
+## Próximos Passos
+- Aguardar validação do usuário sobre a infraestrutura baseada no monorepo (API + Web) da Fase 1.
+- Executar testes locais via scripts (geração de admin, login).
+- Após aprovação da Fase 1, iniciar Fase 2 (Integração com Mercado Livre / Shopee).
 
 ## Integrações
 Shopee: Não conectada
