@@ -11,7 +11,12 @@
     "test": "npm run test -w apps/api"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.4",
     "concurrently": "^10.0.4",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.9.1",
+    "pg": "^8.22.0"
   }
 }
