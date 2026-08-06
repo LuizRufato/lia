@@ -1,0 +1,16 @@
+{
+  "name": "lia-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "echo \"Em breve: script para rodar todos os apps\"",
+    "build": "echo \"Em breve: script de build\"",
+    "test": "echo \"Em breve: script de testes\""
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
