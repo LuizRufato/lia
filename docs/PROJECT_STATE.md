@@ -2,29 +2,32 @@
 
 Última atualização: 2026-08-06
 
-## Funcionando
+## Funcionando (Fase 0 Concluída)
 * Estrutura de pastas do monorepo criada.
-* Documentação base inicializada (Fase 0).
-* Git inicializado e commit inicial realizado.
-* Docker Desktop configurado com WSL 2 e SVM.
-* Contêineres PostgreSQL e Redis configurados e operantes.
-* Repositório Git configurado com `.gitignore` devidamente estruturado para credenciais/secrets.
+* Documentação base inicializada e atualizada.
+* Git configurado (Branch principal: `main`).
+* Repositório remoto configurado: `https://github.com/LuizRufato/lia` (`origin`).
+* Push inicial já realizado.
+* Docker Desktop configurado com WSL 2 e SVM operacionais.
+* Contêineres PostgreSQL e Redis configurados e operantes localmente.
+* Serviços limitados a `127.0.0.1` e healthchecks aplicados no `docker-compose.yml`.
+* Repositório Git configurado com `.gitignore` devidamente estruturado. Nenhum secret ou `.env` real está rastreado.
 
 ## Parcial
-* Nenhuma pendência.
+* Nenhuma pendência da Fase 0.
 
 ## Aguardando credenciais / Ações do Usuário
-* Nenhuma ação necessária da parte do usuário para a Fase 0.
+* Nenhuma ação necessária no momento.
 
 ## Não iniciado
-* Autenticação e Banco de Dados Real (Fase 1).
+* Autenticação e Banco de Dados Real (Fase 1) - **Ainda NÃO iniciada**.
 * Módulos, Tracker, Shopee, ML, WhatsApp, Telegram, etc.
 
 ## Problemas conhecidos
-* Nenhum no momento (Dependências básicas de ambiente resolvidas).
+* Nenhum no momento (Dependências básicas e hardening de ambiente resolvidos).
 
 ## Próximo passo recomendado
-* Criar repositório remoto no GitHub e realizar push. Após isso, iniciar a Fase 1 (Autenticação e Modelagem Base do DB).
+* Iniciar a Fase 1 (Autenticação e Modelagem Base do DB).
 
 ## Integrações
 Shopee: Não conectada
@@ -33,4 +36,6 @@ Telegram: Não conectada
 WhatsApp: Não conectada
 
 ## Últimos testes
-* Nenhum ainda.
+* `docker compose config` validado.
+* Teste de conexão no PostgreSQL e Redis realizados.
+* Status dos healthchecks dos contêineres validados (healthy).
