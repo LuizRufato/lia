@@ -32,8 +32,8 @@ describe('HealthController', () => {
         {
           provide: ConfigService,
           useValue: { get: jest.fn() },
-        }
-      ]
+        },
+      ],
     }).compile();
 
     controller = module.get<HealthController>(HealthController);

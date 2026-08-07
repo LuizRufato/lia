@@ -18,6 +18,8 @@ export class OfferService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  public clock = () => Date.now();
+
   async processObservation(observationId: string) {
     this.logger.log(`Processing observation ${observationId}`);
 
@@ -36,24 +38,35 @@ export class OfferService {
     // Assume it is already validated by ingestion, but we can cast it
     const canonicalOffer = payload as CanonicalOffer;
 
+    // 3. Score
+    const breakdown = this.scorer.evaluate(canonicalOffer);
+
     // 2. Load latest state for Dedup
-    const lastPrice = observation.offer.price;
     const prevEvalsCount = await this.prisma.offerEvaluation.count({
-      where: { offerId: observation.offerId },
+      where: { observation: { offerId: observation.offerId } },
     });
 
     if (prevEvalsCount > 0) {
+      const lastPriceHistory = await this.prisma.priceHistory.findFirst({
+        where: { offerId: observation.offerId },
+        orderBy: { createdAt: 'desc' },
+      });
+      const lastPrice = lastPriceHistory
+        ? lastPriceHistory.priceCents
+        : observation.offer.price;
+
       const isDup = this.dedupRule.isDuplicate(canonicalOffer, lastPrice);
       if (isDup) {
-        await this.saveEvaluation(observation, 'REJECTED_DUPLICATE', 0, [
-          'No significant price drop',
-        ]);
+        await this.saveEvaluation(
+          observation,
+          'REJECTED_DUPLICATE',
+          breakdown.finalScore,
+          ['No significant price drop'],
+          breakdown,
+        );
         return;
       }
     }
-
-    // 3. Score
-    const breakdown = this.scorer.evaluate(canonicalOffer);
 
     if (breakdown.dataCoverage < 0.6) {
       await this.saveEvaluation(
@@ -87,9 +100,13 @@ export class OfferService {
     if (cat) {
       const recent = await this.prisma.publicationCandidate.count({
         where: {
-          createdAt: { gte: new Date(Date.now() - 12 * 60 * 60 * 1000) }, // 12 hours
+          createdAt: { gte: new Date(this.clock() - 12 * 60 * 60 * 1000) }, // 12 hours
+          status: { in: ['PENDING', 'QUEUED'] },
           evaluation: {
-            offer: { tenantId: observation.offer.tenantId },
+            observation: {
+              offer: { tenantId: observation.offer.tenantId },
+              category: cat,
+            },
           },
         },
       });
@@ -158,7 +175,6 @@ export class OfferService {
   ) {
     return this.prisma.offerEvaluation.create({
       data: {
-        offerId: observation.offerId,
         observationId: observation.id,
         scoreVersion: breakdown?.scoreVersion || 'lia-score-v1',
         score: score,

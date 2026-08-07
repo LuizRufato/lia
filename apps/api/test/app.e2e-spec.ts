@@ -29,12 +29,12 @@ describe('AppController (e2e)', () => {
     })
       .overrideProvider(PrismaService)
       .useValue({
-        adminUser: { 
+        adminUser: {
           findUnique: jest.fn().mockResolvedValue({
             id: '123',
             email: 'test@test.com',
-            passwordHash: testHash
-          })
+            passwordHash: testHash,
+          }),
         },
         $queryRaw: jest.fn().mockResolvedValue([{ 1: 1 }]),
       })
@@ -54,22 +54,18 @@ describe('AppController (e2e)', () => {
   });
 
   it('/health (GET) should be accessible without auth', () => {
-    return request(app.getHttpServer())
-      .get('/health')
-      .expect(200);
+    return request(app.getHttpServer()).get('/health').expect(200);
   });
 
   it('/auth/login (POST) should return 401 with wrong credentials', () => {
     return request(app.getHttpServer())
       .post('/auth/login')
       .send({ email: 'test@test.com', password: 'wrongpassword' })
-      .expect(401); 
+      .expect(401);
   });
 
   it('/auth/me (GET) should be protected and return 401 without auth', () => {
-    return request(app.getHttpServer())
-      .get('/auth/me')
-      .expect(401);
+    return request(app.getHttpServer()).get('/auth/me').expect(401);
   });
 
   it('/auth/login (POST) should login and return cookie', async () => {
@@ -77,7 +73,7 @@ describe('AppController (e2e)', () => {
       .post('/auth/login')
       .send({ email: 'test@test.com', password: 'test' })
       .expect(200);
-      
+
     expect(response.headers['set-cookie']).toBeDefined();
     validToken = response.headers['set-cookie'][0];
   });

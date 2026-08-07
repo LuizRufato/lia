@@ -47,7 +47,7 @@ export const CanonicalOfferSchema = z.object({
     rating: z.number().min(0).max(5).nullable().optional(),
   }),
 
-  discoveredAt: z.date(),
+  discoveredAt: z.coerce.date(),
 });
 
 export type CanonicalOffer = z.infer<typeof CanonicalOfferSchema>;

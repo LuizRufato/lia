@@ -8,7 +8,7 @@ async function bootstrap() {
   });
 
   const adminCommandService = app.get(AdminCommandService);
-  
+
   try {
     await adminCommandService.run();
   } catch (error) {

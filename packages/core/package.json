@@ -9,6 +9,7 @@
     "lint": "eslint src/**/*.ts"
   },
   "dependencies": {
+    "decimal.js": "^10.6.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {

@@ -31,6 +31,40 @@ services:
       timeout: 3s
       retries: 5
 
+  db_test:
+    image: postgres:15-alpine
+    container_name: lia-postgres-test
+    restart: always
+    environment:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: lia_test
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata_test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d lia_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis_test:
+    image: redis:7-alpine
+    container_name: lia-redis-test
+    restart: always
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redisdata_test:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 volumes:
   pgdata:
   redisdata:
+  pgdata_test:
+  redisdata_test:

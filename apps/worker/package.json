@@ -20,16 +20,17 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@lia/core": "*",
+    "@nestjs/bullmq": "^11.0.0",
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
-    "@nestjs/bullmq": "^11.0.0",
-    "bullmq": "^5.0.0",
-    "ioredis": "^5.0.0",
     "@nestjs/schedule": "^5.0.0",
-    "@nestjs/config": "^4.0.0",
-    "@lia/core": "*",
+    "bullmq": "^5.0.0",
     "database": "*",
+    "ioredis": "^5.0.0",
+    "joi": "^18.2.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },

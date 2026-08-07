@@ -30,47 +30,48 @@ export class LiaScoreV1 {
       }
     }
 
-    const dataCoverage = availableComponents.length / Object.keys(this.config.weights).length;
+    let totalPossibleWeight = 0;
+    let availableWeight = 0;
 
-    // Redistribute weights
-    const effectiveWeights: Record<string, number> = {};
-    let sumAvailableOriginalWeights = 0;
-
-    for (const comp of availableComponents) {
-      sumAvailableOriginalWeights += this.config.weights[comp as keyof typeof this.config.weights];
+    for (const [key, weight] of Object.entries(this.config.weights)) {
+      totalPossibleWeight += weight;
+      if (availableComponents.includes(key)) {
+        availableWeight += weight;
+      }
     }
 
-    for (const comp of availableComponents) {
-      const original = this.config.weights[comp as keyof typeof this.config.weights];
-      effectiveWeights[comp] = (original / sumAvailableOriginalWeights) * 100;
-    }
-    
-    for (const comp of absentComponents) {
-      effectiveWeights[comp] = 0;
-    }
+    const dataCoverage = totalPossibleWeight > 0 ? availableWeight / totalPossibleWeight : 0;
 
-    // Calculate final score
-    let finalScore = 0;
+    // Calculate raw score (weighted average of available components)
+    let rawScore = 0;
     const componentContributions: Record<string, number> = {};
 
-    for (const comp of availableComponents) {
-      const score = scores[comp as keyof typeof scores] as number;
-      const weight = effectiveWeights[comp];
-      const contribution = (score * weight) / 100;
-      componentContributions[comp] = contribution;
-      finalScore += contribution;
+    if (availableWeight > 0) {
+      for (const comp of availableComponents) {
+        const score = scores[comp as keyof typeof scores] as number;
+        const originalWeight = this.config.weights[comp as keyof typeof this.config.weights];
+        const effectiveWeight = (originalWeight / availableWeight) * 100;
+        const contribution = (score * effectiveWeight) / 100;
+        componentContributions[comp] = contribution;
+        rawScore += contribution;
+      }
     }
+
+    // Final Score = rawScore * sqrt(dataCoverage)
+    const Decimal = require('decimal.js');
+    const finalScoreDec = new Decimal(rawScore).mul(new Decimal(dataCoverage).sqrt());
+    const finalScore = parseFloat(finalScoreDec.toFixed(2));
 
     return {
       scoreVersion: this.config.version,
-      dataCoverage,
+      dataCoverage: parseFloat(dataCoverage.toFixed(4)),
       availableComponents,
       absentComponents,
       originalWeights: this.config.weights,
-      effectiveWeights,
-      componentScores: scores as any, // Nulls mapped to 0 effectively or kept null in report
+      effectiveWeights: {}, // Removed as it varies or can be computed if needed
+      componentScores: scores as any,
       componentContributions,
-      finalScore: parseFloat(finalScore.toFixed(2)),
+      finalScore,
     };
   }
 

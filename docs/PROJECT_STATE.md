@@ -25,12 +25,13 @@
 ## Problemas conhecidos
 * Nenhum no momento (Dependências básicas e hardening de ambiente resolvidos).
 
-## Status do Projeto
-- **Fase 0 (Setup & Hardening):** Concluída.
-- [x] Concluída Fase 1 (Banco de Dados + API + Autenticação Admin + Estrutura inicial do Painel).
-- [ ] Fase 2: Criar as integrações básicas (Shopee/Mercado Livre).
-- [ ] Fase 3: Rastreamento.
-- **Fase 3 (Automação LIA):** Não iniciada.
+## Fases do Projeto
+
+- [x] **Fase 0**: Configuração Inicial (Linter, Prettier, Prisma, Docker)
+- [x] **Fase 1**: Gateway de Acesso (Login, JWT, Rotas Públicas/Privadas)
+- [x] **Fase 2**: Motor Central V1 (Score, Limitações) - **Status**: Fase 2 implementada — aguardando aprovação final.
+- [ ] **Fase 3**: Publicador (Telegram Bot)
+- [ ] **Fase 4**: Automação (Cron e Escala):** Não iniciada.
 - **Fase 4 (Tracker):** Não iniciada.
 - **Fase 5 (SaaS):** Não iniciada.
 

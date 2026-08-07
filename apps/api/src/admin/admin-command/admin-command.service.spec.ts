@@ -13,7 +13,7 @@ describe('AdminCommandService', () => {
         {
           provide: PrismaService,
           useValue: {},
-        }
+        },
       ],
     }).compile();
 

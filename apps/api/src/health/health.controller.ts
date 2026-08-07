@@ -1,5 +1,9 @@
 import { Controller, Get } from '@nestjs/common';
-import { HealthCheck, HealthCheckService, PrismaHealthIndicator } from '@nestjs/terminus';
+import {
+  HealthCheck,
+  HealthCheckService,
+  PrismaHealthIndicator,
+} from '@nestjs/terminus';
 import { PrismaService } from '../prisma.service';
 import { Public } from '../auth/public.decorator';
 import { RedisHealthIndicator } from './redis.health';
@@ -21,7 +25,12 @@ export class HealthController {
   check() {
     return this.health.check([
       () => this.prismaHealth.pingCheck('database', this.prisma),
-      () => this.redisHealth.pingCheck('redis', this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379'),
+      () =>
+        this.redisHealth.pingCheck(
+          'redis',
+          this.configService.get<string>('REDIS_URL') ||
+            'redis://localhost:6379',
+        ),
     ]);
   }
 }

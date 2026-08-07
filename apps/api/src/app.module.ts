@@ -16,18 +16,22 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     PrismaModule,
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '../../.env',
+      envFilePath:
+        process.env.NODE_ENV === 'test' ? '../../.env.test' : '../../.env',
       validationSchema: Joi.object({
         PORT: Joi.number().default(3000),
         JWT_SECRET: Joi.string().min(32).required(),
         DATABASE_URL: Joi.string().required(),
+        REDIS_URL: Joi.string().required(),
         WEB_URL: Joi.string().default('http://localhost:3001'),
       }),
     }),
-    ThrottlerModule.forRoot([{
-      ttl: 60000,
-      limit: 10,
-    }]),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 10,
+      },
+    ]),
     AdminModule,
     AuthModule,
     HealthModule,
@@ -42,7 +46,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
-    }
+    },
   ],
 })
 export class AppModule {}

@@ -83,14 +83,13 @@ model Offer {
 
   title      String @default("")
   price      Int
-  commission Int
+  commission Int?
   url        String
 
   status OfferStatus   @default(ACTIVE)
   links  TrackedLink[]
 
   observations   OfferObservation[]
-  evaluations    OfferEvaluation[]
   priceHistories PriceHistory[]
 
   createdAt DateTime @default(now())
@@ -106,6 +105,7 @@ model OfferObservation {
   correlationId    String @unique
   schemaVersion    String
   canonicalPayload Json
+  category         String?
 
   evaluations OfferEvaluation[]
 
@@ -115,13 +115,11 @@ model OfferObservation {
 
 model OfferEvaluation {
   id            String           @id @default(uuid())
-  offerId       String
-  offer         Offer            @relation(fields: [offerId], references: [id])
   observationId String
   observation   OfferObservation @relation(fields: [observationId], references: [id])
 
   scoreVersion    String
-  score           Decimal
+  score           Decimal?
   decision        EvaluationDecision
   decisionReasons String[]
 
@@ -132,7 +130,7 @@ model OfferEvaluation {
 
   evaluatedAt DateTime @default(now())
 
-  @@index([offerId])
+  @@unique([observationId, scoreVersion])
   @@index([decision, evaluatedAt])
 }
 

@@ -25,7 +25,8 @@ export class AdminCommandService {
         type: 'text',
         name: 'email',
         message: 'Enter admin email:',
-        validate: (value: string) => value.includes('@') ? true : 'Invalid email'
+        validate: (value: string) =>
+          value.includes('@') ? true : 'Invalid email',
       });
       email = response.email;
     }
@@ -37,7 +38,7 @@ export class AdminCommandService {
 
     // Check if exists
     const existing = await this.prisma.adminUser.findUnique({
-      where: { email }
+      where: { email },
     });
 
     if (existing) {
@@ -49,7 +50,8 @@ export class AdminCommandService {
       type: 'password',
       name: 'password',
       message: 'Enter a strong password:',
-      validate: (value: string) => value.length >= 8 ? true : 'Password must be at least 8 characters'
+      validate: (value: string) =>
+        value.length >= 8 ? true : 'Password must be at least 8 characters',
     });
 
     if (!password) {
@@ -62,8 +64,8 @@ export class AdminCommandService {
     await this.prisma.adminUser.create({
       data: {
         email,
-        passwordHash
-      }
+        passwordHash,
+      },
     });
 
     console.log(`\nSuccess: Admin ${email} created successfully.`);

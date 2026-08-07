@@ -38,9 +38,14 @@ describe('Offer Processor (e2e)', () => {
   afterAll(async () => {
     // Delete only keys belonging to this test prefix
     if (redis) {
-      const keys = await redis.keys(`${testPrefix}:*`);
-      if (keys.length > 0) {
-        await redis.del(...keys);
+      const stream = redis.scanStream({
+        match: `${testPrefix}:*`,
+        count: 100
+      });
+      for await (const keys of stream) {
+        if (keys.length > 0) {
+          await redis.del(...keys);
+        }
       }
       await redis.quit();
     }
@@ -109,7 +114,13 @@ describe('Offer Processor (e2e)', () => {
     const processor = app.get(OfferProcessor);
     await processor.process({
       id: '1',
-      data: { observationId: obs.id },
+      data: {
+        schemaVersion: obs.schemaVersion,
+        correlationId: obs.correlationId,
+        tenantId: tenant!.id,
+        observationId: obs.id,
+        action: 'evaluate'
+      },
     } as any);
 
     // Verify Evaluation
@@ -118,15 +129,17 @@ describe('Offer Processor (e2e)', () => {
     });
 
     expect(evalResult).toBeDefined();
-    expect(evalResult.decision).toBe('ELIGIBLE');
+    expect(evalResult).toBeDefined();
+    expect(evalResult!.decision).toBe('ELIGIBLE');
 
     // Verify Candidate
     const candidate = await prisma.publicationCandidate.findFirst({
-      where: { evaluationId: evalResult.id },
+      where: { evaluationId: evalResult!.id },
     });
 
     expect(candidate).toBeDefined();
-    expect(candidate.status).toBe('PENDING');
+    expect(candidate).toBeDefined();
+    expect(candidate!.status).toBe('PENDING');
   });
 
   it('should reject as duplicate if price is the same', async () => {
@@ -136,8 +149,8 @@ describe('Offer Processor (e2e)', () => {
 
     const offer = await prisma.offer.create({
       data: {
-        tenant: { connect: { id: tenant.id } },
-        marketplace: { connect: { id: mp.id } },
+        tenant: { connect: { id: tenant!.id } },
+        marketplace: { connect: { id: mp!.id } },
         externalId: canonical.externalOfferId,
         title: canonical.product.title,
         price: 10000, // Same price
@@ -158,7 +171,6 @@ describe('Offer Processor (e2e)', () => {
 
     await prisma.offerEvaluation.create({
       data: {
-        offerId: offer.id,
         observationId: mockObs.id,
         scoreVersion: '1.0',
         score: 100,
@@ -182,14 +194,21 @@ describe('Offer Processor (e2e)', () => {
     const processor = app.get(OfferProcessor);
     await processor.process({
       id: '2',
-      data: { observationId: obs.id },
+      data: {
+        schemaVersion: obs.schemaVersion,
+        correlationId: obs.correlationId,
+        tenantId: tenant!.id,
+        observationId: obs.id,
+        action: 'evaluate'
+      },
     } as any);
 
     const evalResult = await prisma.offerEvaluation.findFirst({
       where: { observationId: obs.id },
     });
 
-    expect(evalResult.decision).toBe('REJECTED_DUPLICATE');
+    expect(evalResult).toBeDefined();
+    expect(evalResult!.decision).toBe('REJECTED_DUPLICATE');
   });
 
   it('should accept as price drop if price drops >= 5%', async () => {
@@ -201,8 +220,8 @@ describe('Offer Processor (e2e)', () => {
 
     const offer = await prisma.offer.create({
       data: {
-        tenant: { connect: { id: tenant.id } },
-        marketplace: { connect: { id: mp.id } },
+        tenant: { connect: { id: tenant!.id } },
+        marketplace: { connect: { id: mp!.id } },
         externalId: canonical.externalOfferId,
         title: canonical.product.title,
         price: 10000, // Old price
@@ -223,7 +242,6 @@ describe('Offer Processor (e2e)', () => {
 
     await prisma.offerEvaluation.create({
       data: {
-        offerId: offer.id,
         observationId: mockObs.id,
         scoreVersion: '1.0',
         score: 100,
@@ -247,26 +265,43 @@ describe('Offer Processor (e2e)', () => {
     const processor = app.get(OfferProcessor);
     await processor.process({
       id: '3',
-      data: { observationId: obs.id },
+      data: {
+        schemaVersion: obs.schemaVersion,
+        correlationId: obs.correlationId,
+        tenantId: tenant!.id,
+        observationId: obs.id,
+        action: 'evaluate'
+      },
     } as any);
 
     const evalResult = await prisma.offerEvaluation.findFirst({
       where: { observationId: obs.id },
     });
 
-    expect(evalResult.decision).toBe('ELIGIBLE');
+    expect(evalResult).toBeDefined();
+    expect(evalResult!.decision).toBe('ELIGIBLE');
   });
 
   it('should reconcile PENDING candidates', async () => {
     // Create an old PENDING candidate
     const reconciler = app.get(ReconcilerService);
 
-    const evalMock = await prisma.offerEvaluation.findFirst();
+    const offer = await prisma.offer.findFirst();
+
+    const obs = await prisma.offerObservation.create({
+      data: {
+        offerId: offer.id,
+        correlationId: `rec_${Date.now()}`,
+        schemaVersion: '1.0',
+        canonicalPayload: {} as any,
+        observedAt: new Date(),
+      }
+    });
+
     const uniqueEval = await prisma.offerEvaluation.create({
       data: {
-        offerId: evalMock.offerId,
-        observationId: evalMock.observationId,
-        scoreVersion: '1.0',
+        observationId: obs.id,
+        scoreVersion: '1.1',
         score: 100,
         decision: 'ELIGIBLE',
         decisionReasons: [],
@@ -291,11 +326,136 @@ describe('Offer Processor (e2e)', () => {
       where: { id: candidate.id },
     });
 
-    expect(updated.status).toBe('QUEUED');
+    expect(updated).toBeDefined();
+    expect(updated!.status).toBe('QUEUED');
 
     // Check job exists in pubQueue
     const job = await pubQueue.getJob(`pub-${candidate.id}`);
     expect(job).toBeDefined();
-    expect(job.data.candidateId).toBe(candidate.id);
+    expect(job!.data.candidateId).toBe(candidate.id);
   });
+
+  it('should reject due to category fatigue only when same category reaches limit', async () => {
+    const canonical = generateCanonicalOffer();
+    canonical.product.normalizedCategory = 'Electronics';
+
+    const tenant = await prisma.tenant.findFirst();
+    const mp = await prisma.marketplace.findFirst();
+
+    for(let i=0; i<5; i++) {
+      const offerTest = await prisma.offer.create({
+        data: {
+          tenant: { connect: { id: tenant.id } },
+          marketplace: { connect: { id: mp.id } },
+          externalId: `ext_fatigue_${i}_${Date.now()}`,
+          title: 'Old Electronic',
+          price: 10000,
+          commission: 1000,
+          url: 'http://foo',
+        }
+      });
+      const mockObs = await prisma.offerObservation.create({
+        data: {
+          offerId: offerTest.id,
+          correlationId: `mock_cat_${i}_${Date.now()}`,
+          schemaVersion: '1.0',
+          category: 'Electronics',
+          canonicalPayload: {} as any,
+          observedAt: new Date(),
+        }
+      });
+      const ev = await prisma.offerEvaluation.create({
+        data: {
+          observationId: mockObs.id,
+          scoreVersion: '1.0',
+          score: 100,
+          decision: 'ELIGIBLE',
+          decisionReasons: [],
+          scoreBreakdown: {},
+          inputsSnapshot: {},
+        }
+      });
+      await prisma.publicationCandidate.create({
+        data: { evaluationId: ev.id, status: 'QUEUED' }
+      });
+    }
+
+    const offer = await prisma.offer.create({
+      data: {
+        tenant: { connect: { id: tenant.id } },
+        marketplace: { connect: { id: mp.id } },
+        externalId: `ext_fatigue_${Date.now()}`,
+        title: 'New Electronic',
+        price: 10000,
+        commission: 1000,
+        url: 'http://foo',
+      }
+    });
+    const obs = await prisma.offerObservation.create({
+      data: {
+        offerId: offer.id,
+        correlationId: `evt_fatigue_${Date.now()}`,
+        schemaVersion: '1.0',
+        category: 'Electronics',
+        canonicalPayload: canonical as any,
+        observedAt: new Date(),
+      }
+    });
+
+    const processor = app.get(OfferProcessor);
+    await processor.process({
+      id: 'fatigue',
+      data: {
+        schemaVersion: obs.schemaVersion,
+        correlationId: obs.correlationId,
+        tenantId: tenant.id,
+        observationId: obs.id,
+        action: 'evaluate'
+      },
+    } as any);
+
+    const evalResult = await prisma.offerEvaluation.findFirst({ where: { observationId: obs.id } });
+    expect(evalResult).toBeDefined();
+    expect(evalResult.decision).toBe('REJECTED_FATIGUE');
+
+    const offerFashion = await prisma.offer.create({
+      data: {
+        tenant: { connect: { id: tenant.id } },
+        marketplace: { connect: { id: mp.id } },
+        externalId: `ext_fashion_${Date.now()}`,
+        title: 'New Fashion',
+        price: 15000,
+        commission: 1500,
+        url: 'http://foo2',
+      }
+    });
+
+    // Test another category
+    canonical.product.normalizedCategory = 'Fashion';
+    const obsFashion = await prisma.offerObservation.create({
+      data: {
+        offerId: offerFashion.id,
+        correlationId: `evt_fashion_${Date.now()}`,
+        schemaVersion: '1.0',
+        category: 'Fashion',
+        canonicalPayload: canonical as any,
+        observedAt: new Date(),
+      }
+    });
+    await processor.process({
+      id: 'fashion',
+      data: {
+        schemaVersion: obsFashion.schemaVersion,
+        correlationId: obsFashion.correlationId,
+        tenantId: tenant.id,
+        observationId: obsFashion.id,
+        action: 'evaluate'
+      },
+    } as any);
+
+    const evalFashion = await prisma.offerEvaluation.findFirst({ where: { observationId: obsFashion.id } });
+    expect(evalFashion).toBeDefined();
+    expect(evalFashion.decision).toBe('ELIGIBLE');
+  });
+
 });

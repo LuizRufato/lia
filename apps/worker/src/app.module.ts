@@ -7,12 +7,20 @@ import { PrismaService } from './prisma.service';
 import { OfferService } from './offer.service';
 import { OfferProcessor } from './offer.processor';
 import { ReconcilerService } from './reconciler.service';
+import { IngestionService } from './ingestion.service';
+
+import * as Joi from 'joi';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '../../.env',
+      envFilePath:
+        process.env.NODE_ENV === 'test' ? '../../.env.test' : '../../.env',
+      validationSchema: Joi.object({
+        DATABASE_URL: Joi.string().required(),
+        REDIS_URL: Joi.string().required(),
+      }),
     }),
     ScheduleModule.forRoot(),
     BullModule.forRootAsync({
@@ -34,6 +42,12 @@ import { ReconcilerService } from './reconciler.service';
     }),
   ],
   controllers: [],
-  providers: [PrismaService, OfferService, OfferProcessor, ReconcilerService],
+  providers: [
+    PrismaService,
+    OfferService,
+    OfferProcessor,
+    ReconcilerService,
+    IngestionService,
+  ],
 })
 export class AppModule {}
