@@ -1,4 +1,4 @@
-import { CanonicalOffer } from '../models/CanonicalOffer';
+import { CanonicalOffer } from "../models/CanonicalOffer";
 
 export interface DeduplicationConfig {
   priceDropBpsThreshold: number; // e.g., 500 = 5%
@@ -13,7 +13,10 @@ export class DeduplicationRule {
    * @param lastKnownPriceCents The price we have currently consolidated in the DB
    * @returns true if it's a duplicate and should be rejected, false if it's a new event (e.g. price drop)
    */
-  isDuplicate(currentOffer: CanonicalOffer, lastKnownPriceCents: number | null): boolean {
+  isDuplicate(
+    currentOffer: CanonicalOffer,
+    lastKnownPriceCents: number | null,
+  ): boolean {
     if (lastKnownPriceCents == null) {
       // Never seen this product, not a duplicate
       return false;
@@ -27,7 +30,8 @@ export class DeduplicationRule {
     }
 
     // Calculate percentage drop
-    const dropBps = ((lastKnownPriceCents - currentPrice) / lastKnownPriceCents) * 10000;
+    const dropBps =
+      ((lastKnownPriceCents - currentPrice) / lastKnownPriceCents) * 10000;
 
     if (dropBps >= this.config.priceDropBpsThreshold) {
       // It's a significant price drop, let it pass (not a duplicate)

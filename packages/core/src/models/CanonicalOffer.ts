@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 export const CanonicalOfferSchema = z.object({
   marketplace: z.string().min(1),
@@ -31,7 +31,7 @@ export const CanonicalOfferSchema = z.object({
   commission: z.object({
     estimatedAmountCents: z.number().int().min(0).nullable().optional(),
     rateBps: z.number().int().min(0).max(10000).nullable().optional(),
-    source: z.enum(['API', 'CALCULATED', 'UNKNOWN']),
+    source: z.enum(["API", "CALCULATED", "UNKNOWN"]),
   }),
 
   metrics: z.object({
@@ -46,6 +46,8 @@ export const CanonicalOfferSchema = z.object({
     isOfficial: z.boolean().nullable().optional(),
     rating: z.number().min(0).max(5).nullable().optional(),
   }),
+
+  rawObservation: z.record(z.any()).optional(),
 
   discoveredAt: z.coerce.date(),
 });

@@ -1,29 +1,35 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { 
-  LayoutDashboard, 
-  Tag, 
-  FileText, 
-  BarChart2, 
-  Plug, 
-  MessageCircle, 
+import { useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  LayoutDashboard,
+  Tag,
+  FileText,
+  BarChart2,
+  Plug,
+  MessageCircle,
   Settings,
   LogOut,
   Menu,
-  X
-} from 'lucide-react';
+  X,
+  Bot,
+  Send,
+  BarChart3,
+  Store,
+  MessagesSquare,
+} from "lucide-react";
 
 const MENU_ITEMS = [
-  { name: 'Visão Geral', href: '/overview', icon: LayoutDashboard },
-  { name: 'Ofertas', href: '/offers', icon: Tag },
-  { name: 'Publicações', href: '/publications', icon: FileText },
-  { name: 'Analytics', href: '/analytics', icon: BarChart2 },
-  { name: 'Integrações', href: '/integrations', icon: Plug },
-  { name: 'Canais', href: '/channels', icon: MessageCircle },
-  { name: 'Configurações', href: '/settings', icon: Settings },
+  { name: "Visão Geral", href: "/overview", icon: LayoutDashboard },
+  { name: "Ofertas", href: "/offers", icon: Tag },
+  { name: "Publicações", href: "/publications", icon: Send },
+  { name: "Analytics", href: "/analytics", icon: BarChart3 },
+  { name: "Piloto Automático", href: "/autopilot", icon: Bot },
+  { name: "Integrações", href: "/integrations", icon: Store },
+  { name: "Canais", href: "/channels", icon: MessagesSquare },
+  { name: "Configurações", href: "/settings", icon: Settings },
 ];
 
 export default function AdminLayout({
@@ -37,11 +43,11 @@ export default function AdminLayout({
 
   const handleLogout = async () => {
     try {
-      await fetch('http://localhost:3000/auth/logout', { method: 'POST' });
-      router.push('/login');
+      await fetch("http://localhost:3000/auth/logout", { method: "POST" });
+      router.push("/login");
       router.refresh();
     } catch (error) {
-      console.error('Erro ao fazer logout', error);
+      console.error("Erro ao fazer logout", error);
     }
   };
 
@@ -50,27 +56,36 @@ export default function AdminLayout({
       {/* Mobile Header */}
       <div className="md:hidden flex items-center justify-between p-4 bg-[var(--color-surface)] border-b border-[var(--color-border)] sticky top-0 z-20">
         <h1 className="text-xl font-bold text-[var(--color-primary)]">LIA</h1>
-        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-[var(--color-text-primary)]">
+        <button
+          onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+          className="text-[var(--color-text-primary)]"
+        >
           {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
         </button>
       </div>
 
       {/* Sidebar */}
-      <aside className={`
+      <aside
+        className={`
         fixed inset-y-0 left-0 z-10 w-64 bg-[var(--color-surface)] border-r border-[var(--color-border)] transform transition-transform duration-200 ease-in-out flex flex-col
-        ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"}
         md:relative md:translate-x-0
-      `}>
+      `}
+      >
         <div className="p-6 hidden md:block">
-          <h1 className="text-2xl font-bold text-[var(--color-primary)] tracking-tight">LIA</h1>
-          <p className="text-xs text-[var(--color-text-secondary)] mt-1 font-medium">Painel Administrativo</p>
+          <h1 className="text-2xl font-bold text-[var(--color-primary)] tracking-tight">
+            LIA
+          </h1>
+          <p className="text-xs text-[var(--color-text-secondary)] mt-1 font-medium">
+            Painel Administrativo
+          </p>
         </div>
 
         <nav className="flex-1 px-4 py-4 md:py-0 space-y-1 overflow-y-auto">
           {MENU_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = pathname.startsWith(item.href);
-            
+
             return (
               <Link
                 key={item.name}
@@ -78,13 +93,16 @@ export default function AdminLayout({
                 onClick={() => setIsSidebarOpen(false)}
                 className={`
                   flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors
-                  ${isActive 
-                    ? 'bg-blue-50 text-[var(--color-secondary)]' 
-                    : 'text-[var(--color-text-secondary)] hover:bg-slate-50 hover:text-[var(--color-text-primary)]'
+                  ${
+                    isActive
+                      ? "bg-blue-50 text-[var(--color-secondary)]"
+                      : "text-[var(--color-text-secondary)] hover:bg-slate-50 hover:text-[var(--color-text-primary)]"
                   }
                 `}
               >
-                <Icon className={`mr-3 h-5 w-5 ${isActive ? 'text-[var(--color-secondary)]' : 'text-slate-400'}`} />
+                <Icon
+                  className={`mr-3 h-5 w-5 ${isActive ? "text-[var(--color-secondary)]" : "text-slate-400"}`}
+                />
                 {item.name}
               </Link>
             );
@@ -97,7 +115,9 @@ export default function AdminLayout({
               A
             </div>
             <div className="flex-1 overflow-hidden">
-              <p className="text-sm font-medium text-[var(--color-text-primary)] truncate">Administrador</p>
+              <p className="text-sm font-medium text-[var(--color-text-primary)] truncate">
+                Administrador
+              </p>
             </div>
           </div>
           <button
@@ -114,12 +134,11 @@ export default function AdminLayout({
       <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
         <header className="hidden md:flex h-16 bg-[var(--color-surface)] border-b border-[var(--color-border)] items-center px-8 shadow-sm">
           <h2 className="text-lg font-semibold text-[var(--color-text-primary)] capitalize">
-            {pathname.split('/')[1] || 'Dashboard'}
+            {MENU_ITEMS.find((i) => pathname.startsWith(i.href))?.name ||
+              "Visão Geral"}
           </h2>
         </header>
-        <div className="flex-1 overflow-auto p-4 md:p-8">
-          {children}
-        </div>
+        <div className="flex-1 overflow-auto p-4 md:p-8">{children}</div>
       </main>
     </div>
   );

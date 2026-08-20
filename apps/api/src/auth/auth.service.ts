@@ -29,10 +29,30 @@ export class AuthService {
       throw new UnauthorizedException('Credenciais inválidas.');
     }
 
-    const payload = { email: user.email, sub: user.id };
+    const membership = await this.prisma.tenantMembership.findFirst({
+      where: { adminUserId: user.id },
+    });
+
+    const tenantId = membership ? membership.tenantId : null;
+
+    const payload = { email: user.email, sub: user.id, tenantId };
 
     return {
       accessToken: this.jwtService.sign(payload),
     };
+  }
+
+  async getUserTenants(userId: string) {
+    const memberships = await this.prisma.tenantMembership.findMany({
+      where: { adminUserId: userId },
+      include: { tenant: true },
+    });
+
+    return memberships.map((m) => ({
+      id: m.tenant.id,
+      name: m.tenant.name,
+      role: m.role,
+      createdAt: m.tenant.createdAt,
+    }));
   }
 }

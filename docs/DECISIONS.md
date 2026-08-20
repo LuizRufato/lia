@@ -13,3 +13,7 @@
 ## DEC-002: PostgreSQL Fonte da Verdade
 - **Decisão:** PostgreSQL manterá os registros vitais (vendas, comissões, configurações, cliques analisados). Redis será apenas para transient data (rate limit, bullmq queues, cache efêmero).
 - **Motivo:** Garantir a persistência e não perder dinheiro (relatórios de comissão) em caso de restart do cluster Redis.
+
+## DEC-003: Uso Direto de Links do Mercado Livre (Sem Redirect 302)
+- **Decisão:** Diferente da Shopee, onde utilizamos o encurtador próprio (LIA Tracker) com redirecionamento 302, a LIA publicará DIRETAMENTE os links gerados pela Central de Afiliados do Mercado Livre, utilizando as Etiquetas nativas da plataforma para rastrear Channel/Tenant.
+- **Motivo:** Compliance com a Diretriz de Afiliados do ML, que proíbe o redirecionamento automático de domínios terceiros para o mercadolivre.com.br.

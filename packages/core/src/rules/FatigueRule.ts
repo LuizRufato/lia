@@ -1,4 +1,4 @@
-import { CanonicalOffer } from '../models/CanonicalOffer';
+import { CanonicalOffer } from "../models/CanonicalOffer";
 
 export interface FatigueConfig {
   maxCategoryPublicationsPerWindow: number;
@@ -13,8 +13,14 @@ export class FatigueRule {
    * @param categoryPublicationsInWindow The number of times this category was queued/published recently
    * @returns true if it should be rejected due to fatigue, false otherwise
    */
-  isFatigued(currentOffer: CanonicalOffer, categoryPublicationsInWindow: number): boolean {
-    if (categoryPublicationsInWindow >= this.config.maxCategoryPublicationsPerWindow) {
+  isFatigued(
+    currentOffer: CanonicalOffer,
+    categoryPublicationsInWindow: number,
+  ): boolean {
+    if (
+      categoryPublicationsInWindow >=
+      this.config.maxCategoryPublicationsPerWindow
+    ) {
       return true;
     }
 

@@ -8,18 +8,18 @@ export interface ScoreConfig {
     demand: number;
   };
   thresholds: {
-    minDataCoverage: number;       // e.g. 0.5 (50%)
+    minDataCoverage: number; // e.g. 0.5 (50%)
     minScoreForEligibility: number; // e.g. 50.0
     priceDropBpsThreshold: number; // e.g. 500 (5%)
   };
   caps: {
-    maxCommissionCents: number;    // Saturation point for absolute commission (e.g. 20000 = R$200)
-    maxCommissionBps: number;      // Saturation point for percentage (e.g. 1500 = 15%)
+    maxCommissionCents: number; // Saturation point for absolute commission (e.g. 20000 = R$200)
+    maxCommissionBps: number; // Saturation point for percentage (e.g. 1500 = 15%)
   };
 }
 
 export const LIA_SCORE_V1_CONFIG: ScoreConfig = {
-  version: 'lia-score-v1',
+  version: "lia-score-v1",
   weights: {
     financialValue: 35,
     dealQuality: 25,
@@ -34,6 +34,6 @@ export const LIA_SCORE_V1_CONFIG: ScoreConfig = {
   },
   caps: {
     maxCommissionCents: 15000, // R$ 150 saturation cap
-    maxCommissionBps: 2000,    // 20% saturation cap
-  }
+    maxCommissionBps: 2000, // 20% saturation cap
+  },
 };

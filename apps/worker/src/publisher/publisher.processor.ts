@@ -1,0 +1,482 @@
+import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
+import { Job, UnrecoverableError, DelayedError } from 'bullmq';
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma.service';
+import { TelegramService } from '../telegram/telegram.service';
+import { randomBytes } from 'crypto';
+import { PublishCandidateJobData } from '@lia/core';
+import { WhatsAppPublisher } from './whatsapp.publisher';
+import {
+  getEncryptionKey,
+  decryptSecret,
+  ShopeeAffiliateClient,
+} from '@lia/integrations';
+
+@Processor('publisher', {
+  concurrency: 1, // To avoid telegram rate limits and race conditions
+})
+@Injectable()
+export class PublisherProcessor extends WorkerHost {
+  private readonly logger = new Logger(PublisherProcessor.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly telegramService: TelegramService,
+    private readonly whatsappPublisher: WhatsAppPublisher,
+  ) {
+    super();
+  }
+
+  async process(job: Job<PublishCandidateJobData, any, string>): Promise<any> {
+    const { candidateId } = job.data;
+
+    // 1. Load Candidate and Offer
+    const candidate = await this.prisma.publicationCandidate.findUnique({
+      where: { id: candidateId },
+      include: {
+        evaluation: {
+          include: {
+            observation: {
+              include: {
+                offer: {
+                  include: {
+                    monetization: true,
+                    priceHistories: {
+                      orderBy: { createdAt: 'desc' },
+                      take: 1,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!candidate) {
+      throw new UnrecoverableError(`Candidate ${candidateId} not found`);
+    }
+
+    const offer = candidate.evaluation.observation.offer;
+
+    // 2. Load Channels for Tenant
+    const channels = await this.prisma.channel.findMany({
+      where: {
+        tenantId: offer.tenantId,
+        enabled: true,
+        provider: { in: ['TELEGRAM', 'WHATSAPP'] },
+      },
+    });
+
+    if (channels.length === 0) {
+      this.logger.warn(
+        `No enabled channels found for Tenant ${offer.tenantId}`,
+      );
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidateId },
+        data: { status: 'SKIPPED' },
+      });
+      return { skipped: true, reason: 'No channels' };
+    }
+
+    // Process all enabled channels
+    const results = [];
+    let hasFailed = false;
+
+    for (const channel of channels) {
+      const channelResult = await this.processChannel(
+        job,
+        candidate,
+        offer,
+        channel,
+      );
+      results.push(channelResult);
+      if (channelResult.failed) {
+        hasFailed = true;
+      }
+    }
+
+    // Update overall candidate status based on results
+    if (hasFailed) {
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidateId },
+        data: { status: 'FAILED' },
+      });
+    } else {
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidateId },
+        data: { status: 'PUBLISHED' },
+      });
+    }
+
+    return { results };
+  }
+
+  private async processChannel(
+    job: Job,
+    candidate: any,
+    offer: any,
+    channel: any,
+  ) {
+    // 2.5 Ensure Verified Affiliate Link for this specific channel
+    let affiliateUrl: string;
+    try {
+      affiliateUrl = await this.ensureVerifiedAffiliateLink(offer, channel);
+    } catch (e: any) {
+      this.logger.warn(
+        `Failed to verify affiliate link for channel ${channel.id}: ${e.message}`,
+      );
+      // Reject publication immediately
+      await this.prisma.autopilotAudit.create({
+        data: {
+          tenantId: offer.tenantId,
+          candidateId: candidate.id,
+          evaluationId: candidate.evaluation.id,
+          decision: 'REJECTED_MONETIZATION',
+          liaScore: candidate.evaluation.score || 0,
+          details: `Monetização falhou ou não pôde ser gerada para o canal ${channel.id}: ${e.message}`,
+        },
+      });
+      return {
+        skipped: true,
+        reason: 'REJECTED_MONETIZATION',
+        error: e.message,
+      };
+    }
+
+    // 3. Idempotent Publication Creation
+    let publication;
+    try {
+      publication = await this.prisma.publication.create({
+        data: {
+          candidateId: candidate.id,
+          channelId: channel.id,
+          status: 'PUBLISHING',
+        },
+      });
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        this.logger.warn(
+          `Publication already exists for candidate ${candidate.id} and channel ${channel.id}. Skipping to prevent duplication.`,
+        );
+        return { skipped: true, reason: 'Duplicate' };
+      }
+      throw error;
+    }
+
+    // 4. Create TrackedLink
+    // Slug generation with retry on collision (P2002)
+    if (
+      !affiliateUrl ||
+      (!affiliateUrl.includes('shopee') && !affiliateUrl.includes('shope.ee'))
+    ) {
+      throw new Error(
+        'Bloqueio Crítico: Tentativa de injetar productLink bruto no rastreador. É exigido AffiliateUrl verificado.',
+      );
+    }
+
+    let slug = '';
+    let linkId = '';
+    let retryCount = 0;
+    while (retryCount < 3) {
+      slug = randomBytes(5).toString('hex');
+      try {
+        const link = await this.prisma.trackedLink.create({
+          data: {
+            slug,
+            publicationId: publication.id,
+            offerId: offer.id,
+            destinationUrl: affiliateUrl,
+            active: true,
+          },
+        });
+        linkId = link.id;
+        break;
+      } catch (error: any) {
+        if (error.code === 'P2002') {
+          retryCount++;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!linkId) {
+      await this.prisma.publication.update({
+        where: { id: publication.id },
+        data: {
+          status: 'FAILED',
+          errorReason: 'Failed to generate unique slug',
+        },
+      });
+      throw new Error('Failed to generate unique slug after 3 attempts');
+    }
+
+    // 4.5. KILL SWITCH Validation
+    const config = await this.prisma.autopilotConfig.findUnique({
+      where: { tenantId: offer.tenantId },
+    });
+
+    if (!config || config.mode === 'OFF' || config.mode === 'MANUAL') {
+      this.logger.warn(
+        `Kill switch activated or Autopilot disabled (mode=${config?.mode}). Aborting publication ${publication.id}`,
+      );
+
+      await this.prisma.publication.update({
+        where: { id: publication.id },
+        data: { status: 'FAILED', errorReason: 'KILL_SWITCH_ABORTED' },
+      });
+
+      await this.prisma.autopilotAudit.create({
+        data: {
+          tenantId: offer.tenantId,
+          candidateId: candidate.id,
+          evaluationId: candidate.evaluation.id,
+          decision: 'REJECTED_KILL_SWITCH',
+          liaScore: candidate.evaluation.score || 0,
+          details: 'Publicação interrompida no Publisher pelo Kill Switch',
+        },
+      });
+
+      return { skipped: true, reason: 'KILL_SWITCH' };
+    }
+
+    // 5. Send to Channel
+    const trackerBaseUrl =
+      process.env.TRACKER_PUBLIC_BASE_URL ||
+      process.env.TRACKER_BASE_URL ||
+      'http://localhost:3002';
+    const finalUrl = `${trackerBaseUrl}/${slug}`;
+
+    const { CopyEngine } = require('@lia/core');
+
+    const caption = CopyEngine.generate({
+      title: offer.title,
+      priceCents: offer.price,
+      originalPriceCents:
+        (offer as any).priceHistories?.[0]?.priceCents || null, // Optional, safe bypass
+      currency: 'BRL',
+      locale: 'pt-BR',
+      discountPercentage: null, // Depending on where discount is
+      couponCode: null,
+      freeShipping: null,
+      finalLink: finalUrl,
+    });
+
+    try {
+      let messageId = null;
+
+      if (channel.provider === 'TELEGRAM') {
+        messageId = await this.telegramService.sendOfferMessage({
+          chatId: channel.externalChatId,
+          caption,
+          imageUrl: null,
+          link: finalUrl,
+        });
+      } else if (channel.provider === 'WHATSAPP') {
+        // Obter desconto
+        const discountBps = offer.priceHistories?.[0]?.discountBps || null;
+        messageId = await this.whatsappPublisher.publish(
+          offer.id,
+          publication.id,
+          channel.id,
+          finalUrl,
+          offer.title,
+          offer.price,
+          discountBps,
+        );
+      } else {
+        throw new Error(`Provider ${channel.provider} not supported`);
+      }
+
+      // 6. Success -> Save messageId
+      await this.prisma.publication.update({
+        where: { id: publication.id },
+        data: {
+          status: 'PUBLISHED',
+          externalMessageId: messageId,
+          publishedAt: new Date(),
+        },
+      });
+
+      return { success: true, messageId };
+    } catch (error: any) {
+      // 7. Error Handling
+      const isRateLimit = error.status === 429;
+      const isNetworkTimeout =
+        error.code === 'ECONNABORTED' || (error.request && !error.response);
+
+      if (isRateLimit) {
+        const retryAfter = error.response?.retryAfter || 60;
+        await this.prisma.publication.update({
+          where: { id: publication.id },
+          data: {
+            status: 'RETRYABLE',
+            errorReason: `Rate limit. Retry after ${retryAfter}s`,
+          },
+        });
+
+        // Use BullMQ delay
+        await job.moveToDelayed(Date.now() + retryAfter * 1000, job.token!);
+        throw new DelayedError();
+      } else if (isNetworkTimeout || error.message?.includes('Ambíguo')) {
+        // Delivery Unknown - NEVER retry automatically to avoid duplicate spam
+        await this.prisma.publication.update({
+          where: { id: publication.id },
+          data: {
+            status: 'DELIVERY_UNKNOWN',
+            errorReason: 'Timeout ambíguo após envio da requisição',
+          },
+        });
+
+        return { failed: true, reason: 'DELIVERY_UNKNOWN' };
+      } else {
+        await this.prisma.publication.update({
+          where: { id: publication.id },
+          data: { status: 'FAILED', errorReason: error.message },
+        });
+
+        return { failed: true, reason: error.message };
+      }
+    }
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job | undefined, error: Error) {
+    this.logger.error(`Publisher job ${job?.id} failed: ${error.message}`);
+  }
+
+  private async ensureVerifiedAffiliateLink(
+    offer: any,
+    channel: any,
+  ): Promise<string> {
+    const context = 'PUBLICATION';
+    const contextId = channel.id;
+
+    let affiliateLink = await this.prisma.affiliateLink.findUnique({
+      where: {
+        offerId_context_contextId: {
+          offerId: offer.id,
+          context,
+          contextId,
+        },
+      },
+    });
+
+    if (
+      affiliateLink &&
+      affiliateLink.status === 'VERIFIED' &&
+      affiliateLink.affiliateUrl
+    ) {
+      return affiliateLink.affiliateUrl;
+    }
+
+    if (affiliateLink && affiliateLink.status === 'VERIFYING') {
+      throw new Error('Verificação já está em andamento para este canal.');
+    }
+
+    const attributionKey = randomBytes(16).toString('hex');
+
+    if (!affiliateLink) {
+      try {
+        affiliateLink = await this.prisma.affiliateLink.create({
+          data: {
+            tenantId: offer.tenantId,
+            offerId: offer.id,
+            provider: 'SHOPEE',
+            attributionKey,
+            context,
+            contextId,
+            status: 'VERIFYING',
+          },
+        });
+      } catch (e) {
+        throw new Error('Verificação já iniciada concorrentemente.');
+      }
+    } else {
+      const updateResult = await this.prisma.affiliateLink.updateMany({
+        where: {
+          id: affiliateLink.id,
+          status: { in: ['UNVERIFIED', 'FAILED'] },
+        },
+        data: { status: 'VERIFYING', attributionKey },
+      });
+      if (updateResult.count === 0)
+        throw new Error('Falha ao iniciar verificação concorrente.');
+      affiliateLink = (await this.prisma.affiliateLink.findUnique({
+        where: { id: affiliateLink.id },
+      })) as any;
+    }
+
+    try {
+      const integration = await this.prisma.marketplaceIntegration.findUnique({
+        where: {
+          tenantId_provider: { tenantId: offer.tenantId, provider: 'SHOPEE' },
+        },
+      });
+
+      if (
+        !integration ||
+        !integration.publicIdentifier ||
+        !integration.encryptedSecret ||
+        !integration.iv ||
+        !integration.authTag
+      ) {
+        throw new Error('Integração Shopee incompleta.');
+      }
+
+      // Imported dynamically or globally
+      const {
+        getEncryptionKey,
+        decryptSecret,
+        ShopeeAffiliateClient,
+      } = require('@lia/integrations');
+      const masterKey = getEncryptionKey();
+      const appSecret = decryptSecret(
+        integration.encryptedSecret,
+        integration.iv,
+        integration.authTag,
+        masterKey,
+      );
+      const client = new ShopeeAffiliateClient(
+        integration.publicIdentifier,
+        appSecret,
+      );
+
+      const originUrl = offer.url; // Use original offer URL
+      const response = await client.generateShortLink(originUrl, [
+        'lia',
+        affiliateLink!.attributionKey,
+      ]);
+      const shortLink = response.data?.generateShortLink?.shortLink;
+
+      if (
+        !shortLink ||
+        (!shortLink.startsWith('https://s.shopee') &&
+          !shortLink.startsWith('https://shope.ee'))
+      ) {
+        throw new Error('Shopee não retornou shortLink válido.');
+      }
+
+      await this.prisma.affiliateLink.update({
+        where: { id: affiliateLink!.id },
+        data: {
+          status: 'VERIFIED',
+          affiliateUrl: shortLink,
+          verifiedAt: new Date(),
+        },
+      });
+
+      return shortLink;
+    } catch (error: any) {
+      await this.prisma.affiliateLink.update({
+        where: { id: affiliateLink!.id },
+        data: { status: 'FAILED' },
+      });
+      throw new Error(
+        error.message || 'Falha na comunicação com a API de monetização.',
+      );
+    }
+  }
+}

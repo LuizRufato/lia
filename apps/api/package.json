@@ -21,6 +21,9 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@lia/core": "*",
+    "@lia/integrations": "1.0.0",
+    "@nestjs/bullmq": "^11.0.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
@@ -88,6 +91,10 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^@lia/core(.*)$": "<rootDir>/../../../packages/core/src$1",
+      "^@lia/integrations(.*)$": "<rootDir>/../../../packages/integrations/src$1"
+    }
   }
 }

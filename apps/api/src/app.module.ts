@@ -10,6 +10,11 @@ import { AdminModule } from './admin/admin.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { IntegrationsModule } from './integrations/integrations.module';
+import { AutopilotModule } from './autopilot/autopilot.module';
+import { OffersModule } from './offers/offers.module';
+import { ChannelsModule } from './channels/channels.module';
 
 @Module({
   imports: [
@@ -35,6 +40,11 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
     AdminModule,
     AuthModule,
     HealthModule,
+    AnalyticsModule,
+    IntegrationsModule,
+    AutopilotModule,
+    OffersModule,
+    ChannelsModule,
   ],
   controllers: [AppController],
   providers: [

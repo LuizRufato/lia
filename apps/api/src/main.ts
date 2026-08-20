@@ -3,8 +3,20 @@ import { AppModule } from './app.module';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { ValidationPipe } from '@nestjs/common';
+import { getEncryptionKey } from '@lia/integrations';
 
 async function bootstrap() {
+  // Validate integration encryption key before starting
+  try {
+    getEncryptionKey();
+  } catch (error: any) {
+    console.error(
+      'FATAL ERROR: Failed to load INTEGRATION_ENCRYPTION_KEY:',
+      error.message,
+    );
+    process.exit(1);
+  }
+
   const app = await NestFactory.create(AppModule);
   app.enableShutdownHooks();
   // Security

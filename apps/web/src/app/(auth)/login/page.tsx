@@ -1,34 +1,37 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError("");
     setLoading(true);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email, password }),
-      });
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"}/auth/login`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ email, password }),
+        },
+      );
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.message || 'Erro ao fazer login');
+        throw new Error(data.message || "Erro ao fazer login");
       }
 
-      router.push('/overview');
+      router.push("/overview");
       router.refresh();
     } catch (err: any) {
       setError(err.message);
@@ -41,10 +44,14 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-[var(--color-background)]">
       <div className="max-w-md w-full bg-[var(--color-surface)] rounded-xl shadow-lg border border-[var(--color-border)] p-8">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-[var(--color-primary)]">LIA</h1>
-          <p className="text-[var(--color-text-secondary)] mt-2">Lucro Inteligente Automatizado</p>
+          <h1 className="text-3xl font-bold text-[var(--color-primary)]">
+            LIA
+          </h1>
+          <p className="text-[var(--color-text-secondary)] mt-2">
+            Lucro Inteligente Automatizado
+          </p>
         </div>
-        
+
         {error && (
           <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">
             {error}
@@ -83,7 +90,7 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full bg-[var(--color-secondary)] text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50 font-medium"
           >
-            {loading ? 'Entrando...' : 'Entrar'}
+            {loading ? "Entrando..." : "Entrar"}
           </button>
         </form>
       </div>

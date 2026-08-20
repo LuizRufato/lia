@@ -1,0 +1,30 @@
+{
+  "name": "@lia/tracker",
+  "version": "1.0.0",
+  "description": "LIA Fastify Tracker",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
+  },
+  "dependencies": {
+    "@fastify/cors": "^8.3.0",
+    "@lia/core": "*",
+    "database": "*",
+    "bullmq": "^4.10.0",
+    "dotenv": "^16.3.1",
+    "fastify": "^4.21.0",
+    "ioredis": "^5.3.2",
+    "pg": "^8.13.3",
+    "@prisma/adapter-pg": "^6.4.1",
+    "ua-parser-js": "^1.0.35"
+  },
+  "devDependencies": {
+    "@types/node": "^20.3.1",
+    "@types/ua-parser-js": "^0.7.36",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.3"
+  }
+}

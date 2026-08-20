@@ -29,22 +29,43 @@
 
 - [x] **Fase 0**: Configuração Inicial (Linter, Prettier, Prisma, Docker)
 - [x] **Fase 1**: Gateway de Acesso (Login, JWT, Rotas Públicas/Privadas)
-- [x] **Fase 2**: Motor Central V1 (Score, Limitações) - **Status**: Fase 2 implementada — aguardando aprovação final.
-- [ ] **Fase 3**: Publicador (Telegram Bot)
-- [ ] **Fase 4**: Automação (Cron e Escala):** Não iniciada.
-- **Fase 4 (Tracker):** Não iniciada.
-- **Fase 5 (SaaS):** Não iniciada.
+- [x] **Fase 2**: Motor Central V1 (Score, Limitações)
+- [x] **Fase 3**: Publicador (Telegram Bot)
+  - ✅ implementação técnica concluída
+  - ⏸ integração Telegram real adiada pelo usuário
+  - ⏸ teste E2E real pendente
+  - ✅ testes automatizados permanecem aprovados
+- [x] **Fase 4**: Integração Shopee
+  - ✅ Implementada estruturalmente (Banco, Criptografia, API, UI e BullMQ)
+  - ✅ Criptografia extraída para `@lia/integrations`
+  - ⏸ E2E externo pendente (Aguardando Open API oficial)
+- [x] **Fase 5**: Integração Mercado Livre
+  - ✅ Implementada estruturalmente (Banco, OAuth PKCE, API, UI, Worker Refresh Lock)
+  - ✅ Separação Categórica (Catalog vs Affiliate)
+  - ✅ Políticas de Publicação (MERCADO_LIVRE bloqueia canal PRIVATE)
+  - ⏸ E2E externo e liberação da API de Afiliados oficial (Pendente)
+- [x] **Fase 6**: Piloto Automático (Autopilot)
+  - ✅ Motor Core de decisão e Score (AutopilotBrain puro)
+  - ✅ Scheduler via Cron e Publisher com Re-validação (Kill Switch Duplo)
+  - ✅ Lock Distribuído por Tenant com Lua
+  - ✅ Engine de Copy baseada no TrackedLink final e Currency
+  - ✅ Dashboard UI (Status OFF/MANUAL/DRY_RUN/AUTO e Feed de Auditoria)
+  - ✅ Segurança multi-tenant com TenantMembership
+- [x] **Fase 7A**: Integração WhatsApp
+  - ✅ Integração Meta Cloud API homologada (Conexão estrutural, Types, Banco).
+- [x] **Fase 7B.1**: Shopee Open API E2E
+  - ✅ Conexão oficial GraphQL Shopee (productOfferV2) com HMAC SHA256.
+  - ✅ Sincronização em Lote orquestrada via BullMQ (`shopee.processor.ts`).
+  - ✅ Apresentação visual da extração na rota `/offers`.
 
 ## Próximos Passos
-- Aguardar validação do usuário sobre a infraestrutura baseada no monorepo (API + Web) da Fase 1.
-- Executar testes locais via scripts (geração de admin, login).
-- Após aprovação da Fase 1, iniciar Fase 2 (Integração com Mercado Livre / Shopee).
+- Fase 7B.2: Geração oficial do ShortLink (Tracking) da Shopee para monetização e habilitar publicação.
 
 ## Integrações
-Shopee: Não conectada
-Mercado Livre: Não conectada
-Telegram: Não conectada
-WhatsApp: Não conectada
+Shopee: Conexão estrutural completa e homologada. (Aguardando usuário testar no navegador)
+Mercado Livre: Não conectada (E2E pendente)
+Telegram: Congelado
+WhatsApp: Conexão estrutural completa
 
 ## Últimos testes
 * `docker compose config` validado.

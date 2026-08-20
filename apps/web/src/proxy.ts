@@ -1,16 +1,19 @@
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 export function proxy(request: NextRequest) {
-  const token = request.cookies.get('Authentication')?.value;
+  const token = request.cookies.get("Authentication")?.value;
 
-  if (!token && !request.nextUrl.pathname.startsWith('/login')) {
-    return NextResponse.redirect(new URL('/login', request.url));
+  if (!token && !request.nextUrl.pathname.startsWith("/login")) {
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   if (token) {
-    if (request.nextUrl.pathname.startsWith('/login') || request.nextUrl.pathname === '/') {
-      return NextResponse.redirect(new URL('/overview', request.url));
+    if (
+      request.nextUrl.pathname.startsWith("/login") ||
+      request.nextUrl.pathname === "/"
+    ) {
+      return NextResponse.redirect(new URL("/overview", request.url));
     }
   }
 
@@ -18,7 +21,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    '/((?!api|_next/static|_next/image|favicon.ico).*)',
-  ],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };

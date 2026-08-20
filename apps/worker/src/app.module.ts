@@ -11,6 +11,16 @@ import { IngestionService } from './ingestion.service';
 
 import * as Joi from 'joi';
 
+import { TelegramModule } from './telegram/telegram.module';
+import { PublisherProcessor } from './publisher/publisher.processor';
+import { ClickProcessor } from './tracking/click.processor';
+import { ShopeeProcessor } from './shopee/shopee.processor';
+import { AutopilotSchedulerService } from './autopilot/scheduler.service';
+
+import { WhatsAppWebhookProcessor } from './publisher/whatsapp-webhook.processor';
+import { WhatsAppPublisher } from './publisher/whatsapp.publisher';
+import { ShopeeConversionsProcessor } from './shopee/shopee-conversions.processor';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -40,6 +50,27 @@ import * as Joi from 'joi';
     BullModule.registerQueue({
       name: 'publisher',
     }),
+    BullModule.registerQueue({
+      name: 'clicks-queue',
+    }),
+    BullModule.registerQueue({
+      name: 'shopee-api-queue',
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: true,
+      },
+    }),
+    BullModule.registerQueue({
+      name: 'whatsapp-webhooks',
+    }),
+    BullModule.registerQueue({
+      name: 'shopee-conversions-queue',
+      defaultJobOptions: {
+        removeOnComplete: true,
+      },
+    }),
+    TelegramModule,
   ],
   controllers: [],
   providers: [
@@ -48,6 +79,13 @@ import * as Joi from 'joi';
     OfferProcessor,
     ReconcilerService,
     IngestionService,
+    PublisherProcessor,
+    ClickProcessor,
+    ShopeeProcessor,
+    AutopilotSchedulerService,
+    WhatsAppWebhookProcessor,
+    WhatsAppPublisher,
+    ShopeeConversionsProcessor,
   ],
 })
 export class AppModule {}

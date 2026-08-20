@@ -1,5 +1,5 @@
-import { CanonicalOffer } from '../models/CanonicalOffer';
-import { LIA_SCORE_V1_CONFIG, ScoreConfig } from './ScoreConfig';
+import { CanonicalOffer } from "../models/CanonicalOffer";
+import { LIA_SCORE_V1_CONFIG, ScoreConfig } from "./ScoreConfig";
 
 export interface ScoreBreakdown {
   scoreVersion: string;
@@ -40,7 +40,8 @@ export class LiaScoreV1 {
       }
     }
 
-    const dataCoverage = totalPossibleWeight > 0 ? availableWeight / totalPossibleWeight : 0;
+    const dataCoverage =
+      totalPossibleWeight > 0 ? availableWeight / totalPossibleWeight : 0;
 
     // Calculate raw score (weighted average of available components)
     let rawScore = 0;
@@ -49,7 +50,8 @@ export class LiaScoreV1 {
     if (availableWeight > 0) {
       for (const comp of availableComponents) {
         const score = scores[comp as keyof typeof scores] as number;
-        const originalWeight = this.config.weights[comp as keyof typeof this.config.weights];
+        const originalWeight =
+          this.config.weights[comp as keyof typeof this.config.weights];
         const effectiveWeight = (originalWeight / availableWeight) * 100;
         const contribution = (score * effectiveWeight) / 100;
         componentContributions[comp] = contribution;
@@ -58,8 +60,10 @@ export class LiaScoreV1 {
     }
 
     // Final Score = rawScore * sqrt(dataCoverage)
-    const Decimal = require('decimal.js');
-    const finalScoreDec = new Decimal(rawScore).mul(new Decimal(dataCoverage).sqrt());
+    const Decimal = require("decimal.js");
+    const finalScoreDec = new Decimal(rawScore).mul(
+      new Decimal(dataCoverage).sqrt(),
+    );
     const finalScore = parseFloat(finalScoreDec.toFixed(2));
 
     return {
@@ -75,7 +79,9 @@ export class LiaScoreV1 {
     };
   }
 
-  private calculateComponentScores(offer: CanonicalOffer): Record<keyof ScoreConfig['weights'], number | null> {
+  private calculateComponentScores(
+    offer: CanonicalOffer,
+  ): Record<keyof ScoreConfig["weights"], number | null> {
     return {
       financialValue: this.calcFinancialValue(offer),
       dealQuality: this.calcDealQuality(offer),
@@ -88,7 +94,7 @@ export class LiaScoreV1 {
   private calcFinancialValue(offer: CanonicalOffer): number | null {
     const absComCents = offer.commission.estimatedAmountCents;
     const rateBps = offer.commission.rateBps;
-    
+
     if (absComCents == null && rateBps == null) {
       return null;
     }
@@ -96,9 +102,12 @@ export class LiaScoreV1 {
     let score = 0;
     // Logarithmic/capped absolute commission score (Max 50 points)
     if (absComCents != null) {
-      const ratio = Math.min(absComCents / this.config.caps.maxCommissionCents, 1);
+      const ratio = Math.min(
+        absComCents / this.config.caps.maxCommissionCents,
+        1,
+      );
       // Non-linear: easy to get first points, hard to max out.
-      const absScore = Math.pow(ratio, 0.5) * 50; 
+      const absScore = Math.pow(ratio, 0.5) * 50;
       score += absScore;
     } else {
       score += 25; // fallback mid-score for absolute if only rate is known
@@ -110,7 +119,7 @@ export class LiaScoreV1 {
       const rateScore = ratio * 50; // Linear up to cap
       score += rateScore;
     } else {
-      score += 25; 
+      score += 25;
     }
 
     return Math.min(Math.max(score, 0), 100);
@@ -118,7 +127,7 @@ export class LiaScoreV1 {
 
   private calcDealQuality(offer: CanonicalOffer): number | null {
     const discountBps = offer.pricing.discountBps;
-    
+
     if (discountBps == null) {
       return null; // No history and no announced discount
     }
@@ -127,7 +136,7 @@ export class LiaScoreV1 {
     // A 40% discount (4000 bps) gives 63 points via sqrt non-linear
     const ratio = Math.min(discountBps / 10000, 1);
     const score = Math.pow(ratio, 0.5) * 100;
-    
+
     return Math.min(Math.max(score, 0), 100);
   }
 
@@ -151,7 +160,7 @@ export class LiaScoreV1 {
       score += (rating / 5) * 50;
     } else {
       // If we only know it's official, or only have reviewsCount, assume average 4.0
-      score += 40; 
+      score += 40;
     }
 
     // Reviews count gives up to 20 points (cap at 1000 reviews)
@@ -179,7 +188,7 @@ export class LiaScoreV1 {
     if (costCents != null) {
       // High cost penalizes. e.g. R$ 50 (5000 cents) = 0 points
       const maxCost = 5000;
-      const ratio = Math.max(0, 1 - (costCents / maxCost));
+      const ratio = Math.max(0, 1 - costCents / maxCost);
       return ratio * 100;
     }
 
@@ -196,7 +205,7 @@ export class LiaScoreV1 {
     // Cap at 5000 sales
     const ratio = Math.min(sales / 5000, 1);
     const score = Math.pow(ratio, 0.5) * 100;
-    
+
     return Math.min(Math.max(score, 0), 100);
   }
 }

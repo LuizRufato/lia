@@ -50,20 +50,30 @@ export class IngestionService {
     let offerId: string;
     try {
       const result = await this.prisma.$transaction(async (tx) => {
+        // Upsert Marketplace idempotently
+        const marketplace = await tx.marketplace.upsert({
+          where: { type: canonicalOffer.marketplace as any },
+          update: {},
+          create: {
+            name: canonicalOffer.marketplace,
+            type: canonicalOffer.marketplace as any,
+          },
+        });
+        const marketplaceId = marketplace.id;
+
         // Upsert Offer
         const offer = await tx.offer.upsert({
           where: {
             tenantId_marketplaceId_externalId: {
               tenantId,
-              marketplaceId: canonicalOffer.marketplace,
+              marketplaceId: marketplaceId,
               externalId: canonicalOffer.externalOfferId,
             },
           },
           create: {
             tenantId,
-            marketplaceId: canonicalOffer.marketplace, // Assumes this ID matches or maps correctly in DB
+            marketplaceId: marketplaceId,
             externalId: canonicalOffer.externalOfferId,
-            productId: canonicalOffer.externalProductId,
             title: canonicalOffer.product.title,
             price: canonicalOffer.pricing.currentPriceCents,
             commission: canonicalOffer.commission.estimatedAmountCents ?? null,
@@ -84,7 +94,10 @@ export class IngestionService {
             correlationId,
             schemaVersion,
             canonicalPayload: canonicalOffer as any,
-            category: canonicalOffer.product.normalizedCategory || canonicalOffer.product.sourceCategory || null,
+            category:
+              canonicalOffer.product.normalizedCategory ||
+              canonicalOffer.product.sourceCategory ||
+              null,
             observedAt: canonicalOffer.discoveredAt,
           },
         });

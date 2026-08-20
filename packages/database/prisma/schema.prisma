@@ -12,15 +12,163 @@ model AdminUser {
   passwordHash String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  memberships TenantMembership[]
 }
 
 model Tenant {
-  id        String    @id @default(uuid())
-  name      String
-  products  Product[]
-  offers    Offer[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id                      String                   @id @default(uuid())
+  name                    String
+  products                Product[]
+  offers                  Offer[]
+  channels                Channel[]
+  channelIntegrations     ChannelIntegration[]
+  marketplaceIntegrations MarketplaceIntegration[]
+  affiliateLinks          AffiliateLink[]
+
+  memberships     TenantMembership[]
+  autopilotConfig AutopilotConfig?
+  autopilotAudits AutopilotAudit[]
+
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  marketplaceConversions MarketplaceConversion[]
+  marketplaceBrowserSessions MarketplaceBrowserSession[]
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+}
+
+model TenantMembership {
+  id          String     @id @default(uuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id])
+  adminUserId String
+  adminUser   AdminUser  @relation(fields: [adminUserId], references: [id])
+  role        TenantRole @default(ADMIN)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@unique([tenantId, adminUserId])
+}
+
+enum ChannelProvider {
+  TELEGRAM
+  WHATSAPP
+}
+
+enum WhatsAppTransport {
+  CLOUD_OFFICIAL
+  WEB_UNOFFICIAL
+}
+
+enum ChannelVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+model Channel {
+  id             String            @id @default(uuid())
+  tenantId       String
+  tenant         Tenant            @relation(fields: [tenantId], references: [id])
+  provider       ChannelProvider
+  externalChatId String
+  displayName    String
+  visibility     ChannelVisibility @default(PRIVATE)
+  enabled        Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  publications     Publication[]
+  autopilotConfigs AutopilotChannelConfig[]
+  autopilotAudits  AutopilotAudit[]
+
+  @@unique([tenantId, provider, externalChatId])
+}
+
+enum IntegrationStatus {
+  NOT_CONNECTED
+  CONNECTING
+  CONNECTED
+  NEEDS_REAUTH
+  ERROR
+}
+
+model ChannelIntegration {
+  id                   String            @id @default(uuid())
+  tenantId             String
+  tenant               Tenant            @relation(fields: [tenantId], references: [id])
+  provider             ChannelProvider
+  transport            WhatsAppTransport @default(CLOUD_OFFICIAL)
+  status               IntegrationStatus @default(NOT_CONNECTED)
+  externalInstanceName String?
+  wabaId               String?
+  phoneNumberId        String?
+  businessDisplayName  String?
+  encryptedAccessToken String?
+  tokenIv              String?
+  tokenAuthTag         String?
+  connectedAt          DateTime?
+  lastHealthCheckAt    DateTime?
+  lastErrorAt          DateTime?
+  lastErrorCode        String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  @@unique([tenantId, provider])
+}
+
+model MarketplaceIntegration {
+  id                    String            @id @default(uuid())
+  tenantId              String
+  tenant                Tenant            @relation(fields: [tenantId], references: [id])
+  provider              MarketplaceType
+  publicIdentifier      String? // e.g. App ID / Meli User ID
+  encryptedSecret       String? // AES-256-GCM encrypted secret / Access Token
+  iv                    String?
+  authTag               String?
+  encryptedRefreshToken String?
+  refreshIv             String?
+  refreshAuthTag        String?
+  expiresAt             DateTime?
+  keyVersion            Int               @default(1)
+  status                IntegrationStatus @default(NOT_CONNECTED)
+  lastSyncAt            DateTime?
+  lastError             String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@unique([tenantId, provider])
+}
+
+enum MarketplaceBrowserSessionStatus {
+  DISCONNECTED
+  AUTHENTICATING
+  CONNECTED
+  REAUTH_REQUIRED
+  CHALLENGE_REQUIRED
+  ERROR
+}
+
+model MarketplaceBrowserSession {
+  id                    String                          @id @default(uuid())
+  tenantId              String
+  tenant                Tenant                          @relation(fields: [tenantId], references: [id])
+  provider              MarketplaceType
+  encryptedStorageState String?
+  iv                    String?
+  authTag               String?
+  status                MarketplaceBrowserSessionStatus @default(DISCONNECTED)
+  lastAuthenticatedAt   DateTime?
+  lastUsedAt            DateTime?
+  lastErrorAt           DateTime?
+  lastErrorSanitized    String?
+  createdAt             DateTime                        @default(now())
+  updatedAt             DateTime                        @updatedAt
+
+  @@unique([tenantId, provider])
 }
 
 enum MarketplaceType {
@@ -29,12 +177,13 @@ enum MarketplaceType {
 }
 
 model Marketplace {
-  id        String          @id @default(uuid())
-  name      String
-  type      MarketplaceType @unique
-  offers    Offer[]
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  id               String                       @id @default(uuid())
+  name             String
+  type             MarketplaceType              @unique
+  offers           Offer[]
+  autopilotConfigs AutopilotMarketplaceConfig[]
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
 }
 
 model Product {
@@ -86,23 +235,58 @@ model Offer {
   commission Int?
   url        String
 
-  status OfferStatus   @default(ACTIVE)
-  links  TrackedLink[]
+  status         OfferStatus     @default(ACTIVE)
+  links          TrackedLink[]
+  affiliateLinks AffiliateLink[]
 
   observations   OfferObservation[]
   priceHistories PriceHistory[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  monetization MonetizationRecord?
+
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  marketplaceConversions MarketplaceConversion[]
 
   @@unique([tenantId, marketplaceId, externalId])
 }
 
+enum AffiliateLinkStatus {
+  UNVERIFIED
+  VERIFYING
+  VERIFIED
+  FAILED
+}
+
+model AffiliateLink {
+  id       String @id @default(uuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  offerId  String
+  offer    Offer  @relation(fields: [offerId], references: [id])
+
+  provider       String // "SHOPEE"
+  attributionKey String              @unique
+  context        String // e.g. "OFFER_VERIFICATION", "PUBLICATION"
+  contextId      String? // Optional ID for the context (e.g. channelId)
+  affiliateUrl   String?
+  status         AffiliateLinkStatus @default(UNVERIFIED)
+
+  verifiedAt             DateTime?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  marketplaceConversions MarketplaceConversion[]
+
+  @@unique([offerId, context, contextId]) // Idempotency
+  @@index([offerId, status])
+  @@index([tenantId, attributionKey])
+}
+
 model OfferObservation {
-  id               String @id @default(uuid())
+  id               String  @id @default(uuid())
   offerId          String
-  offer            Offer  @relation(fields: [offerId], references: [id])
-  correlationId    String @unique
+  offer            Offer   @relation(fields: [offerId], references: [id])
+  correlationId    String  @unique
   schemaVersion    String
   canonicalPayload Json
   category         String?
@@ -130,6 +314,8 @@ model OfferEvaluation {
 
   evaluatedAt DateTime @default(now())
 
+  autopilotAudits AutopilotAudit[]
+
   @@unique([observationId, scoreVersion])
   @@index([decision, evaluatedAt])
 }
@@ -144,7 +330,62 @@ model PublicationCandidate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  publications    Publication[]
+  autopilotAudits AutopilotAudit[]
+
   @@index([status, createdAt])
+}
+
+enum PublicationStatus {
+  PENDING
+  PUBLISHING
+  PUBLISHED
+  WAITING_CONNECTION
+  RETRYABLE
+  DELIVERY_UNKNOWN
+  FAILED
+}
+
+model Publication {
+  id                String               @id @default(uuid())
+  candidateId       String
+  candidate         PublicationCandidate @relation(fields: [candidateId], references: [id])
+  channelId         String
+  channel           Channel              @relation(fields: [channelId], references: [id])
+  status            PublicationStatus    @default(PENDING)
+  externalMessageId String?
+  publishedAt       DateTime?
+  errorReason       String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  trackedLink    TrackedLink?
+  deliveryEvents PublicationDeliveryEvent[]
+
+  @@unique([candidateId, channelId])
+}
+
+enum PublicationDeliveryStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+model PublicationDeliveryEvent {
+  id                    String                    @id @default(uuid())
+  publicationId         String
+  publication           Publication               @relation(fields: [publicationId], references: [id])
+  provider              ChannelProvider
+  externalMessageId     String
+  status                PublicationDeliveryStatus
+  occurredAt            DateTime?
+  receivedAt            DateTime                  @default(now())
+  errorCode             String?
+  errorMessageSanitized String?
+
+  @@unique([externalMessageId, status])
+  @@index([publicationId, status])
 }
 
 model PriceHistory {
@@ -158,18 +399,258 @@ model PriceHistory {
   @@index([offerId, createdAt])
 }
 
-enum LinkStatus {
-  ACTIVE
-  INACTIVE
+model TrackedLink {
+  id             String      @id @default(uuid())
+  publicationId  String      @unique
+  publication    Publication @relation(fields: [publicationId], references: [id])
+  offerId        String
+  offer          Offer       @relation(fields: [offerId], references: [id])
+  slug           String      @unique
+  destinationUrl String
+  active         Boolean     @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  clicks ClickEvent[]
 }
 
-model TrackedLink {
-  id        String     @id @default(uuid())
-  offerId   String
-  offer     Offer      @relation(fields: [offerId], references: [id])
-  slug      String     @unique
-  targetUrl String
-  status    LinkStatus @default(ACTIVE)
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+enum ClickClassification {
+  VALID
+  PREVIEW_BOT
+  SUSPECTED_BOT
+}
+
+model ClickEvent {
+  id                   String              @id @default(uuid())
+  eventId              String              @unique
+  linkId               String
+  link                 TrackedLink         @relation(fields: [linkId], references: [id])
+  clickedAt            DateTime            @default(now())
+  classification       ClickClassification @default(VALID)
+  classificationReason String?
+  visitorHash          String?
+  userAgentFamily      String?
+  deviceType           String?
+
+  @@index([linkId, clickedAt])
+  @@index([classification, clickedAt])
+}
+
+enum AutopilotMode {
+  OFF
+  MANUAL
+  DRY_RUN
+  AUTO
+}
+
+model AutopilotConfig {
+  id       String @id @default(uuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+
+  mode AutopilotMode @default(OFF)
+
+  // Time represents minutes from 00:00 (0..1439)
+  allowedStartMinute Int    @default(540) // 09:00
+  allowedEndMinute   Int    @default(1200) // 20:00
+  timezone           String @default("America/Campo_Grande")
+
+  minScore               Decimal @default(70)
+  minimumCommissionCents Int     @default(500)
+  maxDailyPosts          Int     @default(30)
+  intervalMinutes        Int     @default(30)
+
+  enabledChannels     AutopilotChannelConfig[]
+  enabledMarketplaces AutopilotMarketplaceConfig[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AutopilotChannelConfig {
+  id                String          @id @default(uuid())
+  autopilotConfigId String
+  config            AutopilotConfig @relation(fields: [autopilotConfigId], references: [id])
+  channelId         String
+  channel           Channel         @relation(fields: [channelId], references: [id])
+
+  @@unique([autopilotConfigId, channelId])
+}
+
+model AutopilotMarketplaceConfig {
+  id                String          @id @default(uuid())
+  autopilotConfigId String
+  config            AutopilotConfig @relation(fields: [autopilotConfigId], references: [id])
+  marketplaceId     String
+  marketplace       Marketplace     @relation(fields: [marketplaceId], references: [id])
+
+  @@unique([autopilotConfigId, marketplaceId])
+}
+
+enum AutopilotDecisionReason {
+  APPROVED
+  REJECTED_LOW_SCORE
+  REJECTED_DAILY_LIMIT
+  REJECTED_INTERVAL
+  REJECTED_OUTSIDE_SCHEDULE
+  REJECTED_FATIGUE
+  REJECTED_DUPLICATE
+  REJECTED_MONETIZATION
+  REJECTED_CHANNEL_POLICY
+  REJECTED_KILL_SWITCH
+  REJECTED_INTEGRATION_UNHEALTHY
+  DRY_RUN_APPROVED
+}
+
+model AutopilotAudit {
+  id       String @id @default(uuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+
+  candidateId String
+  candidate   PublicationCandidate @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+
+  evaluationId String
+  evaluation   OfferEvaluation @relation(fields: [evaluationId], references: [id])
+
+  channelId String?
+  channel   Channel? @relation(fields: [channelId], references: [id])
+
+  decision AutopilotDecisionReason
+  liaScore Decimal
+
+  details Json? // For extra info, e.g. "iPhone 16 aprovado no Dry Run"
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+enum MonetizationStatus {
+  UNAVAILABLE
+  UNVERIFIED
+  VERIFIED
+}
+
+model MonetizationRecord {
+  id      String @id @default(uuid())
+  offerId String @unique
+  offer   Offer  @relation(fields: [offerId], references: [id])
+
+  status MonetizationStatus @default(UNVERIFIED)
+
+  provider              String // Affiliate network or marketplace
+  destinationUrl        String?
+  commissionAmountCents Int?
+  commissionRateBps     Int?
+
+  source        String // e.g. "shopee_open_api", "awin"
+  integrationId String? // If tied to a specific integration
+
+  verifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum AttributionStatus {
+  ATTRIBUTED
+  UNATTRIBUTED
+}
+
+enum ConversionOrderStatus {
+  UNPAID
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model MarketplaceConversion {
+  id       String          @id @default(uuid())
+  tenantId String
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  provider MarketplaceType // Reusing MarketplaceType (e.g. SHOPEE)
+
+  externalConversionId String
+
+  purchaseTime DateTime
+  clickTime    DateTime?
+
+  utmContent        String?
+  attributionKey    String?
+  attributionStatus AttributionStatus @default(UNATTRIBUTED)
+
+  affiliateLinkId String?
+  affiliateLink   AffiliateLink? @relation(fields: [affiliateLinkId], references: [id])
+  offerId         String?
+  offer           Offer?         @relation(fields: [offerId], references: [id])
+
+  buyerType    String?
+  device       String?
+  campaignType String?
+
+  shopeeCommissionCappedCents Int?
+  sellerCommissionCents       Int?
+  totalCommissionCents        Int?
+  netCommissionCents          Int?
+
+  orders MarketplaceConversionOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, provider, externalConversionId])
+  @@index([tenantId, attributionStatus, purchaseTime])
+}
+
+model MarketplaceConversionOrder {
+  id           String                @id @default(uuid())
+  conversionId String
+  conversion   MarketplaceConversion @relation(fields: [conversionId], references: [id], onDelete: Cascade)
+
+  externalOrderId String
+  orderStatus     ConversionOrderStatus
+  shopType        String?
+
+  items MarketplaceConversionItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([conversionId, externalOrderId])
+}
+
+model MarketplaceConversionItem {
+  id      String                     @id @default(uuid())
+  orderId String
+  order   MarketplaceConversionOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  externalItemId  String
+  externalLineKey String // Deterministic key to prevent duplicates: `${externalOrderId}-${externalItemId}-${qty}-${price}` or similar
+
+  itemName          String
+  qty               Int
+  itemPriceCents    Int
+  actualAmountCents Int
+
+  itemTotalCommissionCents        Int?
+  itemSellerCommissionCents       Int?
+  itemSellerCommissionRateBps     Int?
+  itemShopeeCommissionCappedCents Int?
+  itemShopeeCommissionRateBps     Int?
+
+  displayItemStatus String?
+  fraudStatus       String?
+
+  globalCategoryLv1Name String?
+  globalCategoryLv2Name String?
+  globalCategoryLv3Name String?
+  modelId               String?
+  promotionId           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, externalLineKey])
 }

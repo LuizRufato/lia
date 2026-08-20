@@ -1,11 +1,15 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PrismaService } from '../prisma.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private prisma: PrismaService,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
         (request: any) => {
@@ -22,6 +26,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: any) {
-    return { id: payload.sub, email: payload.email };
+    const adminUserId = payload.sub;
+
+    // Find membership to determine tenant context
+    const membership = await this.prisma.tenantMembership.findFirst({
+      where: { adminUserId },
+      include: { tenant: true },
+    });
+
+    if (!membership) {
+      throw new UnauthorizedException('User does not belong to any tenant');
+    }
+
+    return {
+      id: adminUserId,
+      email: payload.email,
+      tenantId: membership.tenantId,
+      role: membership.role,
+    };
   }
 }

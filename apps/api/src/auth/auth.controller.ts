@@ -53,4 +53,11 @@ export class AuthController {
   getProfile(@Req() request: Request) {
     return request.user;
   }
+
+  @Get('tenants')
+  async getTenants(@Req() req: any) {
+    const userId = req.user.id;
+    const tenants = await this.authService.getUserTenants(userId);
+    return tenants;
+  }
 }
