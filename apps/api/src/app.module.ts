@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { BullModule } from '@nestjs/bullmq';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import * as Joi from 'joi';
@@ -30,6 +31,21 @@ import { ChannelsModule } from './channels/channels.module';
         REDIS_URL: Joi.string().required(),
         WEB_URL: Joi.string().default('http://localhost:3001'),
       }),
+    }),
+    // The API only enqueues jobs, but it must use the exact same Redis
+    // connection and prefix as the Worker. Without this shared root
+    // configuration, BullMQ uses its default prefix and the Worker never sees
+    // jobs created by the integration endpoints.
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) => ({
+        prefix: configService.get('REDIS_PREFIX', '{lia}'),
+        connection: {
+          host: configService.get('REDIS_HOST', 'localhost'),
+          port: configService.get('REDIS_PORT', 6379),
+        },
+      }),
+      inject: [ConfigService],
     }),
     ThrottlerModule.forRoot([
       {
