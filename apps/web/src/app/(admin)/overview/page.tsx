@@ -21,12 +21,20 @@ import {
   Send,
   Activity,
   Bot,
+  type LucideIcon,
 } from "lucide-react";
 
 interface SystemHealth {
   core: Array<{ name: string; status: string }>;
   integrations: Array<{ name: string; status: string; type: string }>;
 }
+
+type Kpi = {
+  name: string;
+  value: string;
+  icon: LucideIcon;
+  tooltip?: string;
+};
 
 export default function OverviewPage() {
   const [health, setHealth] = useState<any>(null);
@@ -78,7 +86,7 @@ export default function OverviewPage() {
     }).format(cents / 100);
   };
 
-  const kpisTop = [
+  const kpisTop: Kpi[] = [
     {
       name: "Vendas Hoje",
       value: analytics?.today?.sales?.toString() || "0",
@@ -101,7 +109,7 @@ export default function OverviewPage() {
     },
   ];
 
-  const kpisBottom = [
+  const kpisBottom: Kpi[] = [
     { name: "Ofertas Analisadas", value: "0", icon: Eye },
     { name: "Ofertas Aprovadas", value: "0", icon: CheckCircle2 },
     { name: "Publicações Hoje", value: "0", icon: Send },

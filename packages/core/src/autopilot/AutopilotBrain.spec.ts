@@ -30,6 +30,7 @@ describe("AutopilotBrain", () => {
     allowedEndMinute: 1200,
     timezone: "America/Campo_Grande",
     minScore: 70,
+    minimumCommissionCents: 500,
     maxDailyPosts: 30,
     intervalMinutes: 30,
     enabledChannelIds: ["channel-1"],
@@ -39,6 +40,7 @@ describe("AutopilotBrain", () => {
   const defaultMonetization: MonetizationContext = {
     status: MonetizationStatus.VERIFIED,
     destinationUrl: "https://shopee.com/affiliate-link",
+    estimatedCommissionCents: 800,
   };
 
   const defaultContext: AutopilotRuntimeContext = {
@@ -115,6 +117,34 @@ describe("AutopilotBrain", () => {
     );
     expect(decision.approved).toBe(false);
     expect(decision.reason).toBe(AutopilotDecisionReason.REJECTED_MONETIZATION);
+  });
+
+  it("rejeita comissão abaixo do mínimo", () => {
+    const decision = AutopilotBrain.evaluate(
+      defaultOffer,
+      defaultConfig,
+      { ...defaultMonetization, estimatedCommissionCents: 499 },
+      defaultContext,
+      dummyClock,
+    );
+    expect(decision.approved).toBe(false);
+    expect(decision.reason).toBe(
+      AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
+    );
+  });
+
+  it("rejeita comissão não informada", () => {
+    const decision = AutopilotBrain.evaluate(
+      defaultOffer,
+      defaultConfig,
+      { ...defaultMonetization, estimatedCommissionCents: null },
+      defaultContext,
+      dummyClock,
+    );
+    expect(decision.approved).toBe(false);
+    expect(decision.reason).toBe(
+      AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
+    );
   });
 
   it("intervalo mínimo", () => {

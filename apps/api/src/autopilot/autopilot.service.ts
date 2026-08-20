@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 
 @Injectable()
@@ -79,6 +79,13 @@ export class AutopilotService {
       createdAt: f.createdAt,
     }));
 
+    const connectedProviders = (
+      await this.prisma.marketplaceIntegration.findMany({
+        where: { tenantId, status: 'CONNECTED' },
+        select: { provider: true },
+      })
+    ).map((integration) => integration.provider);
+
     return {
       mode: config.mode,
       config: {
@@ -86,11 +93,29 @@ export class AutopilotService {
         allowedEndMinute: config.allowedEndMinute,
         intervalMinutes: config.intervalMinutes,
         minScore: config.minScore.toNumber(),
+        minimumCommissionCents: config.minimumCommissionCents,
         maxDailyPosts: config.maxDailyPosts,
-        channels: config.enabledChannels.map((c) => c.channel.displayName),
-        marketplaces: config.enabledMarketplaces.map((m) => m.marketplace.name),
+        channels: config.enabledChannels.map((c) => ({
+          id: c.channelId,
+          displayName: c.channel.displayName,
+        })),
+        marketplaces: config.enabledMarketplaces.map((m) => ({
+          id: m.marketplaceId,
+          name: m.marketplace.name,
+          type: m.marketplace.type,
+        })),
         timezone: config.timezone,
       },
+      availableChannels: await this.prisma.channel.findMany({
+        where: { tenantId, enabled: true },
+        select: { id: true, displayName: true, provider: true },
+        orderBy: { displayName: 'asc' },
+      }),
+      availableMarketplaces: await this.prisma.marketplace.findMany({
+        where: { type: { in: connectedProviders } },
+        select: { id: true, name: true, type: true },
+        orderBy: { name: 'asc' },
+      }),
       stats: {
         postsToday,
         lastPublicationAt: lastPublication?.publishedAt || null,
@@ -123,35 +148,86 @@ export class AutopilotService {
       allowedEndMinute,
       intervalMinutes,
       minScore,
+      minimumCommissionCents,
       maxDailyPosts,
       timezone,
+      enabledChannelIds,
+      enabledMarketplaceIds,
     } = payload;
 
-    // UPSERT the config
-    const config = await this.prisma.autopilotConfig.upsert({
-      where: { tenantId },
-      update: {
-        mode,
-        allowedStartMinute,
-        allowedEndMinute,
-        intervalMinutes,
-        minScore,
-        maxDailyPosts,
-        timezone,
-      },
-      create: {
-        tenantId,
-        mode,
-        allowedStartMinute,
-        allowedEndMinute,
-        intervalMinutes,
-        minScore,
-        maxDailyPosts,
-        timezone,
-      },
-    });
+    if (
+      !Object.values(['OFF', 'MANUAL', 'DRY_RUN', 'AUTO']).includes(mode) ||
+      !Number.isInteger(allowedStartMinute) ||
+      !Number.isInteger(allowedEndMinute) ||
+      !Number.isInteger(intervalMinutes) ||
+      !Number.isFinite(minScore) ||
+      !Number.isInteger(minimumCommissionCents) ||
+      !Number.isInteger(maxDailyPosts) ||
+      allowedStartMinute < 0 || allowedStartMinute > 1439 ||
+      allowedEndMinute < 0 || allowedEndMinute > 1439 ||
+      intervalMinutes < 1 || maxDailyPosts < 0 || minScore < 0 || minScore > 100 ||
+      minimumCommissionCents < 0
+    ) {
+      throw new BadRequestException('Configuração do Autopilot inválida.');
+    }
 
-    // We skip channels and marketplaces relations in this checkpoint to keep it simple and safe.
+    const channelIds = Array.isArray(enabledChannelIds) ? enabledChannelIds : [];
+    const marketplaceIds = Array.isArray(enabledMarketplaceIds)
+      ? enabledMarketplaceIds
+      : [];
+    if (
+      !channelIds.every((id) => typeof id === 'string') ||
+      !marketplaceIds.every((id) => typeof id === 'string')
+    ) {
+      throw new BadRequestException('Canais e marketplaces inválidos.');
+    }
+
+    const connectedProviders = (
+      await this.prisma.marketplaceIntegration.findMany({
+        where: { tenantId, status: 'CONNECTED' },
+        select: { provider: true },
+      })
+    ).map((integration) => integration.provider);
+    const [channels, marketplaces] = await Promise.all([
+      this.prisma.channel.findMany({
+        where: { tenantId, enabled: true, id: { in: channelIds } },
+        select: { id: true },
+      }),
+      this.prisma.marketplace.findMany({
+        where: { id: { in: marketplaceIds }, type: { in: connectedProviders } },
+        select: { id: true },
+      }),
+    ]);
+    if (channels.length !== new Set(channelIds).size || marketplaces.length !== new Set(marketplaceIds).size) {
+      throw new BadRequestException('Selecione apenas canais ativos e marketplaces conectados.');
+    }
+
+    const config = await this.prisma.$transaction(async (tx) => {
+      const saved = await tx.autopilotConfig.upsert({
+        where: { tenantId },
+        update: {
+          mode, allowedStartMinute, allowedEndMinute, intervalMinutes,
+          minScore, minimumCommissionCents, maxDailyPosts, timezone,
+        },
+        create: {
+          tenantId, mode, allowedStartMinute, allowedEndMinute,
+          intervalMinutes, minScore, minimumCommissionCents, maxDailyPosts, timezone,
+        },
+      });
+      await tx.autopilotChannelConfig.deleteMany({ where: { autopilotConfigId: saved.id } });
+      await tx.autopilotMarketplaceConfig.deleteMany({ where: { autopilotConfigId: saved.id } });
+      if (channelIds.length) {
+        await tx.autopilotChannelConfig.createMany({
+          data: channelIds.map((channelId) => ({ autopilotConfigId: saved.id, channelId })),
+        });
+      }
+      if (marketplaceIds.length) {
+        await tx.autopilotMarketplaceConfig.createMany({
+          data: marketplaceIds.map((marketplaceId) => ({ autopilotConfigId: saved.id, marketplaceId })),
+        });
+      }
+      return saved;
+    });
 
     return { success: true, config };
   }

@@ -6,11 +6,6 @@ import { TelegramService } from '../telegram/telegram.service';
 import { randomBytes } from 'crypto';
 import { PublishCandidateJobData } from '@lia/core';
 import { WhatsAppPublisher } from './whatsapp.publisher';
-import {
-  getEncryptionKey,
-  decryptSecret,
-  ShopeeAffiliateClient,
-} from '@lia/integrations';
 
 @Processor('publisher', {
   concurrency: 1, // To avoid telegram rate limits and race conditions
@@ -28,7 +23,13 @@ export class PublisherProcessor extends WorkerHost {
   }
 
   async process(job: Job<PublishCandidateJobData, any, string>): Promise<any> {
-    const { candidateId } = job.data;
+    const { candidateId, channelId } = job.data;
+
+    if (!channelId) {
+      throw new UnrecoverableError(
+        'Publication requires the channel selected by an Autopilot decision.',
+      );
+    }
 
     // 1. Load Candidate and Offer
     const candidate = await this.prisma.publicationCandidate.findUnique({
@@ -41,6 +42,7 @@ export class PublisherProcessor extends WorkerHost {
                 offer: {
                   include: {
                     monetization: true,
+                    marketplace: true,
                     priceHistories: {
                       orderBy: { createdAt: 'desc' },
                       take: 1,
@@ -60,45 +62,39 @@ export class PublisherProcessor extends WorkerHost {
 
     const offer = candidate.evaluation.observation.offer;
 
-    // 2. Load Channels for Tenant
-    const channels = await this.prisma.channel.findMany({
+    // A queued job is valid only while AUTO is active and the selected channel
+    // remains explicitly authorized. This is checked before any link is created.
+    const config = await this.prisma.autopilotConfig.findUnique({
+      where: { tenantId: offer.tenantId },
+      include: { enabledChannels: true, enabledMarketplaces: true },
+    });
+    const channel = await this.prisma.channel.findFirst({
       where: {
+        id: channelId,
         tenantId: offer.tenantId,
         enabled: true,
         provider: { in: ['TELEGRAM', 'WHATSAPP'] },
       },
     });
-
-    if (channels.length === 0) {
-      this.logger.warn(
-        `No enabled channels found for Tenant ${offer.tenantId}`,
-      );
+    const isConfigured = Boolean(
+      config &&
+        config.mode === 'AUTO' &&
+        config.enabledChannels.some((item) => item.channelId === channelId) &&
+        config.enabledMarketplaces.some(
+          (item) => item.marketplaceId === offer.marketplaceId,
+        ),
+    );
+    if (!channel || !isConfigured) {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
         data: { status: 'SKIPPED' },
       });
-      return { skipped: true, reason: 'No channels' };
+      return { skipped: true, reason: 'AUTOPILOT_AUTHORIZATION_REVOKED' };
     }
 
-    // Process all enabled channels
-    const results = [];
-    let hasFailed = false;
+    const result = await this.processChannel(job, candidate, offer, channel);
 
-    for (const channel of channels) {
-      const channelResult = await this.processChannel(
-        job,
-        candidate,
-        offer,
-        channel,
-      );
-      results.push(channelResult);
-      if (channelResult.failed) {
-        hasFailed = true;
-      }
-    }
-
-    // Update overall candidate status based on results
-    if (hasFailed) {
+    if (result.failed) {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
         data: { status: 'FAILED' },
@@ -110,7 +106,7 @@ export class PublisherProcessor extends WorkerHost {
       });
     }
 
-    return { results };
+    return { results: [result] };
   }
 
   private async processChannel(
@@ -139,7 +135,7 @@ export class PublisherProcessor extends WorkerHost {
         },
       });
       return {
-        skipped: true,
+        failed: true,
         reason: 'REJECTED_MONETIZATION',
         error: e.message,
       };
@@ -169,6 +165,7 @@ export class PublisherProcessor extends WorkerHost {
     // Slug generation with retry on collision (P2002)
     if (
       !affiliateUrl ||
+      offer.marketplace.type !== 'SHOPEE' ||
       (!affiliateUrl.includes('shopee') && !affiliateUrl.includes('shope.ee'))
     ) {
       throw new Error(
@@ -211,35 +208,6 @@ export class PublisherProcessor extends WorkerHost {
         },
       });
       throw new Error('Failed to generate unique slug after 3 attempts');
-    }
-
-    // 4.5. KILL SWITCH Validation
-    const config = await this.prisma.autopilotConfig.findUnique({
-      where: { tenantId: offer.tenantId },
-    });
-
-    if (!config || config.mode === 'OFF' || config.mode === 'MANUAL') {
-      this.logger.warn(
-        `Kill switch activated or Autopilot disabled (mode=${config?.mode}). Aborting publication ${publication.id}`,
-      );
-
-      await this.prisma.publication.update({
-        where: { id: publication.id },
-        data: { status: 'FAILED', errorReason: 'KILL_SWITCH_ABORTED' },
-      });
-
-      await this.prisma.autopilotAudit.create({
-        data: {
-          tenantId: offer.tenantId,
-          candidateId: candidate.id,
-          evaluationId: candidate.evaluation.id,
-          decision: 'REJECTED_KILL_SWITCH',
-          liaScore: candidate.evaluation.score || 0,
-          details: 'Publicação interrompida no Publisher pelo Kill Switch',
-        },
-      });
-
-      return { skipped: true, reason: 'KILL_SWITCH' };
     }
 
     // 5. Send to Channel
