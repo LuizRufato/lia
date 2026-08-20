@@ -112,4 +112,21 @@ export class IntegrationsController {
     const tenantId = req.user.tenantId;
     return this.integrationsService.getWhatsAppEvolutionGroups(tenantId);
   }
+
+  /**
+   * Sends a fixed, non-commercial message to one enabled WhatsApp group.
+   * This is intentionally separate from publication: no offer, affiliate link,
+   * tracking URL or Autopilot mode is involved.
+   */
+  @Post('whatsapp/evolution/test-message')
+  async sendWhatsAppEvolutionTestMessage(
+    @Req() req: any,
+    @Body() body: { channelId?: string },
+  ) {
+    const tenantId = req.user.tenantId;
+    return this.integrationsService.sendWhatsAppEvolutionTestMessage(
+      tenantId,
+      body.channelId,
+    );
+  }
 }

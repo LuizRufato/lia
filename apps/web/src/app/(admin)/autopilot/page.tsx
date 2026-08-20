@@ -15,6 +15,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 export default function AutopilotDashboard() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState("");
   const [form, setForm] = useState({
@@ -35,6 +36,8 @@ export default function AutopilotDashboard() {
   }, []);
 
   const fetchData = async () => {
+    setLoading(true);
+    setLoadError("");
     try {
       const res = await fetchAuth("/autopilot/dashboard");
       if (!res.ok) throw new Error("Failed to fetch");
@@ -56,7 +59,7 @@ export default function AutopilotDashboard() {
         });
       }
     } catch (err) {
-      alert("Erro ao carregar Piloto Automático");
+      setLoadError("Não foi possível carregar as configurações do Piloto Automático.");
     } finally {
       setLoading(false);
     }
@@ -115,6 +118,26 @@ export default function AutopilotDashboard() {
     return (
       <div className="p-8 flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+      </div>
+    );
+
+  // A failed request must not let the page render fields from a null payload.
+  if (!data)
+    return (
+      <div className="p-8 max-w-xl mx-auto">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
+          <AlertTriangle className="w-8 h-8 text-red-600 mx-auto mb-3" />
+          <h1 className="font-semibold text-gray-900">Piloto indisponível</h1>
+          <p className="text-sm text-gray-600 mt-2">
+            {loadError || "Não foi possível carregar os dados agora."}
+          </p>
+          <button
+            onClick={fetchData}
+            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700"
+          >
+            Tentar novamente
+          </button>
+        </div>
       </div>
     );
 

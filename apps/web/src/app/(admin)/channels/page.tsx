@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Check,
   X as XIcon,
+  Send,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { fetchAuth } from "@/lib/api";
@@ -15,6 +16,7 @@ export default function ChannelsPage() {
   const [channels, setChannels] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [testingChannelId, setTestingChannelId] = useState<string | null>(null);
 
   const loadChannels = async () => {
     try {
@@ -64,6 +66,33 @@ export default function ChannelsPage() {
     }
   };
 
+  const sendConnectionTest = async (channel: any) => {
+    const confirmed = window.confirm(
+      `Enviar uma mensagem fixa de teste para o grupo \"${channel.displayName}\"? Nenhuma oferta ou link será publicado.`,
+    );
+    if (!confirmed) return;
+
+    setTestingChannelId(channel.id);
+    try {
+      const res = await fetchAuth(
+        "/integrations/whatsapp/evolution/test-message",
+        {
+          method: "POST",
+          body: JSON.stringify({ channelId: channel.id }),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || "Não foi possível enviar o teste.");
+      }
+      alert(`Teste enviado para \"${data.channel}\". Confira o WhatsApp.`);
+    } catch (e: any) {
+      alert(e.message || "Erro ao enviar mensagem de teste.");
+    } finally {
+      setTestingChannelId(null);
+    }
+  };
+
   useEffect(() => {
     loadChannels();
   }, []);
@@ -104,13 +133,16 @@ export default function ChannelsPage() {
                 <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs text-center">
                   Ativo p/ LIA
                 </th>
+                <th className="px-6 py-4 font-medium uppercase tracking-wider text-xs text-center">
+                  Teste
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {isLoading ? (
                 <tr>
                   <td
-                    colSpan={3}
+                    colSpan={4}
                     className="px-6 py-8 text-center text-gray-500"
                   >
                     Carregando canais...
@@ -118,7 +150,7 @@ export default function ChannelsPage() {
                 </tr>
               ) : channels.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-6 py-16 text-center">
+                  <td colSpan={4} className="px-6 py-16 text-center">
                     <div className="flex flex-col items-center justify-center max-w-md mx-auto">
                       <div className="w-12 h-12 bg-gray-50 border rounded-xl flex items-center justify-center text-gray-400 mb-4 shadow-sm">
                         <MessagesSquare className="w-6 h-6" />
@@ -167,6 +199,22 @@ export default function ChannelsPage() {
                           }`}
                         />
                       </button>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      {channel.provider === "WHATSAPP" && channel.enabled ? (
+                        <button
+                          onClick={() => sendConnectionTest(channel)}
+                          disabled={testingChannelId === channel.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          <Send className="w-3.5 h-3.5" />
+                          {testingChannelId === channel.id
+                            ? "Enviando..."
+                            : "Enviar teste"}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
                     </td>
                   </tr>
                 ))
