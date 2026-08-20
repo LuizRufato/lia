@@ -15,6 +15,7 @@ import { TelegramModule } from './telegram/telegram.module';
 import { PublisherProcessor } from './publisher/publisher.processor';
 import { ClickProcessor } from './tracking/click.processor';
 import { ShopeeProcessor } from './shopee/shopee.processor';
+import { ShopeeSyncSchedulerService } from './shopee/shopee-sync.scheduler';
 import { AutopilotSchedulerService } from './autopilot/scheduler.service';
 
 import { WhatsAppWebhookProcessor } from './publisher/whatsapp-webhook.processor';
@@ -82,6 +83,7 @@ import { ShopeeConversionsProcessor } from './shopee/shopee-conversions.processo
     PublisherProcessor,
     ClickProcessor,
     ShopeeProcessor,
+    ShopeeSyncSchedulerService,
     AutopilotSchedulerService,
     WhatsAppWebhookProcessor,
     WhatsAppPublisher,
