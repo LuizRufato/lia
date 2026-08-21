@@ -1,28 +1,26 @@
 const http = require('http');
 
+const apiUrl = process.env.API_URL || 'http://localhost:3000';
+const testEmail = process.env.ADMIN_TEST_EMAIL;
+const testPassword = process.env.ADMIN_TEST_PASSWORD;
+
+if (!testEmail || !testPassword) {
+  throw new Error('ADMIN_TEST_EMAIL and ADMIN_TEST_PASSWORD are required.');
+}
+
 async function test() {
-  const loginRes = await fetch('http://localhost:3000/auth/login', {
+  const loginRes = await fetch(`${apiUrl}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'admin@lia.com', password: 'admin' }) // Trying default password 'admin', maybe 'password'?
+    body: JSON.stringify({ email: testEmail, password: testPassword }),
   });
 
   if (!loginRes.ok) {
     console.log(`Login Failed: ${loginRes.status}`);
-    // fallback if password is wrong
-    const loginRes2 = await fetch('http://localhost:3000/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'admin@lia.com', password: 'password' })
-    });
-    if (!loginRes2.ok) {
-      console.log(`Login2 Failed: ${loginRes2.status}`);
-      return;
-    }
-    var cookie = loginRes2.headers.get('set-cookie');
-  } else {
-    var cookie = loginRes.headers.get('set-cookie');
+    return;
   }
+
+  const cookie = loginRes.headers.get('set-cookie');
   
   if (!cookie) {
     console.log('No cookie returned');
@@ -32,7 +30,7 @@ async function test() {
   const authCookie = cookie.split(';')[0];
 
   console.log('--- GET /auth/tenants ---');
-  const tRes = await fetch('http://localhost:3000/auth/tenants', {
+  const tRes = await fetch(`${apiUrl}/auth/tenants`, {
     headers: { 'Cookie': authCookie }
   });
   console.log(`HTTP Status: ${tRes.status}`);
@@ -40,7 +38,7 @@ async function test() {
   console.log(`Response: ${tText}`);
 
   console.log('\n--- GET /autopilot/dashboard ---');
-  const aRes = await fetch('http://localhost:3000/autopilot/dashboard', {
+  const aRes = await fetch(`${apiUrl}/autopilot/dashboard`, {
     headers: { 'Cookie': authCookie }
   });
   console.log(`HTTP Status: ${aRes.status}`);
