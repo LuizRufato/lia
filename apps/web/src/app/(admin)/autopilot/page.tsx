@@ -15,16 +15,20 @@ import { StatusBadge } from "@/components/StatusBadge";
 export default function AutopilotDashboard() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState("");
   const [form, setForm] = useState({
     mode: "OFF",
     minScore: 0,
+    minimumCommissionCents: 500,
     maxDailyPosts: 0,
     intervalMinutes: 0,
     allowedStartMinute: 0,
     allowedEndMinute: 0,
     timezone: "America/Sao_Paulo",
+    enabledChannelIds: [] as string[],
+    enabledMarketplaceIds: [] as string[],
   });
 
   useEffect(() => {
@@ -32,6 +36,8 @@ export default function AutopilotDashboard() {
   }, []);
 
   const fetchData = async () => {
+    setLoading(true);
+    setLoadError("");
     try {
       const res = await fetchAuth("/autopilot/dashboard");
       if (!res.ok) throw new Error("Failed to fetch");
@@ -42,15 +48,18 @@ export default function AutopilotDashboard() {
         setForm({
           mode: json.mode,
           minScore: json.config.minScore,
+          minimumCommissionCents: json.config.minimumCommissionCents,
           maxDailyPosts: json.config.maxDailyPosts,
           intervalMinutes: json.config.intervalMinutes,
           allowedStartMinute: json.config.allowedStartMinute,
           allowedEndMinute: json.config.allowedEndMinute,
           timezone: json.config.timezone || "America/Sao_Paulo",
+          enabledChannelIds: json.config.channels.map((channel: any) => channel.id),
+          enabledMarketplaceIds: json.config.marketplaces.map((marketplace: any) => marketplace.id),
         });
       }
     } catch (err) {
-      alert("Erro ao carregar Piloto Automático");
+      setLoadError("Não foi possível carregar as configurações do Piloto Automático.");
     } finally {
       setLoading(false);
     }
@@ -84,6 +93,7 @@ export default function AutopilotDashboard() {
       const payload = {
         ...form,
         minScore: Number(form.minScore),
+        minimumCommissionCents: Number(form.minimumCommissionCents),
         maxDailyPosts: Number(form.maxDailyPosts),
         intervalMinutes: Number(form.intervalMinutes),
         allowedStartMinute: Number(form.allowedStartMinute),
@@ -108,6 +118,26 @@ export default function AutopilotDashboard() {
     return (
       <div className="p-8 flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+      </div>
+    );
+
+  // A failed request must not let the page render fields from a null payload.
+  if (!data)
+    return (
+      <div className="p-8 max-w-xl mx-auto">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
+          <AlertTriangle className="w-8 h-8 text-red-600 mx-auto mb-3" />
+          <h1 className="font-semibold text-gray-900">Piloto indisponível</h1>
+          <p className="text-sm text-gray-600 mt-2">
+            {loadError || "Não foi possível carregar os dados agora."}
+          </p>
+          <button
+            onClick={fetchData}
+            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700"
+          >
+            Tentar novamente
+          </button>
+        </div>
       </div>
     );
 
@@ -244,6 +274,27 @@ export default function AutopilotDashboard() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-6 border-t">
                 <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Comissão mínima (R$)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={(form.minimumCommissionCents / 100).toFixed(2)}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        minimumCommissionCents: Math.round(Number(e.target.value || 0) * 100),
+                      })
+                    }
+                    className="w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Ofertas sem comissão confirmada ou abaixo deste valor são bloqueadas.
+                  </p>
+                </div>
+                <div>
                   <label className="flex items-center justify-between text-sm font-medium text-gray-700 mb-2">
                     <span>Score Mínimo (LIA Score)</span>
                     <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs font-bold">
@@ -363,6 +414,55 @@ export default function AutopilotDashboard() {
                   />
                 </div>
               </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6 border-t">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">
+                    Canais liberados para o Piloto
+                  </h4>
+                  <div className="space-y-2">
+                    {data?.availableChannels?.map((channel: any) => (
+                      <label key={channel.id} className="flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={form.enabledChannelIds.includes(channel.id)}
+                          onChange={(e) => setForm({
+                            ...form,
+                            enabledChannelIds: e.target.checked
+                              ? [...form.enabledChannelIds, channel.id]
+                              : form.enabledChannelIds.filter((id) => id !== channel.id),
+                          })}
+                        />
+                        {channel.displayName} ({channel.provider})
+                      </label>
+                    ))}
+                    {!data?.availableChannels?.length && <p className="text-sm text-gray-500">Nenhum canal ativo disponível.</p>}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">
+                    Marketplaces fontes
+                  </h4>
+                  <div className="space-y-2">
+                    {data?.availableMarketplaces?.map((marketplace: any) => (
+                      <label key={marketplace.id} className="flex items-center gap-2 text-sm text-gray-700">
+                        <input
+                          type="checkbox"
+                          checked={form.enabledMarketplaceIds.includes(marketplace.id)}
+                          onChange={(e) => setForm({
+                            ...form,
+                            enabledMarketplaceIds: e.target.checked
+                              ? [...form.enabledMarketplaceIds, marketplace.id]
+                              : form.enabledMarketplaceIds.filter((id) => id !== marketplace.id),
+                          })}
+                        />
+                        {marketplace.name}
+                      </label>
+                    ))}
+                    {!data?.availableMarketplaces?.length && <p className="text-sm text-gray-500">Nenhum marketplace conectado disponível.</p>}
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div className="mt-8 flex justify-end">
@@ -468,12 +568,12 @@ export default function AutopilotDashboard() {
                 </span>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {data.config?.channels?.length ? (
-                    data.config.channels.map((c: string) => (
+                    data.config.channels.map((c: any) => (
                       <span
-                        key={c}
+                        key={c.id}
                         className="px-2 py-1 bg-gray-100 border border-gray-200 rounded text-xs font-medium text-gray-700"
                       >
-                        {c}
+                        {c.displayName}
                       </span>
                     ))
                   ) : (
@@ -489,12 +589,12 @@ export default function AutopilotDashboard() {
                 </span>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {data.config?.marketplaces?.length ? (
-                    data.config.marketplaces.map((m: string) => (
+                    data.config.marketplaces.map((m: any) => (
                       <span
-                        key={m}
+                        key={m.id}
                         className="px-2 py-1 bg-gray-100 border border-gray-200 rounded text-xs font-medium text-gray-700"
                       >
-                        {m}
+                        {m.name}
                       </span>
                     ))
                   ) : (

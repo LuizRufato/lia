@@ -7,8 +7,9 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run start:dev -w apps/api\" \"npm run dev -w apps/web\" \"npm run start:dev -w @lia/worker\" \"npm run dev -w @lia/tracker\"",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @lia/core && npm run build -w @lia/integrations && npm run build -w api && npm run build -w @lia/meli-rpa && npm run build -w @lia/tracker && npm run build -w web && npm run build -w @lia/worker",
     "test": "npm run test --workspaces --if-present",
+    "bootstrap:production": "ts-node scripts/bootstrap-production.ts",
     "telegram:setup": "ts-node scripts/telegram-setup.ts",
     "meli:login": "ts-node apps/meli-rpa/src/scripts/meli-login.ts",
     "meli:inspect": "ts-node apps/meli-rpa/src/scripts/meli-inspect.ts",

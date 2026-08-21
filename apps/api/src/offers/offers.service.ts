@@ -145,6 +145,28 @@ export class OffersService {
     });
 
     if (affiliateLink && affiliateLink.status === 'VERIFIED') {
+      // Keep the canonical monetization record in sync with an already
+      // verified link. This also repairs links verified before this field was
+      // persisted, so the Autopilot can reuse them without creating a second
+      // affiliate link.
+      await this.prisma.monetizationRecord.upsert({
+        where: { offerId },
+        update: {
+          status: 'VERIFIED',
+          destinationUrl: affiliateLink.affiliateUrl,
+          commissionAmountCents: offer.commission,
+          verifiedAt: affiliateLink.verifiedAt || new Date(),
+        },
+        create: {
+          offerId,
+          status: 'VERIFIED',
+          provider: 'SHOPEE',
+          source: 'shopee_open_api',
+          destinationUrl: affiliateLink.affiliateUrl,
+          commissionAmountCents: offer.commission,
+          verifiedAt: affiliateLink.verifiedAt || new Date(),
+        },
+      });
       return { status: 'VERIFIED', affiliateUrl: affiliateLink.affiliateUrl };
     }
 
@@ -266,6 +288,8 @@ export class OffersService {
           where: { offerId },
           update: {
             status: 'VERIFIED',
+            destinationUrl: shortLink,
+            commissionAmountCents: offer.commission,
             verifiedAt: new Date(),
           },
           create: {
@@ -273,6 +297,8 @@ export class OffersService {
             status: 'VERIFIED',
             provider: 'SHOPEE',
             source: 'shopee_open_api',
+            destinationUrl: shortLink,
+            commissionAmountCents: offer.commission,
             verifiedAt: new Date(),
           },
         });

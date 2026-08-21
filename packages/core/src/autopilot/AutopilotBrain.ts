@@ -123,17 +123,20 @@ export class AutopilotBrain {
       };
     }
 
-    // New check for Minimum Commission (HARD GUARD)
-    if (monetization.estimatedCommissionCents != null) {
-      if (
-        monetization.estimatedCommissionCents < config.minimumCommissionCents
-      ) {
-        return {
-          reason: AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
-          approved: false,
-          details: `Comissão R$ ${(monetization.estimatedCommissionCents / 100).toFixed(2)} é menor que o mínimo R$ ${(config.minimumCommissionCents / 100).toFixed(2)}`,
-        };
-      }
+    // Hard guard: an unknown commission is not safe enough for automatic posting.
+    if (monetization.estimatedCommissionCents == null) {
+      return {
+        reason: AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
+        approved: false,
+        details: "Comissão não informada para a oferta.",
+      };
+    }
+    if (monetization.estimatedCommissionCents < config.minimumCommissionCents) {
+      return {
+        reason: AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
+        approved: false,
+        details: `Comissão R$ ${(monetization.estimatedCommissionCents / 100).toFixed(2)} é menor que o mínimo R$ ${(config.minimumCommissionCents / 100).toFixed(2)}`,
+      };
     }
 
     if (context.postsToday >= config.maxDailyPosts) {

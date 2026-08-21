@@ -1,5 +1,7 @@
 export interface PublishCandidateJobData {
   candidateId: string;
+  /** The only channel authorized by the Autopilot decision for this job. */
+  channelId: string;
 }
 
 export interface PublishClickJobData {

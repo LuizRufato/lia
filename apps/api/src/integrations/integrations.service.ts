@@ -511,4 +511,68 @@ export class IntegrationsService {
 
     return { success: true, groups: results };
   }
+
+  async sendWhatsAppEvolutionTestMessage(
+    tenantId: string,
+    channelId?: string,
+  ) {
+    if (!channelId) {
+      throw new BadRequestException('A WhatsApp channel must be selected.');
+    }
+
+    // The target must belong to the signed-in tenant and be explicitly enabled.
+    // No free-form recipient or message is accepted by this endpoint.
+    const channel = await this.prisma.channel.findFirst({
+      where: {
+        id: channelId,
+        tenantId,
+        provider: 'WHATSAPP',
+        enabled: true,
+      },
+    });
+
+    if (!channel) {
+      throw new BadRequestException(
+        'Enabled WhatsApp channel not found for this tenant.',
+      );
+    }
+
+    const integration = await this.prisma.channelIntegration.findUnique({
+      where: { tenantId_provider: { tenantId, provider: 'WHATSAPP' } },
+    });
+
+    if (
+      !integration ||
+      integration.status !== 'CONNECTED' ||
+      integration.transport !== 'WEB_UNOFFICIAL' ||
+      !integration.externalInstanceName ||
+      !integration.encryptedAccessToken ||
+      !integration.tokenIv ||
+      !integration.tokenAuthTag
+    ) {
+      throw new BadRequestException(
+        'WhatsApp Web/Evolution is not connected for this tenant.',
+      );
+    }
+
+    const instanceToken = decryptSecret(
+      integration.encryptedAccessToken,
+      integration.tokenIv,
+      integration.tokenAuthTag,
+      getEncryptionKey(),
+    );
+
+    const messageId = await new WhatsAppEvolutionProvider().sendGroupMessage(
+      integration.externalInstanceName,
+      instanceToken,
+      channel.externalChatId,
+      '✅ *Teste da LIA*\n\nConexão com o WhatsApp confirmada. Nenhuma oferta ou link foi publicado.',
+    );
+
+    return {
+      success: true,
+      channel: channel.displayName,
+      messageId,
+    };
+  }
 }

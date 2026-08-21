@@ -20,9 +20,13 @@ import {
   Clock,
   MonetizationStatus,
   IntegrationStatus,
-  AutopilotDecisionReason,
   ScoredOffer,
 } from '@lia/core';
+import {
+  decryptSecret,
+  getEncryptionKey,
+  ShopeeAffiliateClient,
+} from '@lia/integrations';
 
 @Injectable()
 export class AutopilotSchedulerService
@@ -44,13 +48,15 @@ export class AutopilotSchedulerService
   private redis: Redis;
 
   onModuleInit() {
+    void this.redis.set('worker:heartbeat', '1', 'EX', 15);
     this.heartbeatInterval = setInterval(() => {
-      this.redis.set('worker:heartbeat', '1', 'EX', 15);
+      void this.redis.set('worker:heartbeat', '1', 'EX', 15);
     }, 5000);
   }
 
   onModuleDestroy() {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    void this.redis.quit();
   }
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -119,6 +125,7 @@ export class AutopilotSchedulerService
       allowedEndMinute: dbConfig.allowedEndMinute,
       timezone: dbConfig.timezone,
       minScore: dbConfig.minScore.toNumber(),
+      minimumCommissionCents: dbConfig.minimumCommissionCents,
       maxDailyPosts: dbConfig.maxDailyPosts,
       intervalMinutes: dbConfig.intervalMinutes,
       enabledChannelIds: dbConfig.enabledChannels.map((c: any) => c.channelId),
@@ -180,7 +187,6 @@ export class AutopilotSchedulerService
 
     // 2. postsToday
     // Assuming 'today' is in the tenant timezone
-    const tzOffsetMs = 0; // Proper timezone handling for "start of day" is complex, simplifying here
     const startOfDay = new Date(
       now.getFullYear(),
       now.getMonth(),
@@ -219,9 +225,8 @@ export class AutopilotSchedulerService
       integrationHealth,
     };
 
-    // Fetch candidate evaluations that haven't been audited today?
-    // Or just top N unused evaluations.
-    // For simplicity, find the top 1 evaluation > minScore that has no PublicationCandidate.
+    // Eligible evaluations already receive a PENDING candidate from OfferService.
+    // The scheduler is the only component allowed to move it toward publication.
     const eligibleEvaluation = await this.prisma.offerEvaluation.findFirst({
       where: {
         observation: {
@@ -232,10 +237,11 @@ export class AutopilotSchedulerService
         },
         score: { gte: configSnapshot.minScore },
         decision: 'ELIGIBLE', // Make sure they are eligible
-        candidate: null, // Not yet turned into a candidate
+        candidate: { is: { status: 'PENDING' } },
       },
       orderBy: { score: 'desc' },
       include: {
+        candidate: true,
         observation: {
           include: {
             offer: { include: { monetization: true, marketplace: true } },
@@ -254,12 +260,20 @@ export class AutopilotSchedulerService
       score: eligibleEvaluation.score ? eligibleEvaluation.score.toNumber() : 0,
     };
 
-    const monCtx: MonetizationContext = {
+    let monCtx: MonetizationContext = {
       status:
         (dbOffer.monetization?.status as MonetizationStatus) ||
         MonetizationStatus.UNAVAILABLE,
       destinationUrl: dbOffer.monetization?.destinationUrl,
+      estimatedCommissionCents:
+        dbOffer.monetization?.commissionAmountCents ?? dbOffer.commission,
     };
+
+    // In AUTO, generate/verify the Shopee affiliate link *before* the Brain
+    // applies its VERIFIED rule. DRY_RUN remains side-effect free.
+    if (configSnapshot.mode === AutopilotMode.AUTO) {
+      monCtx = await this.ensureVerifiedMonetization(dbOffer, monCtx);
+    }
 
     const decision = AutopilotBrain.evaluate(
       offer,
@@ -270,12 +284,10 @@ export class AutopilotSchedulerService
     );
 
     if (decision.approved) {
-      // Create Candidate and Audit
-      const candidate = await this.prisma.publicationCandidate.create({
-        data: {
-          evaluationId: eligibleEvaluation.id,
-          status: 'QUEUED',
-        },
+      const candidate = eligibleEvaluation.candidate!;
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidate.id },
+        data: { status: configSnapshot.mode === 'AUTO' ? 'QUEUED' : 'SKIPPED' },
       });
 
       await this.prisma.autopilotAudit.create({
@@ -293,22 +305,17 @@ export class AutopilotSchedulerService
       if (configSnapshot.mode === 'AUTO') {
         await this.publisherQueue.add(
           'publish-candidate',
-          { candidateId: candidate.id },
+          { candidateId: candidate.id, channelId: decision.channelId! },
           {
             jobId: `publish-${candidate.id}`,
           },
         );
       }
     } else {
-      // Discard and audit so we don't evaluate again
-      // Wait, we need to associate an Audit without creating a Candidate?
-      // But AutopilotAudit requires a Candidate!
-      // This means we might need to create a Candidate with status SKIPPED just to log it.
-      const candidate = await this.prisma.publicationCandidate.create({
-        data: {
-          evaluationId: eligibleEvaluation.id,
-          status: 'SKIPPED',
-        },
+      const candidate = eligibleEvaluation.candidate!;
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidate.id },
+        data: { status: 'SKIPPED' },
       });
 
       await this.prisma.autopilotAudit.create({
@@ -321,6 +328,108 @@ export class AutopilotSchedulerService
           details: decision.details,
         },
       });
+    }
+  }
+
+  private async ensureVerifiedMonetization(
+    offer: any,
+    current: MonetizationContext,
+  ): Promise<MonetizationContext> {
+    if (
+      current.status === MonetizationStatus.VERIFIED &&
+      current.destinationUrl
+    ) {
+      return current;
+    }
+
+    if (offer.marketplace.type !== 'SHOPEE') return current;
+
+    const context = 'AUTOPILOT_VERIFICATION';
+    const contextId = 'autopilot';
+    let link = await this.prisma.affiliateLink.findUnique({
+      where: { offerId_context_contextId: { offerId: offer.id, context, contextId } },
+    });
+
+    if (link?.status === 'VERIFIED' && link.affiliateUrl) {
+      await this.prisma.monetizationRecord.upsert({
+        where: { offerId: offer.id },
+        update: { status: 'VERIFIED', destinationUrl: link.affiliateUrl, verifiedAt: link.verifiedAt ?? new Date() },
+        create: {
+          offerId: offer.id,
+          provider: 'SHOPEE',
+          source: 'shopee_short_link',
+          status: 'VERIFIED',
+          destinationUrl: link.affiliateUrl,
+          commissionAmountCents: offer.commission,
+          verifiedAt: link.verifiedAt ?? new Date(),
+        },
+      });
+      return { ...current, status: MonetizationStatus.VERIFIED, destinationUrl: link.affiliateUrl };
+    }
+
+    try {
+      const integration = await this.prisma.marketplaceIntegration.findUnique({
+        where: { tenantId_provider: { tenantId: offer.tenantId, provider: 'SHOPEE' } },
+      });
+      if (!integration?.publicIdentifier || !integration.encryptedSecret || !integration.iv || !integration.authTag) {
+        return current;
+      }
+
+      link = await this.prisma.affiliateLink.upsert({
+        where: { offerId_context_contextId: { offerId: offer.id, context, contextId } },
+        update: { status: 'VERIFYING' },
+        create: {
+          tenantId: offer.tenantId,
+          offerId: offer.id,
+          provider: 'SHOPEE',
+          attributionKey: randomBytes(16).toString('hex'),
+          context,
+          contextId,
+          status: 'VERIFYING',
+        },
+      });
+
+      const appSecret = decryptSecret(
+        integration.encryptedSecret,
+        integration.iv,
+        integration.authTag,
+        getEncryptionKey(),
+      );
+      const client = new ShopeeAffiliateClient(integration.publicIdentifier, appSecret);
+      const response = await client.generateShortLink(offer.url, ['lia', link.attributionKey]);
+      const affiliateUrl = response.data?.generateShortLink?.shortLink;
+      if (!affiliateUrl || !/^https:\/\/(s\.shopee|shope\.ee)/.test(affiliateUrl)) {
+        throw new Error('Shopee não retornou shortLink válido.');
+      }
+
+      const verifiedAt = new Date();
+      await this.prisma.$transaction([
+        this.prisma.affiliateLink.update({
+          where: { id: link.id },
+          data: { status: 'VERIFIED', affiliateUrl, verifiedAt },
+        }),
+        this.prisma.monetizationRecord.upsert({
+          where: { offerId: offer.id },
+          update: {
+            status: 'VERIFIED', destinationUrl: affiliateUrl,
+            commissionAmountCents: offer.commission, verifiedAt,
+          },
+          create: {
+            offerId: offer.id, provider: 'SHOPEE', source: 'shopee_short_link',
+            status: 'VERIFIED', destinationUrl: affiliateUrl,
+            commissionAmountCents: offer.commission, verifiedAt,
+          },
+        }),
+      ]);
+      return { ...current, status: MonetizationStatus.VERIFIED, destinationUrl: affiliateUrl };
+    } catch (error: any) {
+      if (link) {
+        await this.prisma.affiliateLink.update({
+          where: { id: link.id }, data: { status: 'FAILED' },
+        });
+      }
+      this.logger.warn(`Autopilot monetization failed for ${offer.id}: ${error.message}`);
+      return current;
     }
   }
 }

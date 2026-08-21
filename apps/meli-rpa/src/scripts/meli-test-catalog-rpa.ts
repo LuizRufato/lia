@@ -62,7 +62,7 @@ async function bootstrap() {
     distributedLock = "PASS";
 
     heartbeatTimer = setInterval(async () => {
-      await lockService.renewLock(lockKey, ownerToken, 600000);
+      await lockService.renewLock(lockKey, ownerToken!, 600000);
     }, 60000);
 
     // 2. Fetch Session
