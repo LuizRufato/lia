@@ -11,9 +11,14 @@ import { UAParser } from "ua-parser-js";
 
 const fastify = Fastify({ logger: true });
 
+const isProduction = process.env.NODE_ENV === "production";
 const connectionString =
   process.env.DATABASE_URL ||
-  "postgresql://postgres:postgres@localhost:5432/lia_db?schema=public";
+  (isProduction
+    ? (() => {
+        throw new Error("DATABASE_URL is required in production");
+      })()
+    : "postgresql://postgres:postgres@localhost:5432/lia_db?schema=public");
 const pool = new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
@@ -22,7 +27,13 @@ const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 const clicksQueue = new Queue("clicks-queue", { connection: redis });
 
 const CACHE_TTL_SECONDS = 300; // 5 mins
-const HASH_SECRET = process.env.CLICK_HASH_SECRET || "dev-secret-123";
+const HASH_SECRET =
+  process.env.CLICK_HASH_SECRET ||
+  (isProduction
+    ? (() => {
+        throw new Error("CLICK_HASH_SECRET is required in production");
+      })()
+    : "dev-secret-123");
 
 fastify.register(cors, { origin: "*" });
 

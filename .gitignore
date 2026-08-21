@@ -9,4 +9,18 @@ build
 *.log
 coverage
 
+# Local diagnostics, scratch files, and QR exports
+**/*qr*.md
+**/final_audit_*.md
+/check-*.js
+/probe-*.js
+/enqueue-*.js
+/trigger-*.js
+/test-*.html
+/test-*.js
+/test-*.ts
+/wipe.sql
+apps/api/check-*.js
+apps/api/probe-*.js
+
 .env.test

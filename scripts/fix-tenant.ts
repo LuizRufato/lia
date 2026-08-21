@@ -6,7 +6,11 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
-const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/lia_db?schema=public';
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL is required.');
+}
+
+const connectionString = process.env.DATABASE_URL;
 const pool = new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
@@ -30,7 +34,12 @@ async function main() {
   });
 
   if (!admin) {
-    const hashedPassword = await bcrypt.hash('admin123', 10);
+    const bootstrapPassword = process.env.ADMIN_BOOTSTRAP_PASSWORD;
+    if (!bootstrapPassword) {
+      throw new Error('ADMIN_BOOTSTRAP_PASSWORD is required to create the admin.');
+    }
+
+    const hashedPassword = await bcrypt.hash(bootstrapPassword, 10);
     admin = await prisma.adminUser.create({
       data: {
         email: 'admin@lia.com',

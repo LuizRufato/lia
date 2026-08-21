@@ -1,8 +1,12 @@
 const { Client } = require('pg');
 
 async function run() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required.');
+  }
+
   const client = new Client({
-    connectionString: "postgresql://user:b4b1ebc2689801b6e701ec142841cd59fcbb0bd067c8eda4@localhost:5432/lia_db?schema=public"
+    connectionString: process.env.DATABASE_URL,
   });
   await client.connect();
   await client.query(`UPDATE "ChannelIntegration" SET status = 'CONNECTED', "connectedAt" = NOW() WHERE provider = 'WHATSAPP' AND status = 'CONNECTING'`);

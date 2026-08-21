@@ -1,10 +1,19 @@
 const http = require('http');
 
+const apiHost = process.env.API_HOST || 'localhost';
+const apiPort = Number(process.env.API_PORT || 3000);
+const testEmail = process.env.ADMIN_TEST_EMAIL;
+const testPassword = process.env.ADMIN_TEST_PASSWORD;
+
+if (!testEmail || !testPassword) {
+  throw new Error('ADMIN_TEST_EMAIL and ADMIN_TEST_PASSWORD are required.');
+}
+
 function request(method, path, data = null, cookie = null) {
   return new Promise((resolve, reject) => {
     const req = http.request({
-      hostname: 'localhost',
-      port: 3000,
+      hostname: apiHost,
+      port: apiPort,
       path: path,
       method: method,
       headers: {
@@ -32,7 +41,7 @@ function request(method, path, data = null, cookie = null) {
 
 async function runTests() {
   console.log('--- TEST 1: LOGIN ---');
-  const loginRes = await request('POST', '/auth/login', { email: 'admin@lia.com', password: 'admin123' });
+  const loginRes = await request('POST', '/auth/login', { email: testEmail, password: testPassword });
   console.log('Login Status:', loginRes.statusCode);
   const cookie = loginRes.cookie;
   if (!cookie) throw new Error('No cookie received');
