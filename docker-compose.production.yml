@@ -1,0 +1,187 @@
+x-lia-environment: &lia_environment
+  NODE_ENV: production
+  PORT: 3000
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: redis://redis:6379
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PREFIX: "{lia}"
+  JWT_SECRET: ${JWT_SECRET}
+  INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY}
+  INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY}
+  CLICK_HASH_SECRET: ${CLICK_HASH_SECRET}
+  WEB_URL: ${WEB_URL}
+  TRACKER_PUBLIC_BASE_URL: ${TRACKER_PUBLIC_BASE_URL}
+  EVOLUTION_API_URL: http://evolution-api:8080
+  EVOLUTION_GLOBAL_API_KEY: ${EVOLUTION_GLOBAL_API_KEY}
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - lia_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - lia_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+
+  evolution-postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD}
+      POSTGRES_DB: evolution
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 384m
+
+  evolution-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - evolution_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 128m
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: unless-stopped
+    depends_on:
+      evolution-postgres:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_healthy
+    environment:
+      SERVER_URL: ${EVOLUTION_PUBLIC_URL}
+      DOCKER_ENV: "true"
+      LOG_LEVEL: ERROR
+      DEL_INSTANCE: "false"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@evolution-postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_api
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "true"
+      CACHE_LOCAL_ENABLED: "false"
+      AUTHENTICATION_API_KEY: ${EVOLUTION_GLOBAL_API_KEY}
+      AUTHENTICATION_TYPE: apikey
+      CONFIG_SESSION_PHONE_CLIENT: LIA_RPA
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+    volumes:
+      - evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
+    mem_limit: 512m
+
+  api:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    image: lia-runtime:${LIA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "npx prisma migrate deploy --config packages/database/prisma.config.ts
+      && npm run bootstrap:production
+      && npm run start:prod -w api"
+    environment:
+      <<: *lia_environment
+      ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD}
+    ports:
+      - "3000:3000"
+    mem_limit: 640m
+
+  worker:
+    image: lia-runtime:${LIA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: npm run start:prod -w @lia/worker
+    environment:
+      <<: *lia_environment
+      PORT: 3003
+    mem_limit: 768m
+
+  tracker:
+    image: lia-runtime:${LIA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: npm run start -w @lia/tracker
+    environment:
+      <<: *lia_environment
+      TRACKER_PORT: 3002
+    ports:
+      - "3002:3002"
+    mem_limit: 256m
+
+  web:
+    image: lia-runtime:${LIA_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    command: npm run start -w web
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    ports:
+      - "3001:3001"
+    mem_limit: 512m
+
+volumes:
+  lia_postgres_data:
+  lia_redis_data:
+  evolution_postgres_data:
+  evolution_redis_data:
+  evolution_store:
+  evolution_instances:

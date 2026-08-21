@@ -69,7 +69,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: evolution
-      POSTGRES_PASSWORD: evolution_password
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD}
       POSTGRES_DB: evolution
     ports:
       - "127.0.0.1:5434:5432"
@@ -112,14 +112,14 @@ services:
       - LOG_LEVEL=ERROR
       - DEL_INSTANCE=false
       - DATABASE_PROVIDER=postgresql
-      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution_password@evolution-db:5432/evolution?schema=public
+      - DATABASE_CONNECTION_URI=postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD}@evolution-db:5432/evolution?schema=public
       - DATABASE_CONNECTION_CLIENT_NAME=evolution_api
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://evolution-redis:6379
       - CACHE_REDIS_PREFIX_KEY=evolution
       - CACHE_REDIS_SAVE_INSTANCES=true
       - CACHE_LOCAL_ENABLED=false
-      - AUTHENTICATION_API_KEY=cc4c79dcf49a6e2f2da1e724bbf6d97a01479bd03505ad4dedcbf8269b3883b5
+      - AUTHENTICATION_API_KEY=${EVOLUTION_GLOBAL_API_KEY}
       - AUTHENTICATION_TYPE=apikey
       - CONFIG_SESSION_PHONE_CLIENT=LIA_RPA
       - CONFIG_SESSION_PHONE_NAME=Chrome
