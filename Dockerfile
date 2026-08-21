@@ -13,7 +13,6 @@ COPY package.json package-lock.json ./
 COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
-COPY tsconfig.json ./
 
 # Mercado Livre RPA is deliberately not deployed in the first production
 # release. Avoid downloading a browser binary while still installing the
