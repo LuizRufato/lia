@@ -8,15 +8,6 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  if (token) {
-    if (
-      request.nextUrl.pathname.startsWith("/login") ||
-      request.nextUrl.pathname === "/"
-    ) {
-      return NextResponse.redirect(new URL("/overview", request.url));
-    }
-  }
-
   return NextResponse.next();
 }
 

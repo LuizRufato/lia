@@ -12,8 +12,9 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto) {
+    const normalizedEmail = loginDto.email.trim().toLowerCase();
     const user = await this.prisma.adminUser.findUnique({
-      where: { email: loginDto.email },
+      where: { email: normalizedEmail },
     });
 
     if (!user) {
@@ -31,11 +32,21 @@ export class AuthService {
 
     const membership = await this.prisma.tenantMembership.findFirst({
       where: { adminUserId: user.id },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
-    const tenantId = membership ? membership.tenantId : null;
+    if (!membership) {
+      throw new UnauthorizedException(
+        'Usuário não pertence a nenhum tenant configurado.',
+      );
+    }
 
-    const payload = { email: user.email, sub: user.id, tenantId };
+    const payload = {
+      email: user.email,
+      sub: user.id,
+      tenantId: membership.tenantId,
+      role: membership.role,
+    };
 
     return {
       accessToken: this.jwtService.sign(payload),

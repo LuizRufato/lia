@@ -18,26 +18,36 @@ describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
   let testHash: string;
   let validToken: string;
+  let prismaMock: any;
 
   beforeAll(async () => {
-    testHash = await bcrypt.hash('test', 10);
+    testHash = await bcrypt.hash('testpassword', 10);
   });
 
   beforeEach(async () => {
+    prismaMock = {
+      adminUser: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: '123',
+          email: 'test@test.com',
+          passwordHash: testHash,
+        }),
+      },
+      tenantMembership: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'membership-1',
+          tenantId: 'tenant-1',
+          role: 'OWNER',
+        }),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([{ 1: 1 }]),
+    };
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
       .overrideProvider(PrismaService)
-      .useValue({
-        adminUser: {
-          findUnique: jest.fn().mockResolvedValue({
-            id: '123',
-            email: 'test@test.com',
-            passwordHash: testHash,
-          }),
-        },
-        $queryRaw: jest.fn().mockResolvedValue([{ 1: 1 }]),
-      })
+      .useValue(prismaMock)
       .overrideProvider(PrismaHealthIndicator)
       .useValue({
         pingCheck: jest.fn().mockResolvedValue({ database: { status: 'up' } }),
@@ -71,18 +81,54 @@ describe('AppController (e2e)', () => {
   it('/auth/login (POST) should login and return cookie', async () => {
     const response = await request(app.getHttpServer())
       .post('/auth/login')
-      .send({ email: 'test@test.com', password: 'test' })
+      .send({ email: '  TEST@TEST.COM ', password: 'testpassword' })
       .expect(200);
 
     expect(response.headers['set-cookie']).toBeDefined();
     validToken = response.headers['set-cookie'][0];
+    expect(prismaMock.adminUser.findUnique).toHaveBeenCalledWith({
+      where: { email: 'test@test.com' },
+    });
   });
 
   it('/auth/me (GET) should be accessible with auth cookie', () => {
     return request(app.getHttpServer())
       .get('/auth/me')
       .set('Cookie', validToken)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          id: '123',
+          email: 'test@test.com',
+          tenantId: 'tenant-1',
+          role: 'OWNER',
+        });
+      });
+  });
+
+  it('/auth/logout (POST) clears the session and protected routes reject it', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: 'test@test.com', password: 'testpassword' })
       .expect(200);
+    const cookie = login.headers['set-cookie'][0];
+
+    const logout = await request(app.getHttpServer())
+      .post('/auth/logout')
+      .set('Cookie', cookie)
+      .expect(200);
+
+    expect(logout.headers['set-cookie'][0]).toContain('Authentication=');
+    await request(app.getHttpServer()).get('/auth/me').expect(401);
+  });
+
+  it('/auth/login (POST) rejects an admin without tenant membership', async () => {
+    prismaMock.tenantMembership.findFirst.mockResolvedValueOnce(null);
+
+    await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: 'test@test.com', password: 'testpassword' })
+      .expect(401);
   });
 
   afterAll(async () => {

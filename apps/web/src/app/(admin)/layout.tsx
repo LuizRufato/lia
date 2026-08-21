@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { fetchAuth } from "@/lib/api";
 import {
   LayoutDashboard,
   Tag,
@@ -43,7 +44,7 @@ export default function AdminLayout({
 
   const handleLogout = async () => {
     try {
-      await fetch("http://localhost:3000/auth/logout", { method: "POST" });
+      await fetchAuth("/auth/logout", { method: "POST" });
       router.push("/login");
       router.refresh();
     } catch (error) {

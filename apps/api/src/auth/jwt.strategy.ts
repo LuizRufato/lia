@@ -27,10 +27,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: any) {
     const adminUserId = payload.sub;
+    const tenantId = payload.tenantId;
 
-    // Find membership to determine tenant context
+    if (typeof adminUserId !== 'string' || typeof tenantId !== 'string') {
+      throw new UnauthorizedException('Sessão sem contexto de tenant válido');
+    }
+
+    // Reuse the tenant selected at login instead of selecting an arbitrary
+    // membership on every request.
     const membership = await this.prisma.tenantMembership.findFirst({
-      where: { adminUserId },
+      where: { adminUserId, tenantId },
       include: { tenant: true },
     });
 

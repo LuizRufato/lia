@@ -17,6 +17,18 @@ import { Public } from './public.decorator';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  private getAuthCookieOptions() {
+    const domain = process.env.AUTH_COOKIE_DOMAIN?.trim();
+
+    return {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict' as const,
+      path: '/',
+      ...(domain ? { domain } : {}),
+    };
+  }
+
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -27,9 +39,7 @@ export class AuthController {
     const { accessToken } = await this.authService.login(loginDto);
 
     response.cookie('Authentication', accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      ...this.getAuthCookieOptions(),
       maxAge: 24 * 60 * 60 * 1000, // 1 day
     });
 
@@ -40,9 +50,8 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   logout(@Res({ passthrough: true }) response: Response) {
     response.cookie('Authentication', '', {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
+      ...this.getAuthCookieOptions(),
+      maxAge: 0,
       expires: new Date(0),
     });
 
