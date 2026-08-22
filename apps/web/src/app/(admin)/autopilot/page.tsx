@@ -26,7 +26,7 @@ export default function AutopilotDashboard() {
     intervalMinutes: 0,
     allowedStartMinute: 0,
     allowedEndMinute: 0,
-    timezone: "America/Sao_Paulo",
+    timezone: "America/Campo_Grande",
     enabledChannelIds: [] as string[],
     enabledMarketplaceIds: [] as string[],
   });
@@ -53,7 +53,7 @@ export default function AutopilotDashboard() {
           intervalMinutes: json.config.intervalMinutes,
           allowedStartMinute: json.config.allowedStartMinute,
           allowedEndMinute: json.config.allowedEndMinute,
-          timezone: json.config.timezone || "America/Sao_Paulo",
+          timezone: json.config.timezone || "America/Campo_Grande",
           enabledChannelIds: json.config.channels.map((channel: any) => channel.id),
           enabledMarketplaceIds: json.config.marketplaces.map((marketplace: any) => marketplace.id),
         });

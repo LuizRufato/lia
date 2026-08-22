@@ -1,6 +1,6 @@
 # Estado atual do Projeto LIA
 
-Última atualização: 2026-08-06
+Última atualização: 2026-08-22
 
 ## Funcionando (Fase 0 Concluída)
 * Estrutura de pastas do monorepo criada.
@@ -23,7 +23,7 @@
 * Módulos, Tracker, Shopee, ML, WhatsApp, Telegram, etc.
 
 ## Problemas conhecidos
-* Nenhum no momento (Dependências básicas e hardening de ambiente resolvidos).
+* Build local do Web pode falhar sem acesso à Google Fonts; o código não foi alterado para contornar isso nesta fase.
 
 ## Fases do Projeto
 
@@ -51,6 +51,10 @@
   - ✅ Engine de Copy baseada no TrackedLink final e Currency
   - ✅ Dashboard UI (Status OFF/MANUAL/DRY_RUN/AUTO e Feed de Auditoria)
   - ✅ Segurança multi-tenant com TenantMembership
+  - ✅ Estados seguros PENDING/DEFERRED/QUEUED/PUBLISHING/PUBLISHED/SKIPPED/FAILED
+  - ✅ DRY_RUN sem mutação de candidato/publicação ou enfileiramento
+  - ✅ Janela, intervalo e limite diário calculados em `America/Campo_Grande`/fuso IANA do tenant
+  - ✅ Idempotência do Publisher, recuperação stale e política conservadora DELIVERY_UNKNOWN
 - [x] **Fase 7A**: Integração WhatsApp
   - ✅ Integração Meta Cloud API homologada (Conexão estrutural, Types, Banco).
 - [x] **Fase 7B.1**: Shopee Open API E2E

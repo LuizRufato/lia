@@ -215,6 +215,7 @@ enum PublicationCandidateStatus {
   PENDING
   QUEUED
   PUBLISHING
+  DEFERRED
   PUBLISHED
   SKIPPED
   FAILED
@@ -327,6 +328,8 @@ model PublicationCandidate {
   evaluation   OfferEvaluation @relation(fields: [evaluationId], references: [id])
 
   status PublicationCandidateStatus @default(PENDING)
+  deferredReason String?
+  retryAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -511,6 +514,13 @@ enum AutopilotDecisionReason {
   REJECTED_KILL_SWITCH
   REJECTED_INTEGRATION_UNHEALTHY
   DRY_RUN_APPROVED
+  DEFERRED_DAILY_LIMIT
+  DEFERRED_INTERVAL
+  DEFERRED_OUTSIDE_SCHEDULE
+  DEFERRED_INTEGRATION_UNHEALTHY
+  DEFERRED_MONETIZATION
+  SKIPPED_PERMANENT_POLICY
+  DELIVERY_UNKNOWN
 }
 
 model AutopilotAudit {

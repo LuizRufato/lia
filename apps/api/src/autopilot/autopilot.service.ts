@@ -171,6 +171,12 @@ export class AutopilotService {
       throw new BadRequestException('Configuração do Autopilot inválida.');
     }
 
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+    } catch {
+      throw new BadRequestException('Fuso horário IANA inválido.');
+    }
+
     const channelIds = Array.isArray(enabledChannelIds) ? enabledChannelIds : [];
     const marketplaceIds = Array.isArray(enabledMarketplaceIds)
       ? enabledMarketplaceIds

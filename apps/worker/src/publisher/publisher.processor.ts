@@ -92,14 +92,50 @@ export class PublisherProcessor extends WorkerHost {
       return { skipped: true, reason: 'AUTOPILOT_AUTHORIZATION_REVOKED' };
     }
 
-    const result = await this.processChannel(job, candidate, offer, channel);
+    // Claim the candidate atomically. A retried/concurrent job must not enter
+    // affiliate-link creation or an external provider call twice.
+    const claimed = await this.prisma.publicationCandidate.updateMany({
+      where: { id: candidateId, status: 'QUEUED' },
+      data: { status: 'PUBLISHING' },
+    });
+    if (!claimed.count) {
+      return { skipped: true, reason: 'CANDIDATE_ALREADY_CLAIMED' };
+    }
+
+    let result: any;
+    try {
+      result = await this.processChannel(job, candidate, offer, channel);
+    } catch (error: any) {
+      if (error instanceof DelayedError) {
+        await this.prisma.publicationCandidate.update({
+          where: { id: candidateId },
+          data: {
+            status: 'DEFERRED',
+            deferredReason: 'RATE_LIMIT',
+            retryAt: new Date(Date.now() + 60_000),
+          },
+        });
+      } else {
+        await this.prisma.publicationCandidate.update({
+          where: { id: candidateId },
+          data: { status: 'FAILED', deferredReason: error.message },
+        });
+      }
+      throw error;
+    }
 
     if (result.failed) {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
-        data: { status: 'FAILED' },
+        data: result.reason === 'REJECTED_MONETIZATION'
+          ? {
+              status: 'DEFERRED',
+              deferredReason: result.reason,
+              retryAt: new Date(Date.now() + 15 * 60_000),
+            }
+          : { status: 'FAILED', deferredReason: result.reason || null },
       });
-    } else {
+    } else if (result.published) {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
         data: { status: 'PUBLISHED' },
@@ -115,6 +151,24 @@ export class PublisherProcessor extends WorkerHost {
     offer: any,
     channel: any,
   ) {
+    const existing = await this.prisma.publication.findUnique({
+      where: { candidateId_channelId: { candidateId: candidate.id, channelId: channel.id } },
+      select: { id: true, status: true, externalMessageId: true },
+    });
+    if (existing) {
+      // No external retry is safe once a provider call may have happened.
+      if (existing.status === 'PUBLISHED') {
+        return { skipped: true, published: true, reason: 'PUBLICATION_ALREADY_PUBLISHED' };
+      }
+      if (existing.status === 'DELIVERY_UNKNOWN') {
+        return { failed: true, reason: 'DELIVERY_UNKNOWN' };
+      }
+      return {
+        skipped: true,
+        reason: 'PUBLICATION_ALREADY_EXISTS',
+      };
+    }
+
     // 2.5 Ensure Verified Affiliate Link for this specific channel
     let affiliateUrl: string;
     try {
@@ -233,7 +287,7 @@ export class PublisherProcessor extends WorkerHost {
     });
 
     try {
-      let messageId = null;
+      let messageId: string | null = null;
 
       if (channel.provider === 'TELEGRAM') {
         messageId = await this.telegramService.sendOfferMessage({
@@ -258,6 +312,19 @@ export class PublisherProcessor extends WorkerHost {
         throw new Error(`Provider ${channel.provider} not supported`);
       }
 
+      // A provider response without an id is not proof of delivery. Keep the
+      // publication conservative and never promote the candidate to PUBLISHED.
+      if (!messageId) {
+        await this.prisma.publication.update({
+          where: { id: publication.id },
+          data: {
+            status: 'DELIVERY_UNKNOWN',
+            errorReason: 'Provider não retornou messageId; entrega desconhecida.',
+          },
+        });
+        return { failed: true, reason: 'DELIVERY_UNKNOWN' };
+      }
+
       // 6. Success -> Save messageId
       await this.prisma.publication.update({
         where: { id: publication.id },
@@ -268,7 +335,7 @@ export class PublisherProcessor extends WorkerHost {
         },
       });
 
-      return { success: true, messageId };
+      return { success: true, published: true, messageId };
     } catch (error: any) {
       // 7. Error Handling
       const isRateLimit = error.status === 429;
