@@ -37,6 +37,12 @@ import { getRateLimitPolicy } from './rate-limit.policy';
         REDIS_PORT: Joi.number().port().default(6379),
         REDIS_PREFIX: Joi.string().default('{lia}'),
         WEB_URL: Joi.string().default('http://localhost:3001'),
+        TRACKER_URL: Joi.string()
+          .uri({ scheme: ['http', 'https'] })
+          .optional(),
+        TRACKER_PUBLIC_BASE_URL: Joi.string()
+          .uri({ scheme: ['http', 'https'] })
+          .optional(),
       }),
     }),
     // The API only enqueues jobs, but it must use the exact same Redis

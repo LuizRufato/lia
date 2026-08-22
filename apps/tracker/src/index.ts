@@ -6,14 +6,17 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Redis } from "ioredis";
 import { Queue } from "bullmq";
 import { randomUUID } from "crypto";
-import {
-  classifyClick,
-  generateVisitorHash,
-  getRedisConfig,
-} from "@lia/core";
+import { classifyClick, generateVisitorHash, getRedisConfig } from "@lia/core";
 import { UAParser } from "ua-parser-js";
+import {
+  CLICK_ENQUEUE_ATTEMPTS,
+  CLICK_JOB_OPTIONS,
+  CLICK_QUEUE_NAME,
+  TRUSTED_PROXY_RANGES,
+  getClickHashSecret,
+} from "./config";
 
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({ logger: true, trustProxy: TRUSTED_PROXY_RANGES });
 
 const isProduction = process.env.NODE_ENV === "production";
 const connectionString =
@@ -29,19 +32,13 @@ const prisma = new PrismaClient({ adapter });
 
 const redisConfig = getRedisConfig();
 const redis = new Redis(redisConfig.url);
-const clicksQueue = new Queue("clicks-queue", {
+const clicksQueue = new Queue(CLICK_QUEUE_NAME, {
   connection: redis,
   prefix: redisConfig.prefix,
 });
 
 const CACHE_TTL_SECONDS = 300; // 5 mins
-const HASH_SECRET =
-  process.env.CLICK_HASH_SECRET ||
-  (isProduction
-    ? (() => {
-        throw new Error("CLICK_HASH_SECRET is required in production");
-      })()
-    : "dev-secret-123");
+const HASH_SECRET = getClickHashSecret(process.env);
 
 fastify.register(cors, { origin: "*" });
 
@@ -58,7 +55,14 @@ fastify.get("/:slug", async (request, reply) => {
 
   // 1. Redis Cache Lookup
   const cacheKey = `link:${slug}`;
-  let linkDataStr = await redis.get(cacheKey);
+  let linkDataStr: string | null = null;
+  try {
+    linkDataStr = await redis.get(cacheKey);
+  } catch (error: any) {
+    // Redis is an optimization for link lookup. A temporary outage should
+    // not prevent a redirect when PostgreSQL can still resolve the link.
+    fastify.log.warn(`Tracker cache lookup failed: ${error.message}`);
+  }
 
   let linkData: {
     id: string;
@@ -87,7 +91,11 @@ fastify.get("/:slug", async (request, reply) => {
     });
 
     if (!dbLink) {
-      await redis.setex(cacheKey, 60, "NOT_FOUND"); // Anti-hammering cache for non-existent links
+      await redis
+        .setex(cacheKey, 60, "NOT_FOUND")
+        .catch((error: any) =>
+          fastify.log.warn(`Tracker negative cache failed: ${error.message}`),
+        ); // Anti-hammering cache for non-existent links
       return reply.status(404).send("Not Found");
     }
 
@@ -99,7 +107,11 @@ fastify.get("/:slug", async (request, reply) => {
       tenantId: dbLink.offer.tenantId,
     };
 
-    await redis.setex(cacheKey, CACHE_TTL_SECONDS, JSON.stringify(linkData));
+    await redis
+      .setex(cacheKey, CACHE_TTL_SECONDS, JSON.stringify(linkData))
+      .catch((error: any) =>
+        fastify.log.warn(`Tracker link cache failed: ${error.message}`),
+      );
   }
 
   // 3. Validation
@@ -135,35 +147,20 @@ fastify.get("/:slug", async (request, reply) => {
     deviceType = parser.getDevice().type || "desktop";
   }
 
-  // 5. Fast Enqueue (Bounded wait)
-  try {
-    // We race the enqueue against a short timeout to never block the redirect
-    await Promise.race([
-      clicksQueue.add(
-        "process-click",
-        {
-          eventId,
-          linkId: linkData.id,
-          tenantId: linkData.tenantId,
-          clickedAt,
-          classification,
-          classificationReason: reason,
-          visitorHash,
-          userAgentFamily,
-          deviceType,
-        },
-        { jobId: eventId },
-      ), // Use eventId as jobId for BullMQ idempotency
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Queue timeout")), 50),
-      ),
-    ]);
-  } catch (error: any) {
-    fastify.log.error(
-      `Analytics enqueue failed for event ${eventId}: ${error.message}`,
-    );
-    // DO NOT ABORT - continue with redirect
-  }
+  // 5. Fast Enqueue (bounded background retry)
+  const clickJobData = {
+    eventId,
+    linkId: linkData.id,
+    tenantId: linkData.tenantId,
+    clickedAt,
+    classification,
+    classificationReason: reason,
+    visitorHash,
+    userAgentFamily,
+    deviceType,
+  };
+
+  void enqueueClickWithRetry(eventId, clickJobData);
 
   // 6. Redirect 302
   reply.header(
@@ -175,6 +172,38 @@ fastify.get("/:slug", async (request, reply) => {
 
   return reply.redirect(302, linkData.destinationUrl);
 });
+
+async function enqueueClickWithRetry(eventId: string, data: object) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= CLICK_ENQUEUE_ATTEMPTS; attempt += 1) {
+    try {
+      await Promise.race([
+        clicksQueue.add("process-click", data, {
+          jobId: eventId,
+          ...CLICK_JOB_OPTIONS,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Queue enqueue timeout")), 250),
+        ),
+      ]);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < CLICK_ENQUEUE_ATTEMPTS) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, 25 * 2 ** (attempt - 1)),
+        );
+      }
+    }
+  }
+
+  const message =
+    lastError instanceof Error ? lastError.message : "unknown error";
+  fastify.log.error(
+    `Analytics enqueue failed after ${CLICK_ENQUEUE_ATTEMPTS} attempts for event ${eventId}: ${message}`,
+  );
+}
 
 const start = async () => {
   try {

@@ -9,6 +9,7 @@ import { Public } from '../auth/public.decorator';
 import { RedisHealthIndicator } from './redis.health';
 import { ConfigService } from '@nestjs/config';
 import { getRedisConfig } from '@lia/core';
+import { getTrackerUrl } from '../tracker-url';
 
 @Controller('health')
 export class HealthController {
@@ -69,9 +70,10 @@ export class HealthController {
     // Tracker Health
     let trackerStatus = 'ERRO';
     try {
-      const trackerUrl =
-        this.configService.get<string>('TRACKER_URL') ||
-        'http://127.0.0.1:3002';
+      const trackerUrl = getTrackerUrl({
+        NODE_ENV: process.env.NODE_ENV,
+        TRACKER_URL: this.configService.get<string>('TRACKER_URL'),
+      });
       const res = await fetch(`${trackerUrl}/health`, {
         signal: AbortSignal.timeout(2000),
       });
