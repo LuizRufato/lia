@@ -131,6 +131,42 @@ describe('AppController (e2e)', () => {
       .expect(401);
   });
 
+  it('keeps brute-force protection on login without throttling the normal panel flow', async () => {
+    const responses = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      responses.push(
+        await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email: 'test@test.com', password: 'wrongpassword' }),
+      );
+    }
+
+    expect(responses.every((response) => response.status === 401)).toBe(true);
+
+    await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: 'test@test.com', password: 'wrongpassword' })
+      .expect(429);
+
+    const adminResponses = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        request(app.getHttpServer()).get('/auth/me'),
+      ),
+    );
+    expect(adminResponses.every((response) => response.status === 401)).toBe(
+      true,
+    );
+
+    const pollingResponses = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        request(app.getHttpServer()).get('/health'),
+      ),
+    );
+    expect(pollingResponses.every((response) => response.status === 200)).toBe(
+      true,
+    );
+  });
+
   afterAll(async () => {
     await app.close();
   });

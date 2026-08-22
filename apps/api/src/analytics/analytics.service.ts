@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { getRedisConfig } from '@lia/core';
 import { PrismaService } from '../prisma.service';
 
 @Injectable()
@@ -11,9 +12,7 @@ export class AnalyticsService {
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {
-    this.redis = new Redis(
-      this.configService.get<string>('REDIS_URL', 'redis://localhost:6379'),
-    );
+    this.redis = new Redis(getRedisConfig().url);
   }
 
   async getRealtimeMetrics(tenantId: string) {

@@ -6,7 +6,11 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Redis } from "ioredis";
 import { Queue } from "bullmq";
 import { randomUUID } from "crypto";
-import { classifyClick, generateVisitorHash } from "@lia/core";
+import {
+  classifyClick,
+  generateVisitorHash,
+  getRedisConfig,
+} from "@lia/core";
 import { UAParser } from "ua-parser-js";
 
 const fastify = Fastify({ logger: true });
@@ -23,8 +27,12 @@ const pool = new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
-const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
-const clicksQueue = new Queue("clicks-queue", { connection: redis });
+const redisConfig = getRedisConfig();
+const redis = new Redis(redisConfig.url);
+const clicksQueue = new Queue("clicks-queue", {
+  connection: redis,
+  prefix: redisConfig.prefix,
+});
 
 const CACHE_TTL_SECONDS = 300; // 5 mins
 const HASH_SECRET =

@@ -11,6 +11,7 @@ import Redis from 'ioredis';
 import { randomBytes } from 'crypto';
 import { Queue } from 'bullmq';
 import { InjectQueue } from '@nestjs/bullmq';
+import { getRedisConfig } from '@lia/core';
 import {
   AutopilotBrain,
   AutopilotMode,
@@ -40,9 +41,7 @@ export class AutopilotSchedulerService
     private readonly configService: ConfigService,
     @InjectQueue('publisher') private readonly publisherQueue: Queue,
   ) {
-    this.redis = new Redis(
-      this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
-    );
+    this.redis = new Redis(getRedisConfig().url);
   }
 
   private redis: Redis;

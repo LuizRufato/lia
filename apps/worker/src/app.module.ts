@@ -21,6 +21,7 @@ import { AutopilotSchedulerService } from './autopilot/scheduler.service';
 import { WhatsAppWebhookProcessor } from './publisher/whatsapp-webhook.processor';
 import { WhatsAppPublisher } from './publisher/whatsapp.publisher';
 import { ShopeeConversionsProcessor } from './shopee/shopee-conversions.processor';
+import { getBullMqRedisConnection } from '@lia/core';
 
 @Module({
   imports: [
@@ -30,7 +31,12 @@ import { ShopeeConversionsProcessor } from './shopee/shopee-conversions.processo
         process.env.NODE_ENV === 'test' ? '../../.env.test' : '../../.env',
       validationSchema: Joi.object({
         DATABASE_URL: Joi.string().required(),
-        REDIS_URL: Joi.string().required(),
+        REDIS_URL: Joi.string()
+          .uri({ scheme: ['redis', 'rediss'] })
+          .optional(),
+        REDIS_HOST: Joi.string().hostname().default('localhost'),
+        REDIS_PORT: Joi.number().port().default(6379),
+        REDIS_PREFIX: Joi.string().default('{lia}'),
       }),
     }),
     ScheduleModule.forRoot(),
@@ -38,10 +44,12 @@ import { ShopeeConversionsProcessor } from './shopee/shopee-conversions.processo
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         prefix: configService.get('REDIS_PREFIX', '{lia}'),
-        connection: {
-          host: configService.get('REDIS_HOST', 'localhost'),
-          port: configService.get('REDIS_PORT', 6379),
-        },
+        connection: getBullMqRedisConnection({
+          REDIS_URL: configService.get<string>('REDIS_URL'),
+          REDIS_HOST: configService.get<string>('REDIS_HOST'),
+          REDIS_PORT: String(configService.get<number>('REDIS_PORT', 6379)),
+          REDIS_PREFIX: configService.get<string>('REDIS_PREFIX', '{lia}'),
+        }),
       }),
       inject: [ConfigService],
     }),

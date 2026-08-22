@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma.service';
 import { Public } from '../auth/public.decorator';
 import { RedisHealthIndicator } from './redis.health';
 import { ConfigService } from '@nestjs/config';
+import { getRedisConfig } from '@lia/core';
 
 @Controller('health')
 export class HealthController {
@@ -25,12 +26,7 @@ export class HealthController {
   check() {
     return this.health.check([
       () => this.prismaHealth.pingCheck('database', this.prisma),
-      () =>
-        this.redisHealth.pingCheck(
-          'redis',
-          this.configService.get<string>('REDIS_URL') ||
-            'redis://localhost:6379',
-        ),
+      () => this.redisHealth.pingCheck('redis', getRedisConfig().url),
     ]);
   }
 
@@ -53,9 +49,7 @@ export class HealthController {
     try {
       // I need to inject ioredis or use the RedisService. Let's just instantiate a temporary connection for the health check.
       const Redis = require('ioredis');
-      const redisClient = new Redis(
-        this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
-      );
+      const redisClient = new Redis(getRedisConfig().url);
 
       const ping = await redisClient.ping();
       redisStatus = ping === 'PONG' ? 'OPERACIONAL' : 'ERRO';

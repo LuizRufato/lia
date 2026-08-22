@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma.service';
 import { PublishClickJobData } from '@lia/core';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { getRedisConfig } from '@lia/core';
 
 @Processor('clicks-queue', {
   concurrency: 5,
@@ -19,9 +20,7 @@ export class ClickProcessor extends WorkerHost {
     private readonly configService: ConfigService,
   ) {
     super();
-    this.redis = new Redis(
-      this.configService.get<string>('REDIS_URL', 'redis://localhost:6379'),
-    );
+    this.redis = new Redis(getRedisConfig().url);
   }
 
   async process(job: Job<PublishClickJobData, any, string>): Promise<any> {

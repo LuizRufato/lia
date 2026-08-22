@@ -55,6 +55,12 @@ describe('IntegrationsController Security', () => {
             add: jest.fn(),
           },
         },
+        {
+          provide: getQueueToken('shopee-conversions-queue'),
+          useValue: {
+            add: jest.fn(),
+          },
+        },
       ],
     }).compile();
 

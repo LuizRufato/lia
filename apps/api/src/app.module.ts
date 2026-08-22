@@ -16,6 +16,8 @@ import { IntegrationsModule } from './integrations/integrations.module';
 import { AutopilotModule } from './autopilot/autopilot.module';
 import { OffersModule } from './offers/offers.module';
 import { ChannelsModule } from './channels/channels.module';
+import { getBullMqRedisConnection } from '@lia/core';
+import { getRateLimitPolicy } from './rate-limit.policy';
 
 @Module({
   imports: [
@@ -28,7 +30,12 @@ import { ChannelsModule } from './channels/channels.module';
         PORT: Joi.number().default(3000),
         JWT_SECRET: Joi.string().min(32).required(),
         DATABASE_URL: Joi.string().required(),
-        REDIS_URL: Joi.string().required(),
+        REDIS_URL: Joi.string()
+          .uri({ scheme: ['redis', 'rediss'] })
+          .optional(),
+        REDIS_HOST: Joi.string().hostname().default('localhost'),
+        REDIS_PORT: Joi.number().port().default(6379),
+        REDIS_PREFIX: Joi.string().default('{lia}'),
         WEB_URL: Joi.string().default('http://localhost:3001'),
       }),
     }),
@@ -40,17 +47,21 @@ import { ChannelsModule } from './channels/channels.module';
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         prefix: configService.get('REDIS_PREFIX', '{lia}'),
-        connection: {
-          host: configService.get('REDIS_HOST', 'localhost'),
-          port: configService.get('REDIS_PORT', 6379),
-        },
+        connection: getBullMqRedisConnection({
+          REDIS_URL: configService.get<string>('REDIS_URL'),
+          REDIS_HOST: configService.get<string>('REDIS_HOST'),
+          REDIS_PORT: String(configService.get<number>('REDIS_PORT', 6379)),
+          REDIS_PREFIX: configService.get<string>('REDIS_PREFIX', '{lia}'),
+        }),
       }),
       inject: [ConfigService],
     }),
     ThrottlerModule.forRoot([
       {
-        ttl: 60000,
-        limit: 10,
+        name: 'default',
+        ttl: (context) => getRateLimitPolicy(context).ttl,
+        limit: (context) => getRateLimitPolicy(context).limit,
+        blockDuration: (context) => getRateLimitPolicy(context).blockDuration,
       },
     ]),
     AdminModule,

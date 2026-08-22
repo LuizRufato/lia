@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { encryptSecret } from '@lia/integrations';
 import { randomBytes, createHash } from 'crypto';
 import Redis from 'ioredis';
+import { getRedisConfig } from '@lia/core';
 
 @Injectable()
 export class MercadoLivreService {
@@ -13,9 +14,7 @@ export class MercadoLivreService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
   ) {
-    this.redis = new Redis(
-      this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
-    );
+    this.redis = new Redis(getRedisConfig().url);
   }
 
   async getIntegration(tenantId: string) {
