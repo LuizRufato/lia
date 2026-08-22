@@ -292,6 +292,7 @@ model OfferObservation {
   category         String?
 
   evaluations OfferEvaluation[]
+  priceHistory PriceHistory?
 
   observedAt DateTime
   createdAt  DateTime @default(now())
@@ -389,14 +390,22 @@ model PublicationDeliveryEvent {
 }
 
 model PriceHistory {
-  id          String   @id @default(uuid())
-  offerId     String
-  offer       Offer    @relation(fields: [offerId], references: [id])
-  priceCents  Int
-  discountBps Int?
-  createdAt   DateTime @default(now())
+  id                String            @id @default(uuid())
+  offerId           String
+  offer             Offer             @relation(fields: [offerId], references: [id])
+  observationId     String?           @unique
+  observation       OfferObservation? @relation(fields: [observationId], references: [id])
+  priceCents        Int
+  originalPriceCents Int?
+  discountBps       Int?
+  commissionCents   Int?
+  salesCount        Int?
+  rating            Float?
+  observedAt        DateTime          @default(now())
+  createdAt         DateTime          @default(now())
 
   @@index([offerId, createdAt])
+  @@index([offerId, observedAt])
 }
 
 model TrackedLink {

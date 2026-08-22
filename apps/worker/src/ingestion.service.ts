@@ -81,8 +81,6 @@ export class IngestionService {
           },
           update: {
             title: canonicalOffer.product.title,
-            price: canonicalOffer.pricing.currentPriceCents,
-            commission: canonicalOffer.commission.estimatedAmountCents ?? null,
             url: canonicalOffer.canonicalUrl,
           },
         });
@@ -119,6 +117,8 @@ export class IngestionService {
         },
         {
           jobId: correlationId, // Ensures idempotency in BullMQ
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 1000 },
           removeOnComplete: true,
         },
       );

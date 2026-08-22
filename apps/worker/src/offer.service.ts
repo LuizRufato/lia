@@ -2,17 +2,22 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 import {
   CanonicalOffer,
-  LiaScoreV1,
   DeduplicationRule,
   FatigueRule,
+  LiaScoreV1,
 } from '@lia/core';
+
+const SCORE_VERSION = 'lia-score-v1';
+const FATIGUE_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 @Injectable()
 export class OfferService {
   private readonly logger = new Logger(OfferService.name);
-  private scorer = new LiaScoreV1();
-  private dedupRule = new DeduplicationRule({ priceDropBpsThreshold: 500 });
-  private fatigueRule = new FatigueRule({
+  private readonly scorer = new LiaScoreV1();
+  private readonly dedupRule = new DeduplicationRule({
+    priceDropBpsThreshold: 500,
+  });
+  private readonly fatigueRule = new FatigueRule({
     maxCategoryPublicationsPerWindow: 3,
   });
 
@@ -23,7 +28,6 @@ export class OfferService {
   async processObservation(observationId: string) {
     this.logger.log(`Processing observation ${observationId}`);
 
-    // 1. Load Observation
     const observation = await this.prisma.offerObservation.findUnique({
       where: { id: observationId },
       include: { offer: true },
@@ -34,155 +38,149 @@ export class OfferService {
       return;
     }
 
-    const payload = observation.canonicalPayload as any;
-    // Assume it is already validated by ingestion, but we can cast it
-    const canonicalOffer = payload as CanonicalOffer;
-
-    // 3. Score
+    const canonicalOffer =
+      observation.canonicalPayload as unknown as CanonicalOffer;
     const breakdown = this.scorer.evaluate(canonicalOffer);
 
-    // 2. Load latest state for Dedup
-    const prevEvalsCount = await this.prisma.offerEvaluation.count({
-      where: { observation: { offerId: observation.offerId } },
-    });
-
-    if (prevEvalsCount > 0) {
-      const lastPriceHistory = await this.prisma.priceHistory.findFirst({
+    const decision = await this.prisma.$transaction(async (tx) => {
+      const previousHistory = await tx.priceHistory.findMany({
         where: { offerId: observation.offerId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ observedAt: 'desc' }, { createdAt: 'desc' }],
+        take: 20,
       });
-      const lastPrice = lastPriceHistory
-        ? lastPriceHistory.priceCents
-        : observation.offer.price;
-
-      const isDup = this.dedupRule.isDuplicate(canonicalOffer, lastPrice);
-      if (isDup) {
-        await this.saveEvaluation(
-          observation,
-          'REJECTED_DUPLICATE',
-          breakdown.finalScore,
-          ['No significant price drop'],
-          breakdown,
-        );
-        return;
-      }
-    }
-
-    if (breakdown.dataCoverage < 0.6) {
-      await this.saveEvaluation(
-        observation,
-        'REJECTED_INSUFFICIENT_DATA',
-        breakdown.finalScore,
-        ['Not enough data signals'],
-        breakdown,
+      const previousSnapshot = previousHistory.find(
+        (snapshot) => snapshot.observationId !== observation.id,
       );
-      return;
-    }
+      const previousPrice = previousSnapshot?.priceCents ?? null;
 
-    if (breakdown.finalScore < 40) {
-      await this.saveEvaluation(
-        observation,
-        'REJECTED_LOW_SCORE',
-        breakdown.finalScore,
-        ['Score below threshold'],
-        breakdown,
-      );
-      return;
-    }
+      const category =
+        canonicalOffer.product.normalizedCategory ||
+        canonicalOffer.product.sourceCategory ||
+        null;
 
-    // 4. Fatigue
-    const cat =
-      canonicalOffer.product.normalizedCategory ||
-      canonicalOffer.product.sourceCategory;
-    let categoryCount = 0;
+      let nextDecision: string = 'ELIGIBLE';
+      let reasons: string[] = ['Offer is eligible for publication'];
 
-    // In V1, count how many publications recently for this tenant/marketplace/category (approximated here)
-    if (cat) {
-      const recent = await this.prisma.publicationCandidate.count({
-        where: {
-          createdAt: { gte: new Date(this.clock() - 12 * 60 * 60 * 1000) }, // 12 hours
-          status: { in: ['PENDING', 'QUEUED'] },
-          evaluation: {
-            observation: {
-              offer: { tenantId: observation.offer.tenantId },
-              category: cat,
+      if (this.dedupRule.isDuplicate(canonicalOffer, previousPrice)) {
+        nextDecision = 'REJECTED_DUPLICATE';
+        reasons = ['No significant price drop'];
+      } else if (breakdown.dataCoverage < 0.6) {
+        nextDecision = 'REJECTED_INSUFFICIENT_DATA';
+        reasons = ['Not enough data signals'];
+      } else if (breakdown.finalScore < 40) {
+        nextDecision = 'REJECTED_LOW_SCORE';
+        reasons = ['Score below threshold'];
+      } else if (category) {
+        const categoryCount = await tx.publication.count({
+          where: {
+            createdAt: {
+              gte: new Date(this.clock() - FATIGUE_WINDOW_MS),
+            },
+            // DELIVERY_UNKNOWN is counted conservatively: the message may
+            // have reached the channel even though confirmation is missing.
+            status: {
+              in: ['PUBLISHED', 'PUBLISHING', 'DELIVERY_UNKNOWN'],
+            },
+            candidate: {
+              evaluation: {
+                observation: {
+                  category,
+                  offer: { tenantId: observation.offer.tenantId },
+                },
+              },
             },
           },
+        });
+
+        if (this.fatigueRule.isFatigued(canonicalOffer, categoryCount)) {
+          nextDecision = 'REJECTED_FATIGUE';
+          reasons = [`Category fatigue reached: ${categoryCount}`];
+        }
+      }
+
+      // Every valid observation gets one immutable-by-observation snapshot,
+      // including duplicate, low-score and fatigue decisions.
+      await tx.priceHistory.upsert({
+        where: { observationId: observation.id },
+        update: {
+          offerId: observation.offerId,
+          priceCents: canonicalOffer.pricing.currentPriceCents,
+          originalPriceCents: canonicalOffer.pricing.originalPriceCents ?? null,
+          discountBps: canonicalOffer.pricing.discountBps ?? null,
+          commissionCents:
+            canonicalOffer.commission.estimatedAmountCents ?? null,
+          salesCount: canonicalOffer.metrics.marketplaceSalesCount ?? null,
+          rating: canonicalOffer.metrics.rating ?? null,
+          observedAt: observation.observedAt,
+        },
+        create: {
+          offerId: observation.offerId,
+          observationId: observation.id,
+          priceCents: canonicalOffer.pricing.currentPriceCents,
+          originalPriceCents: canonicalOffer.pricing.originalPriceCents ?? null,
+          discountBps: canonicalOffer.pricing.discountBps ?? null,
+          commissionCents:
+            canonicalOffer.commission.estimatedAmountCents ?? null,
+          salesCount: canonicalOffer.metrics.marketplaceSalesCount ?? null,
+          rating: canonicalOffer.metrics.rating ?? null,
+          observedAt: observation.observedAt,
         },
       });
-      categoryCount = recent;
-    }
 
-    if (this.fatigueRule.isFatigued(canonicalOffer, categoryCount)) {
-      await this.saveEvaluation(
-        observation,
-        'REJECTED_FATIGUE',
-        breakdown.finalScore,
-        [`Category fatigue reached: ${categoryCount}`],
-        breakdown,
-      );
-      return;
-    }
+      const evaluation = await tx.offerEvaluation.upsert({
+        where: {
+          observationId_scoreVersion: {
+            observationId: observation.id,
+            scoreVersion: SCORE_VERSION,
+          },
+        },
+        update: {
+          score: breakdown.finalScore,
+          decision: nextDecision as any,
+          decisionReasons: reasons,
+          scoreBreakdown: breakdown as any,
+          inputsSnapshot: observation.canonicalPayload as any,
+        },
+        create: {
+          observationId: observation.id,
+          scoreVersion: SCORE_VERSION,
+          score: breakdown.finalScore,
+          decision: nextDecision as any,
+          decisionReasons: reasons,
+          scoreBreakdown: breakdown as any,
+          inputsSnapshot: observation.canonicalPayload as any,
+        },
+      });
 
-    // 5. Eligible!
-    const evaluation = await this.saveEvaluation(
-      observation,
-      'ELIGIBLE',
-      breakdown.finalScore,
-      ['Offer is eligible for publication'],
-      breakdown,
-    );
+      if (nextDecision === 'ELIGIBLE') {
+        await tx.publicationCandidate.upsert({
+          where: { evaluationId: evaluation.id },
+          update: {},
+          create: {
+            evaluationId: evaluation.id,
+            status: 'PENDING',
+          },
+        });
+      }
 
-    // Create PublicationCandidate (PENDING)
-    await this.prisma.publicationCandidate.create({
-      data: {
-        evaluationId: evaluation.id,
-        status: 'PENDING',
-      },
-    });
+      // The offer's consolidated state is updated in the same transaction as
+      // its evaluation and snapshot, so no half-decision can be persisted.
+      await tx.offer.update({
+        where: { id: observation.offerId },
+        data: {
+          title: canonicalOffer.product.title,
+          price: canonicalOffer.pricing.currentPriceCents,
+          commission: canonicalOffer.commission.estimatedAmountCents ?? null,
+          url: canonicalOffer.canonicalUrl,
+        },
+      });
 
-    // Update the Offer with latest data
-    await this.prisma.offer.update({
-      where: { id: observation.offerId },
-      data: {
-        title: canonicalOffer.product.title,
-        price: canonicalOffer.pricing.currentPriceCents,
-        commission: canonicalOffer.commission.estimatedAmountCents ?? 0,
-        url: canonicalOffer.canonicalUrl,
-      },
-    });
-
-    // Save PriceHistory
-    await this.prisma.priceHistory.create({
-      data: {
-        offerId: observation.offerId,
-        priceCents: canonicalOffer.pricing.currentPriceCents,
-        discountBps: canonicalOffer.pricing.discountBps ?? null,
-      },
+      return nextDecision;
     });
 
     this.logger.log(
-      `Offer ${observation.offerId} became ELIGIBLE! Candidate PENDING.`,
+      `Observation ${observation.id} completed with decision ${decision}.`,
     );
-  }
-
-  private async saveEvaluation(
-    observation: any,
-    decision: any,
-    score: number,
-    reasons: string[],
-    breakdown?: any,
-  ) {
-    return this.prisma.offerEvaluation.create({
-      data: {
-        observationId: observation.id,
-        scoreVersion: breakdown?.scoreVersion || 'lia-score-v1',
-        score: score,
-        decision: decision,
-        decisionReasons: reasons,
-        scoreBreakdown: breakdown || {},
-        inputsSnapshot: observation.canonicalPayload,
-      },
-    });
+    return decision;
   }
 }
