@@ -33,7 +33,10 @@ export class ClickProcessor extends WorkerHost {
       classificationReason,
       visitorHash,
       userAgentFamily,
+      operatingSystem,
       deviceType,
+      referrer,
+      intelligenceClass,
     } = job.data;
 
     // 1. Idempotent Database Insert
@@ -45,9 +48,12 @@ export class ClickProcessor extends WorkerHost {
           clickedAt: new Date(clickedAt),
           classification: classification as any, // mapping to enum
           classificationReason,
+          intelligenceClass: intelligenceClass as any,
           visitorHash,
           userAgentFamily,
+          operatingSystem,
           deviceType,
+          referrer,
         },
       });
     } catch (error: any) {

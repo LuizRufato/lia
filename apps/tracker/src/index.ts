@@ -6,7 +6,13 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Redis } from "ioredis";
 import { Queue } from "bullmq";
 import { randomUUID } from "crypto";
-import { classifyClick, generateVisitorHash, getRedisConfig } from "@lia/core";
+import {
+  classifyClick,
+  generateVisitorHash,
+  getRedisConfig,
+  intelligenceClassFor,
+  isPreviewCrawler,
+} from "@lia/core";
 import { UAParser } from "ua-parser-js";
 import {
   CLICK_ENQUEUE_ATTEMPTS,
@@ -15,6 +21,7 @@ import {
   TRUSTED_PROXY_RANGES,
   getClickHashSecret,
 } from "./config";
+import { buildSmartPreviewHtml } from "./preview";
 
 const fastify = Fastify({ logger: true, trustProxy: TRUSTED_PROXY_RANGES });
 
@@ -39,6 +46,15 @@ const clicksQueue = new Queue(CLICK_QUEUE_NAME, {
 
 const CACHE_TTL_SECONDS = 300; // 5 mins
 const HASH_SECRET = getClickHashSecret(process.env);
+
+function safeReferrer(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
 
 fastify.register(cors, { origin: "*" });
 
@@ -123,14 +139,50 @@ fastify.get("/:slug", async (request, reply) => {
     return reply.status(410).send("Gone - Link expired");
   }
 
-  // 4. Analytics Data Prep
+  // Preview crawlers receive real Open Graph metadata but never create a
+  // ClickEvent. Human browsers retain the fast 302 path below.
   const userAgent = request.headers["user-agent"] as string | undefined;
+  if (isPreviewCrawler(userAgent)) {
+    const preview = await prisma.trackedLink.findUnique({
+      where: { slug },
+      select: {
+        destinationUrl: true,
+        offer: {
+          select: {
+            title: true,
+            price: true,
+            product: { select: { name: true, description: true } },
+            priceHistories: {
+              orderBy: { observedAt: "desc" },
+              take: 1,
+              select: { originalPriceCents: true },
+            },
+          },
+        },
+      },
+    });
+    const offer = preview?.offer;
+    return reply
+      .type("text/html; charset=utf-8")
+      .send(
+        buildSmartPreviewHtml(slug, {
+          title: offer?.title || offer?.product?.name || "Oferta LIA",
+          description: offer?.product?.description,
+          destinationUrl: preview?.destinationUrl || linkData.destinationUrl,
+          priceCents: offer?.price,
+          originalPriceCents: offer?.priceHistories[0]?.originalPriceCents,
+        }),
+      );
+  }
+
+  // 4. Analytics Data Prep
   const ip = request.ip; // Fastify automatically gets it if trustProxy is set
 
   const eventId = randomUUID();
   const clickedAt = new Date().toISOString();
 
   const { classification, reason } = classifyClick(userAgent);
+  const intelligenceClass = intelligenceClassFor(classification);
   const visitorHash = generateVisitorHash(
     userAgent,
     ip,
@@ -146,6 +198,13 @@ fastify.get("/:slug", async (request, reply) => {
     userAgentFamily = parser.getBrowser().name || null;
     deviceType = parser.getDevice().type || "desktop";
   }
+  const operatingSystem = userAgent
+    ? new UAParser(userAgent).getOS().name || null
+    : null;
+  const referrer = safeReferrer(
+    (request.headers.referer as string | undefined) ||
+      (request.headers.origin as string | undefined),
+  );
 
   // 5. Fast Enqueue (bounded background retry)
   const clickJobData = {
@@ -157,7 +216,10 @@ fastify.get("/:slug", async (request, reply) => {
     classificationReason: reason,
     visitorHash,
     userAgentFamily,
+    operatingSystem,
     deviceType,
+    referrer,
+    intelligenceClass,
   };
 
   void enqueueClickWithRetry(eventId, clickJobData);

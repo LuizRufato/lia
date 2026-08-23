@@ -17,3 +17,10 @@
 ## DEC-003: Uso Direto de Links do Mercado Livre (Sem Redirect 302)
 - **Decisão:** Diferente da Shopee, onde utilizamos o encurtador próprio (LIA Tracker) com redirecionamento 302, a LIA publicará DIRETAMENTE os links gerados pela Central de Afiliados do Mercado Livre, utilizando as Etiquetas nativas da plataforma para rastrear Channel/Tenant.
 - **Motivo:** Compliance com a Diretriz de Afiliados do ML, que proíbe o redirecionamento automático de domínios terceiros para o mercadolivre.com.br.
+
+## DEC-004: Tracker Preview e Analytics em Polling Curto
+- **Decisão:** Crawlers de preview recebem HTML com metadados Open Graph reais e não geram `ClickEvent`. Navegadores humanos mantêm o caminho rápido de `302` e enfileiram o evento.
+- **Decisão:** O painel de Analytics usa polling autenticado de 3 segundos no endpoint `/analytics/realtime`, em vez de SSE nesta fase.
+- **Motivo:** O Tracker permanece rápido e isolado, sem conexão persistente ou carga adicional de PostgreSQL. Redis fornece apenas buckets transitórios; PostgreSQL segue como fonte da verdade.
+- **Unique click:** `trackedLink + HMAC(visitor data + dia UTC)` representa um visitante único por dia. Nenhum IP bruto é persistido.
+- **Extensão futura:** `ClickEvent` poderá receber `projectId`/`templateId` em migration aditiva quando Projects for iniciado.

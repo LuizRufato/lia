@@ -1,6 +1,6 @@
 # Estado atual do Projeto LIA
 
-Última atualização: 2026-08-22
+Última atualização: 2026-08-23
 
 ## Funcionando (Fase 0 Concluída)
 * Estrutura de pastas do monorepo criada.
@@ -24,6 +24,13 @@
 
 ## Problemas conhecidos
 * Build local do Web pode falhar sem acesso à Google Fonts; o código não foi alterado para contornar isso nesta fase.
+
+## Estado atual — Tracker Intelligence / Analytics (P0.5)
+* `/analytics` consome `/analytics/realtime` com polling autenticado de 3 segundos.
+* Cliques válidos, únicos por link/visitante-HMAC/dia UTC, produtos, timeline e atividade recente são exibidos sem IP bruto.
+* Crawlers de preview recebem Open Graph real e não geram `ClickEvent`; navegadores humanos mantêm o redirect 302 e o enfileiramento assíncrono.
+* Migration aditiva `20260823100000_tracker_click_intelligence` adiciona classificação de inteligência, sistema operacional e referrer normalizado.
+* O E2E real anterior permanece como única publicação/mensagem real; nenhum novo clique ou envio foi gerado nesta fase.
 
 ## Fases do Projeto
 
@@ -67,9 +74,14 @@
   - ✅ Sincronização de grupos com opt-in explícito e marcação stale
   - ✅ Governor antes do Publisher com limites, janela, cooldown, circuit breaker e kill switch
   - ✅ Política conservadora sem `messageId` inventado (`DELIVERY_UNKNOWN`)
+- [x] **Fase P0.5**: Tracker Intelligence + Real-time Analytics + Smart Link Preview
+  - ✅ Painel Analytics conectado a métricas reais com atualização curta
+  - ✅ Classificação explícita de humano, bot, crawler de preview e automação suspeita
+  - ✅ Preview OG real sem contabilização de clique
+  - ✅ Enriquecimento assíncrono e migration aditiva; sem projetos nesta fase
 
 ## Próximos Passos
-- Fase 7B.2: Geração oficial do ShortLink (Tracking) da Shopee para monetização e habilitar publicação.
+- Extensão futura de Projects/templates, quando priorizada pelo usuário.
 
 ## Integrações
 Shopee: Conexão estrutural completa e homologada. (Aguardando usuário testar no navegador)

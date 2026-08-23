@@ -468,6 +468,13 @@ enum ClickClassification {
   SUSPECTED_BOT
 }
 
+enum ClickIntelligenceClass {
+  HUMAN
+  BOT
+  PREVIEW_CRAWLER
+  SUSPECTED_AUTOMATION
+}
+
 model ClickEvent {
   id                   String              @id @default(uuid())
   eventId              String              @unique
@@ -476,12 +483,16 @@ model ClickEvent {
   clickedAt            DateTime            @default(now())
   classification       ClickClassification @default(VALID)
   classificationReason String?
+  intelligenceClass    ClickIntelligenceClass?
   visitorHash          String?
   userAgentFamily      String?
+  operatingSystem      String?
   deviceType           String?
+  referrer             String?
 
   @@index([linkId, clickedAt])
   @@index([classification, clickedAt])
+  @@index([intelligenceClass, clickedAt])
 }
 
 enum AutopilotMode {

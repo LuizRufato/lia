@@ -52,18 +52,21 @@ export class AnalyticsService {
             classification: 'VALID',
           },
         }),
-        // For unique clicks we can count distinct visitorHash for today
+        // A unique click is scoped to tracked link + visitor HMAC + UTC day.
+        // The raw IP is never stored or exposed.
         this.prisma.clickEvent
-          .groupBy({
-            by: ['visitorHash'],
+          .findMany({
             where: {
               link: { offer: { tenantId } },
               clickedAt: { gte: startOfDay },
               classification: 'VALID',
               visitorHash: { not: null },
             },
+            select: { linkId: true, visitorHash: true },
           })
-          .then((r) => r.length),
+          .then((rows) =>
+            new Set(rows.map((row) => `${row.linkId}:${row.visitorHash}`)).size,
+          ),
         this.prisma.clickEvent.count({
           where: {
             link: { offer: { tenantId } },
@@ -79,12 +82,77 @@ export class AnalyticsService {
         }),
       ]);
 
+    const recentEvents = await this.prisma.clickEvent.findMany({
+      where: {
+        link: { offer: { tenantId } },
+        clickedAt: { gte: startOfDay },
+      },
+      orderBy: { clickedAt: "desc" },
+      take: 500,
+      select: {
+        clickedAt: true,
+        classification: true,
+        intelligenceClass: true,
+        deviceType: true,
+        userAgentFamily: true,
+        link: {
+          select: {
+            offer: {
+              select: {
+                title: true,
+                product: { select: { name: true } },
+                marketplace: { select: { type: true } },
+              },
+            },
+            publication: {
+              select: { channel: { select: { displayName: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    const validEvents = recentEvents.filter(
+      (event) => event.classification === "VALID",
+    );
+    const productCounts = new Map<string, number>();
+    for (const event of validEvents) {
+      const name = event.link.offer.title || event.link.offer.product?.name || "Oferta";
+      productCounts.set(name, (productCounts.get(name) || 0) + 1);
+    }
+
+    const topProducts = [...productCounts.entries()]
+      .map(([name, clicks]) => ({ name, clicks }))
+      .sort((a, b) => b.clicks - a.clicks)
+      .slice(0, 5);
+
+    const timeline = Array.from({ length: 12 }, (_, index) => {
+      const end = new Date(now.getTime() - index * 5 * 60_000);
+      const start = new Date(end.getTime() - 5 * 60_000);
+      const clicks = validEvents.filter(
+        (event) => event.clickedAt >= start && event.clickedAt < end,
+      ).length;
+      return { at: start.toISOString(), clicks };
+    }).reverse();
+
+    const recentClicks = validEvents.slice(0, 20).map((event) => ({
+      at: event.clickedAt.toISOString(),
+      device: event.deviceType || "unknown",
+      browser: event.userAgentFamily || "unknown",
+      channel: event.link.publication.channel.displayName,
+      marketplace: event.link.offer.marketplace.type,
+      product: event.link.offer.title || event.link.offer.product?.name || "Oferta",
+    }));
+
     return {
       clicksToday,
       clicksNow,
       uniqueClicks,
       botsExcluded,
       publishedOffers,
+      topProducts,
+      timeline,
+      recentClicks,
     };
   }
 

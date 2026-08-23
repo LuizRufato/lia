@@ -13,5 +13,12 @@ export interface PublishClickJobData {
   classificationReason?: string;
   visitorHash?: string | null;
   userAgentFamily?: string | null;
+  operatingSystem?: string | null;
   deviceType?: string | null;
+  referrer?: string | null;
+  intelligenceClass?:
+    | "HUMAN"
+    | "BOT"
+    | "PREVIEW_CRAWLER"
+    | "SUSPECTED_AUTOMATION";
 }
