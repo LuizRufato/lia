@@ -23,6 +23,7 @@ model Tenant {
   offers                  Offer[]
   channels                Channel[]
   channelIntegrations     ChannelIntegration[]
+  whatsappSafetyConfig    WhatsAppSafetyConfig?
   marketplaceIntegrations MarketplaceIntegration[]
   affiliateLinks          AffiliateLink[]
 
@@ -78,6 +79,13 @@ model Channel {
   displayName    String
   visibility     ChannelVisibility @default(PRIVATE)
   enabled        Boolean           @default(true)
+  safetyMaxPerHour       Int       @default(10)
+  safetyMaxPerDay        Int       @default(50)
+  safetyMinIntervalSeconds Int     @default(60)
+  safetyWindowStartMinute Int?
+  safetyWindowEndMinute   Int?
+  lastSeenAt              DateTime?
+  staleAt                 DateTime?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
@@ -410,6 +418,32 @@ model PriceHistory {
 
   @@index([offerId, createdAt])
   @@index([offerId, observedAt])
+}
+
+enum WhatsAppCircuitState {
+  CLOSED
+  OPEN
+}
+
+model WhatsAppSafetyConfig {
+  id                         String              @id @default(uuid())
+  tenantId                   String              @unique
+  tenant                     Tenant              @relation(fields: [tenantId], references: [id])
+  enabled                    Boolean             @default(true)
+  killSwitch                 Boolean             @default(false)
+  minIntervalSeconds         Int                 @default(60)
+  maxPerHour                 Int                 @default(20)
+  maxPerDay                  Int                 @default(100)
+  quietStartMinute           Int?
+  quietEndMinute             Int?
+  reconnectionCooldownSeconds Int                @default(90)
+  minQualityScore            Float               @default(0)
+  maxObservationAgeMinutes   Int                 @default(1440)
+  circuitState               WhatsAppCircuitState @default(CLOSED)
+  consecutiveErrors          Int                 @default(0)
+  circuitOpenedAt            DateTime?
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
 }
 
 model TrackedLink {

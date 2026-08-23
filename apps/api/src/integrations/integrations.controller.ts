@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Body,
   Req,
@@ -102,9 +103,25 @@ export class IntegrationsController {
   // --- WHATSAPP EVOLUTION API (WEB UNOFFICIAL) ---
 
   @Post('whatsapp/evolution/connect')
-  async connectWhatsAppEvolution(@Req() req: any) {
+  async connectWhatsAppEvolution(
+    @Req() req: any,
+    @Body() body: { phoneNumber?: string },
+  ) {
     const tenantId = req.user.tenantId;
-    return this.integrationsService.connectWhatsAppEvolution(tenantId);
+    return this.integrationsService.connectWhatsAppEvolution(
+      tenantId,
+      body?.phoneNumber,
+    );
+  }
+
+  @Get('whatsapp/safety')
+  async getWhatsAppSafety(@Req() req: any) {
+    return this.integrationsService.getWhatsAppSafety(req.user.tenantId);
+  }
+
+  @Patch('whatsapp/safety')
+  async updateWhatsAppSafety(@Req() req: any, @Body() body: Record<string, unknown>) {
+    return this.integrationsService.updateWhatsAppSafety(req.user.tenantId, body);
   }
 
   @Get('whatsapp/evolution/groups')

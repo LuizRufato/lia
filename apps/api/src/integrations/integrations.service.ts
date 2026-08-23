@@ -291,11 +291,14 @@ export class IntegrationsService {
       return { status: 'NOT_CONNECTED' };
     }
 
-    // --- RECONCILIAÇÃO EVOLUTION API ---
+    // Reconcile every Evolution state read; CONNECTED in Postgres is not
+    // considered authoritative after a provider restart or logout.
     if (
       integration.transport === 'WEB_UNOFFICIAL' &&
-      integration.status === 'CONNECTING' &&
-      integration.externalInstanceName
+      integration.externalInstanceName &&
+      integration.encryptedAccessToken &&
+      integration.tokenIv &&
+      integration.tokenAuthTag
     ) {
       try {
         const provider = new WhatsAppEvolutionProvider();
@@ -311,7 +314,6 @@ export class IntegrationsService {
           instanceToken,
         );
         if (state === 'open') {
-          // Atualiza banco para CONNECTED
           const updated = await this.prisma.channelIntegration.update({
             where: { id: integration.id },
             data: {
@@ -322,11 +324,28 @@ export class IntegrationsService {
           integration.status = updated.status;
           integration.connectedAt = updated.connectedAt;
         } else if (state === 'close' || state === 'DISCONNECTED') {
-          // Mantém CONNECTING se ainda estiver tentando, ou limpa
-          // Por precaução vamos apenas retornar o state
+          const updated = await this.prisma.channelIntegration.update({
+            where: { id: integration.id },
+            data: { status: 'NEEDS_REAUTH', lastErrorCode: 'EVOLUTION_DISCONNECTED' },
+          });
+          integration.status = updated.status;
+          integration.lastErrorCode = updated.lastErrorCode;
+        } else if (state === 'UNAUTHORIZED') {
+          const updated = await this.prisma.channelIntegration.update({
+            where: { id: integration.id },
+            data: { status: 'NEEDS_REAUTH', lastErrorCode: 'EVOLUTION_UNAUTHORIZED' },
+          });
+          integration.status = updated.status;
+          integration.lastErrorCode = updated.lastErrorCode;
         }
       } catch (e) {
         console.error('Error reconciling Evolution API status:', e);
+        await this.prisma.channelIntegration.update({
+          where: { id: integration.id },
+          data: { status: 'ERROR', lastErrorCode: 'EVOLUTION_HEALTH_CHECK_FAILED' },
+        });
+        integration.status = 'ERROR';
+        integration.lastErrorCode = 'EVOLUTION_HEALTH_CHECK_FAILED';
       }
     }
 
@@ -348,6 +367,35 @@ export class IntegrationsService {
   ) {
     const masterKey = getEncryptionKey();
 
+    const existing = await this.prisma.channelIntegration.findUnique({
+      where: { tenantId_provider: { tenantId, provider: 'WHATSAPP' } },
+    });
+    if (existing?.transport === 'WEB_UNOFFICIAL') {
+      if (
+        !existing.externalInstanceName ||
+        !existing.encryptedAccessToken ||
+        !existing.tokenIv ||
+        !existing.tokenAuthTag
+      ) {
+        throw new BadRequestException('A sessão Evolution existente precisa ser reautenticada antes de trocar o transporte.');
+      }
+      const oldToken = decryptSecret(
+        existing.encryptedAccessToken,
+        existing.tokenIv,
+        existing.tokenAuthTag,
+        masterKey,
+      );
+      const removed = await new WhatsAppEvolutionProvider().disconnectInstance(
+        existing.externalInstanceName,
+        oldToken,
+      );
+      if (!removed) {
+        throw new BadRequestException(
+          'A sessão Evolution ativa precisa ser invalidada antes de ativar Cloud.',
+        );
+      }
+    }
+
     const { encryptedSecret, iv, authTag } = encryptSecret(
       accessToken,
       masterKey,
@@ -358,6 +406,7 @@ export class IntegrationsService {
         tenantId_provider: { tenantId, provider: 'WHATSAPP' },
       },
       update: {
+        transport: 'CLOUD_OFFICIAL',
         wabaId,
         phoneNumberId,
         encryptedAccessToken: encryptedSecret,
@@ -385,6 +434,35 @@ export class IntegrationsService {
   }
 
   async disconnectWhatsApp(tenantId: string) {
+    const integration = await this.prisma.channelIntegration.findUnique({
+      where: { tenantId_provider: { tenantId, provider: 'WHATSAPP' } },
+    });
+    if (!integration) return { success: true };
+
+    if (integration.transport === 'WEB_UNOFFICIAL') {
+      if (
+        !integration.externalInstanceName ||
+        !integration.encryptedAccessToken ||
+        !integration.tokenIv ||
+        !integration.tokenAuthTag
+      ) {
+        throw new BadRequestException('Evolution session credentials are incomplete; remote logout was not confirmed.');
+      }
+      const token = decryptSecret(
+        integration.encryptedAccessToken,
+        integration.tokenIv,
+        integration.tokenAuthTag,
+        getEncryptionKey(),
+      );
+      const remoteDisconnected = await new WhatsAppEvolutionProvider().disconnectInstance(
+        integration.externalInstanceName,
+        token,
+      );
+      if (!remoteDisconnected) {
+        throw new BadRequestException('Evolution remote session could not be invalidated.');
+      }
+    }
+
     await this.prisma.channelIntegration.delete({
       where: {
         tenantId_provider: { tenantId, provider: 'WHATSAPP' },
@@ -452,18 +530,43 @@ export class IntegrationsService {
 
   // --- WHATSAPP EVOLUTION API (WEB UNOFFICIAL) ---
 
-  async connectWhatsAppEvolution(tenantId: string) {
+  async connectWhatsAppEvolution(tenantId: string, phoneNumber?: string) {
     const provider = new WhatsAppEvolutionProvider();
+    const existing = await this.prisma.channelIntegration.findUnique({
+      where: { tenantId_provider: { tenantId, provider: 'WHATSAPP' } },
+    });
+    const externalInstanceName = existing?.externalInstanceName || `lia-${tenantId.substring(0, 8)}`;
+    let knownToken: string | undefined;
+    if (
+      existing?.encryptedAccessToken &&
+      existing.tokenIv &&
+      existing.tokenAuthTag
+    ) {
+      knownToken = decryptSecret(
+        existing.encryptedAccessToken,
+        existing.tokenIv,
+        existing.tokenAuthTag,
+        getEncryptionKey(),
+      );
+    }
 
-    // Generate a unique instance name for this tenant
-    const externalInstanceName = `lia-${tenantId.substring(0, 8)}-${Date.now()}`;
-
-    // Create/Fetch in Evolution API
-    const response = await provider.connectInstance(externalInstanceName);
+    // Reuse a healthy/connecting instance. A stale instance is invalidated by
+    // the provider before a replacement is created, avoiding orphan sessions.
+    const response = await provider.connectInstance(
+      externalInstanceName,
+      phoneNumber,
+      knownToken,
+    );
 
     const masterKey = getEncryptionKey();
+    const instanceToken = response.externalInstanceToken || knownToken;
+    if (!instanceToken) {
+      throw new BadRequestException(
+        'Evolution retornou uma instância existente sem token recuperável; reautenticação necessária.',
+      );
+    }
     const { encryptedSecret, iv, authTag } = encryptSecret(
-      response.externalInstanceToken,
+      instanceToken,
       masterKey,
     );
 
@@ -477,8 +580,8 @@ export class IntegrationsService {
         encryptedAccessToken: encryptedSecret,
         tokenIv: iv,
         tokenAuthTag: authTag,
-        status: 'CONNECTING',
-        connectedAt: null,
+        status: response.state === 'open' ? 'CONNECTED' : 'CONNECTING',
+        connectedAt: response.state === 'open' ? new Date() : null,
       },
       create: {
         tenantId,
@@ -488,13 +591,16 @@ export class IntegrationsService {
         encryptedAccessToken: encryptedSecret,
         tokenIv: iv,
         tokenAuthTag: authTag,
-        status: 'CONNECTING',
+        status: response.state === 'open' ? 'CONNECTED' : 'CONNECTING',
       },
     });
 
     return {
       success: true,
       qrcodeBase64: response.qrcodeBase64,
+      pairingCode: response.pairingCode,
+      reused: response.reused,
+      state: response.state,
     };
   }
 
@@ -531,7 +637,12 @@ export class IntegrationsService {
     if (state !== 'open') {
       await this.prisma.channelIntegration.update({
         where: { id: integration.id },
-        data: { status: 'NOT_CONNECTED' },
+        data: {
+          status: state === 'UNAUTHORIZED' || state === 'DISCONNECTED' || state === 'close'
+            ? 'NEEDS_REAUTH'
+            : 'CONNECTING',
+          lastErrorCode: state === 'UNAUTHORIZED' ? 'EVOLUTION_UNAUTHORIZED' : null,
+        },
       });
       throw new BadRequestException(
         `Evolution API is not connected. State: ${state}`,
@@ -564,6 +675,8 @@ export class IntegrationsService {
         },
         update: {
           displayName: group.subject,
+          lastSeenAt: new Date(),
+          staleAt: null,
         },
         create: {
           tenantId,
@@ -571,12 +684,99 @@ export class IntegrationsService {
           externalChatId: group.id,
           displayName: group.subject,
           enabled: false, // Explicit opt-in required
+          lastSeenAt: new Date(),
         },
       });
       results.push({ ...channel, participants: group.participants });
     }
 
+    // Groups no longer returned by Evolution are stale and disabled. Existing
+    // enabled groups remain enabled only while they continue to be observed.
+    await this.prisma.channel.updateMany({
+      where: {
+        tenantId,
+        provider: 'WHATSAPP',
+        ...(groups.length ? { externalChatId: { notIn: groups.map((group) => group.id) } } : {}),
+      },
+      data: { enabled: false, staleAt: new Date() },
+    });
+
     return { success: true, groups: results };
+  }
+
+  async getWhatsAppSafety(tenantId: string) {
+    return this.prisma.whatsAppSafetyConfig.findUnique({
+      where: { tenantId },
+      select: {
+        enabled: true,
+        killSwitch: true,
+        minIntervalSeconds: true,
+        maxPerHour: true,
+        maxPerDay: true,
+        quietStartMinute: true,
+        quietEndMinute: true,
+        reconnectionCooldownSeconds: true,
+        minQualityScore: true,
+        maxObservationAgeMinutes: true,
+        circuitState: true,
+        consecutiveErrors: true,
+        circuitOpenedAt: true,
+      },
+    });
+  }
+
+  async updateWhatsAppSafety(tenantId: string, body: Record<string, unknown>) {
+    const intValue = (value: unknown, fallback: number, min: number, max: number) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : fallback;
+    };
+    const floatValue = (value: unknown, fallback: number, min: number, max: number) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+    };
+    return this.prisma.whatsAppSafetyConfig.upsert({
+      where: { tenantId },
+      update: {
+        ...(typeof body.enabled === 'boolean' ? { enabled: body.enabled } : {}),
+        ...(typeof body.killSwitch === 'boolean' ? { killSwitch: body.killSwitch } : {}),
+        minIntervalSeconds: intValue(body.minIntervalSeconds, 60, 1, 86_400),
+        maxPerHour: intValue(body.maxPerHour, 20, 1, 1_000),
+        maxPerDay: intValue(body.maxPerDay, 100, 1, 10_000),
+        reconnectionCooldownSeconds: intValue(body.reconnectionCooldownSeconds, 90, 0, 86_400),
+        minQualityScore: floatValue(body.minQualityScore, 0, 0, 1),
+        maxObservationAgeMinutes: intValue(body.maxObservationAgeMinutes, 1440, 1, 30 * 24 * 60),
+        quietStartMinute: body.quietStartMinute == null ? null : intValue(body.quietStartMinute, 0, 0, 1439),
+        quietEndMinute: body.quietEndMinute == null ? null : intValue(body.quietEndMinute, 1439, 0, 1439),
+      },
+      create: {
+        tenantId,
+        enabled: typeof body.enabled === 'boolean' ? body.enabled : true,
+        killSwitch: typeof body.killSwitch === 'boolean' ? body.killSwitch : false,
+        minIntervalSeconds: intValue(body.minIntervalSeconds, 60, 1, 86_400),
+        maxPerHour: intValue(body.maxPerHour, 20, 1, 1_000),
+        maxPerDay: intValue(body.maxPerDay, 100, 1, 10_000),
+        reconnectionCooldownSeconds: intValue(body.reconnectionCooldownSeconds, 90, 0, 86_400),
+        minQualityScore: floatValue(body.minQualityScore, 0, 0, 1),
+        maxObservationAgeMinutes: intValue(body.maxObservationAgeMinutes, 1440, 1, 30 * 24 * 60),
+        quietStartMinute: body.quietStartMinute == null ? null : intValue(body.quietStartMinute, 0, 0, 1439),
+        quietEndMinute: body.quietEndMinute == null ? null : intValue(body.quietEndMinute, 1439, 0, 1439),
+      },
+      select: {
+        enabled: true,
+        killSwitch: true,
+        minIntervalSeconds: true,
+        maxPerHour: true,
+        maxPerDay: true,
+        quietStartMinute: true,
+        quietEndMinute: true,
+        reconnectionCooldownSeconds: true,
+        minQualityScore: true,
+        maxObservationAgeMinutes: true,
+        circuitState: true,
+        consecutiveErrors: true,
+        circuitOpenedAt: true,
+      },
+    });
   }
 
   private async verifyShopeeCredentials(appId: string, appSecret: string) {
@@ -645,6 +845,14 @@ export class IntegrationsService {
       channel.externalChatId,
       '✅ *Teste da LIA*\n\nConexão com o WhatsApp confirmada. Nenhuma oferta ou link foi publicado.',
     );
+
+    if (!messageId) {
+      return {
+        success: false,
+        status: 'DELIVERY_UNKNOWN',
+        channel: channel.displayName,
+      };
+    }
 
     return {
       success: true,

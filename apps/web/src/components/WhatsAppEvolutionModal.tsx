@@ -17,6 +17,8 @@ export function WhatsAppEvolutionModal({
 }: WhatsAppEvolutionModalProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [qrCode, setQrCode] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [pairingCode, setPairingCode] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [status, setStatus] = useState<"IDLE" | "CONNECTED">("IDLE");
 
@@ -26,6 +28,7 @@ export function WhatsAppEvolutionModal({
     try {
       const res = await fetchAuth("/integrations/whatsapp/evolution/connect", {
         method: "POST",
+        body: JSON.stringify(phoneNumber ? { phoneNumber } : {}),
       });
 
       if (!res.ok) {
@@ -36,6 +39,7 @@ export function WhatsAppEvolutionModal({
       }
 
       const data = await res.json();
+      if (data.pairingCode) setPairingCode(data.pairingCode);
       if (data.qrcodeBase64) {
         setQrCode(data.qrcodeBase64);
       } else {
@@ -90,6 +94,7 @@ export function WhatsAppEvolutionModal({
   useEffect(() => {
     if (isOpen) {
       setQrCode("");
+      setPairingCode("");
       setErrorMsg("");
       setStatus("IDLE");
     }
@@ -157,9 +162,21 @@ export function WhatsAppEvolutionModal({
               >
                 Já escaneei (Verificar Status)
               </button>
+              {pairingCode && (
+                <p className="rounded-lg bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+                  Código de pareamento: {pairingCode}
+                </p>
+              )}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center py-8">
+            <div className="flex flex-col items-center justify-center py-8 space-y-4">
+              <input
+                value={phoneNumber}
+                onChange={(event) => setPhoneNumber(event.target.value)}
+                placeholder="Número com DDI (opcional para pairing code)"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                inputMode="tel"
+              />
               <button
                 onClick={handleConnect}
                 disabled={isConnecting}
@@ -168,8 +185,15 @@ export function WhatsAppEvolutionModal({
                 {isConnecting && <Loader2 className="w-5 h-5 animate-spin" />}
                 {isConnecting
                   ? "Gerando QR Code..."
-                  : "Gerar QR Code de Conexão"}
+                  : phoneNumber
+                    ? "Gerar código de pareamento"
+                    : "Gerar QR Code de Conexão"}
               </button>
+              {pairingCode && (
+                <p className="rounded-lg bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">
+                  Código de pareamento: {pairingCode}
+                </p>
+              )}
             </div>
           )}
         </div>

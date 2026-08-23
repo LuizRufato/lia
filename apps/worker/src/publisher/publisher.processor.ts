@@ -6,6 +6,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { randomBytes } from 'crypto';
 import { PublishCandidateJobData } from '@lia/core';
 import { WhatsAppPublisher } from './whatsapp.publisher';
+import { WhatsAppSafetyGovernor } from './whatsapp-safety-governor';
 
 @Processor('publisher', {
   concurrency: 1, // To avoid telegram rate limits and race conditions
@@ -18,6 +19,7 @@ export class PublisherProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly telegramService: TelegramService,
     private readonly whatsappPublisher: WhatsAppPublisher,
+    private readonly whatsappSafetyGovernor: WhatsAppSafetyGovernor,
   ) {
     super();
   }
@@ -127,13 +129,14 @@ export class PublisherProcessor extends WorkerHost {
     if (result.failed) {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
-        data: result.reason === 'REJECTED_MONETIZATION'
-          ? {
-              status: 'DEFERRED',
-              deferredReason: result.reason,
-              retryAt: new Date(Date.now() + 15 * 60_000),
-            }
-          : { status: 'FAILED', deferredReason: result.reason || null },
+        data:
+          result.reason === 'REJECTED_MONETIZATION' || result.reason === 'SAFETY_GOVERNOR'
+            ? {
+                status: 'DEFERRED',
+                deferredReason: result.deferredReason || result.reason,
+                retryAt: result.retryAt || new Date(Date.now() + 15 * 60_000),
+              }
+            : { status: 'FAILED', deferredReason: result.reason || null },
       });
     } else if (result.published) {
       await this.prisma.publicationCandidate.update({
@@ -169,7 +172,32 @@ export class PublisherProcessor extends WorkerHost {
       };
     }
 
-    // 2.5 Ensure Verified Affiliate Link for this specific channel
+    // 2.5 Every WhatsApp send must pass the Safety Governor immediately before
+    // any affiliate/tracker side effect is created.
+    if (channel.provider === 'WHATSAPP') {
+      const whatsappIntegration = channel.tenant.channelIntegrations.find(
+        (integration: any) => integration.provider === 'WHATSAPP',
+      );
+      const safety = await this.whatsappSafetyGovernor.evaluate({
+        tenantId: offer.tenantId,
+        channelId: channel.id,
+        channel,
+        integration: whatsappIntegration,
+        offer,
+        observedAt: candidate.evaluation.observation.observedAt,
+        score: candidate.evaluation.score ? Number(candidate.evaluation.score) : 0,
+      });
+      if (!safety.allowed) {
+        return {
+          failed: true,
+          reason: 'SAFETY_GOVERNOR',
+          deferredReason: safety.reason,
+          retryAt: safety.retryAt,
+        };
+      }
+    }
+
+    // 2.6 Ensure Verified Affiliate Link for this specific channel
     let affiliateUrl: string;
     try {
       affiliateUrl = await this.ensureVerifiedAffiliateLink(offer, channel);
@@ -335,9 +363,16 @@ export class PublisherProcessor extends WorkerHost {
         },
       });
 
+      if (channel.provider === 'WHATSAPP') {
+        await this.whatsappSafetyGovernor.recordSuccess(channel.tenantId);
+      }
+
       return { success: true, published: true, messageId };
     } catch (error: any) {
       // 7. Error Handling
+      if (channel.provider === 'WHATSAPP') {
+        await this.whatsappSafetyGovernor.recordFailure(channel.tenantId);
+      }
       const isRateLimit = error.status === 429;
       const isNetworkTimeout =
         error.code === 'ECONNABORTED' || (error.request && !error.response);
@@ -355,7 +390,11 @@ export class PublisherProcessor extends WorkerHost {
         // Use BullMQ delay
         await job.moveToDelayed(Date.now() + retryAfter * 1000, job.token!);
         throw new DelayedError();
-      } else if (isNetworkTimeout || error.message?.includes('Ambíguo')) {
+      } else if (
+        isNetworkTimeout ||
+        error.message?.includes('Ambíguo') ||
+        error.message?.toLowerCase().includes('ambiguous')
+      ) {
         // Delivery Unknown - NEVER retry automatically to avoid duplicate spam
         await this.prisma.publication.update({
           where: { id: publication.id },

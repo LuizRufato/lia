@@ -23,6 +23,8 @@ import { WhatsAppPublisher } from './publisher/whatsapp.publisher';
 import { ShopeeConversionsProcessor } from './shopee/shopee-conversions.processor';
 import { ShopeeConversionsSchedulerService } from './shopee/shopee-conversions.scheduler';
 import { getBullMqRedisConnection } from '@lia/core';
+import { EvolutionReconciliationService } from './whatsapp/evolution-reconciliation.service';
+import { WhatsAppSafetyGovernor } from './publisher/whatsapp-safety-governor';
 
 @Module({
   imports: [
@@ -100,6 +102,8 @@ import { getBullMqRedisConnection } from '@lia/core';
     WhatsAppPublisher,
     ShopeeConversionsProcessor,
     ShopeeConversionsSchedulerService,
+    EvolutionReconciliationService,
+    WhatsAppSafetyGovernor,
   ],
 })
 export class AppModule {}

@@ -27,7 +27,7 @@ export class WhatsAppPublisher {
     title: string,
     priceCents: number,
     discountBps: number | null,
-  ): Promise<string> {
+  ): Promise<string | null> {
     // 1. Load Channel Integration and Configuration
     const channel = await this.prisma.channel.findUnique({
       where: { id: channelId },

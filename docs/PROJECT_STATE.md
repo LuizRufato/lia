@@ -61,6 +61,12 @@
   - ✅ Conexão oficial GraphQL Shopee (productOfferV2) com HMAC SHA256.
   - ✅ Sincronização em Lote orquestrada via BullMQ (`shopee.processor.ts`).
   - ✅ Apresentação visual da extração na rota `/offers`.
+- [x] **Fase 7C**: Evolution Lifecycle + WhatsApp Safety Governor
+  - ✅ Reutilização segura de instância, invalidação remota de sessão stale e pairing code opcional
+  - ✅ Reconciliação periódica de saúde e estados `CONNECTED`/`NEEDS_REAUTH`/`ERROR`
+  - ✅ Sincronização de grupos com opt-in explícito e marcação stale
+  - ✅ Governor antes do Publisher com limites, janela, cooldown, circuit breaker e kill switch
+  - ✅ Política conservadora sem `messageId` inventado (`DELIVERY_UNKNOWN`)
 
 ## Próximos Passos
 - Fase 7B.2: Geração oficial do ShortLink (Tracking) da Shopee para monetização e habilitar publicação.
@@ -69,7 +75,7 @@
 Shopee: Conexão estrutural completa e homologada. (Aguardando usuário testar no navegador)
 Mercado Livre: Não conectada (E2E pendente)
 Telegram: Congelado
-WhatsApp: Conexão estrutural completa
+WhatsApp: Evolution lifecycle, grupos e Safety Governor implementados; envio real permanece controlado e não foi executado nesta fase.
 
 ## Últimos testes
 * `docker compose config` validado.
