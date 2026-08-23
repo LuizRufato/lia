@@ -8,6 +8,7 @@ import { Queue } from "bullmq";
 import { randomUUID } from "crypto";
 import {
   classifyClick,
+  firstHttpsImageUrl,
   generateVisitorHash,
   getRedisConfig,
   intelligenceClassFor,
@@ -150,8 +151,14 @@ fastify.get("/:slug", async (request, reply) => {
         offer: {
           select: {
             title: true,
+            imageUrl: true,
             price: true,
             product: { select: { name: true, description: true } },
+            observations: {
+              orderBy: { observedAt: "desc" },
+              take: 1,
+              select: { canonicalPayload: true },
+            },
             priceHistories: {
               orderBy: { observedAt: "desc" },
               take: 1,
@@ -162,6 +169,8 @@ fastify.get("/:slug", async (request, reply) => {
       },
     });
     const offer = preview?.offer;
+    const canonicalImage = (offer?.observations[0]?.canonicalPayload as any)?.product?.images;
+    const imageUrl = offer?.imageUrl || firstHttpsImageUrl(canonicalImage);
     return reply
       .type("text/html; charset=utf-8")
       .send(
@@ -171,6 +180,7 @@ fastify.get("/:slug", async (request, reply) => {
           destinationUrl: preview?.destinationUrl || linkData.destinationUrl,
           priceCents: offer?.price,
           originalPriceCents: offer?.priceHistories[0]?.originalPriceCents,
+          imageUrl,
         }),
       );
   }

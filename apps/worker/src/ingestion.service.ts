@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { CanonicalOfferSchema, CanonicalOffer } from '@lia/core';
+import { CanonicalOfferSchema, CanonicalOffer, firstHttpsImageUrl } from '@lia/core';
 
 export interface IngestionPayload {
   correlationId: string;
@@ -62,6 +62,7 @@ export class IngestionService {
         const marketplaceId = marketplace.id;
 
         // Upsert Offer
+        const imageUrl = firstHttpsImageUrl(canonicalOffer.product.images);
         const offer = await tx.offer.upsert({
           where: {
             tenantId_marketplaceId_externalId: {
@@ -78,10 +79,12 @@ export class IngestionService {
             price: canonicalOffer.pricing.currentPriceCents,
             commission: canonicalOffer.commission.estimatedAmountCents ?? null,
             url: canonicalOffer.canonicalUrl,
+            imageUrl,
           },
           update: {
             title: canonicalOffer.product.title,
             url: canonicalOffer.canonicalUrl,
+            ...(imageUrl ? { imageUrl } : {}),
           },
         });
 

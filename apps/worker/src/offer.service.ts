@@ -4,6 +4,7 @@ import {
   CanonicalOffer,
   DeduplicationRule,
   FatigueRule,
+  firstHttpsImageUrl,
   LiaScoreV1,
 } from '@lia/core';
 
@@ -165,6 +166,7 @@ export class OfferService {
 
       // The offer's consolidated state is updated in the same transaction as
       // its evaluation and snapshot, so no half-decision can be persisted.
+      const imageUrl = firstHttpsImageUrl(canonicalOffer.product.images);
       await tx.offer.update({
         where: { id: observation.offerId },
         data: {
@@ -172,6 +174,7 @@ export class OfferService {
           price: canonicalOffer.pricing.currentPriceCents,
           commission: canonicalOffer.commission.estimatedAmountCents ?? null,
           url: canonicalOffer.canonicalUrl,
+          ...(imageUrl ? { imageUrl } : {}),
         },
       });
 

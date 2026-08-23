@@ -103,4 +103,16 @@ describe("ShopeeAdapter", () => {
     expect(offer.metrics.rating).toBeUndefined();
     expect(offer.metrics.marketplaceSalesCount).toBeUndefined();
   });
+
+  it("preserves the real Shopee image URL in the canonical offer", () => {
+    const offer = ShopeeAdapter.toCanonicalOffer({
+      itemId: 1,
+      productName: "Test",
+      imageUrl: "https://cf.shopee.com.br/file/real-image.jpg",
+    } as ShopeeProductOfferItemV2);
+
+    expect(offer.product.images).toEqual([
+      "https://cf.shopee.com.br/file/real-image.jpg",
+    ]);
+  });
 });

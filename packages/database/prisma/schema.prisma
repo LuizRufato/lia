@@ -244,6 +244,7 @@ model Offer {
   price      Int
   commission Int?
   url        String
+  imageUrl   String?
 
   status         OfferStatus     @default(ACTIVE)
   links          TrackedLink[]

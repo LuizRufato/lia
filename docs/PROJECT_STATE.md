@@ -32,6 +32,12 @@
 * Migration aditiva `20260823100000_tracker_click_intelligence` adiciona classificação de inteligência, sistema operacional e referrer normalizado.
 * O E2E real anterior permanece como única publicação/mensagem real; nenhum novo clique ou envio foi gerado nesta fase.
 
+## Estado atual — Smart Link Preview com imagem (P0.6)
+* `Offer.imageUrl` persiste somente uma URL HTTPS real fornecida pelo marketplace.
+* Migration aditiva `20260823120000_offer_image_url` faz backfill seguro a partir das observações já existentes, sem buscar URLs externamente.
+* O Tracker emite `og:image`/`twitter:image` apenas para URLs HTTPS válidas; preview crawlers continuam sem `ClickEvent`.
+* Nenhum clique artificial, envio WhatsApp ou mudança no Analytics realtime/Autopilot foi feito nesta fase.
+
 ## Fases do Projeto
 
 - [x] **Fase 0**: Configuração Inicial (Linter, Prettier, Prisma, Docker)
@@ -79,6 +85,10 @@
   - ✅ Classificação explícita de humano, bot, crawler de preview e automação suspeita
   - ✅ Preview OG real sem contabilização de clique
   - ✅ Enriquecimento assíncrono e migration aditiva; sem projetos nesta fase
+- [x] **Fase P0.6**: Smart Link Preview com imagem real
+  - ✅ Imagem HTTPS persistida no Offer com backfill aditivo
+  - ✅ `og:image` e `twitter:image` somente quando o dado real existe
+  - ✅ Protocolos inseguros rejeitados sem proxy ou placeholder
 
 ## Próximos Passos
 - Extensão futura de Projects/templates, quando priorizada pelo usuário.

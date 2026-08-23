@@ -6,6 +6,7 @@ import {
   decryptSecret,
   getEncryptionKey,
 } from '@lia/integrations';
+import { firstHttpsImageUrl } from '@lia/core';
 import * as crypto from 'crypto';
 
 @Injectable()
@@ -78,7 +79,10 @@ export class OffersService {
           : null,
         monetizationStatus: offer.monetization?.status || 'NOT_VERIFIED',
         decision: latestEvaluation?.decision || 'PENDING',
-        imageUrl: canonicalPayload.product?.images?.[0] || null,
+        imageUrl:
+          offer.imageUrl ||
+          firstHttpsImageUrl(canonicalPayload.product?.images) ||
+          null,
         url: offer.url,
       };
     });

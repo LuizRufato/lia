@@ -24,3 +24,8 @@
 - **Motivo:** O Tracker permanece rápido e isolado, sem conexão persistente ou carga adicional de PostgreSQL. Redis fornece apenas buckets transitórios; PostgreSQL segue como fonte da verdade.
 - **Unique click:** `trackedLink + HMAC(visitor data + dia UTC)` representa um visitante único por dia. Nenhum IP bruto é persistido.
 - **Extensão futura:** `ClickEvent` poderá receber `projectId`/`templateId` em migration aditiva quando Projects for iniciado.
+
+## DEC-005: Imagem Real no Smart Link Preview
+- **Decisão:** Persistir somente a primeira imagem HTTPS real de `CanonicalOffer.product.images` em `Offer.imageUrl`, com migration aditiva e backfill limitado ao `OfferObservation.canonicalPayload` já armazenado.
+- **Segurança:** URLs `http`, `javascript`, `data`, `file` e inválidas são tratadas como ausência de imagem. Nenhuma imagem é buscada externamente ou proxied pelo Tracker.
+- **Preview:** `og:image` e `twitter:image` só são emitidos quando a URL persistida/fallback passa pela validação HTTPS; sem imagem, o preview continua textual.

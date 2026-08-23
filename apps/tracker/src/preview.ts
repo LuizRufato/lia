@@ -4,6 +4,7 @@ export interface SmartPreviewOffer {
   destinationUrl: string;
   priceCents?: number | null;
   originalPriceCents?: number | null;
+  imageUrl?: string | null;
 }
 
 function escapeHtml(value: string): string {
@@ -22,6 +23,16 @@ function formatPrice(cents: number): string {
   }).format(cents / 100);
 }
 
+export function safeHttpsImageUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function buildSmartPreviewHtml(slug: string, offer: SmartPreviewOffer): string {
   const title = offer.title.trim() || "Oferta LIA";
   const hasOriginalPrice =
@@ -37,12 +48,19 @@ export function buildSmartPreviewHtml(slug: string, offer: SmartPreviewOffer): s
     .filter(Boolean)
     .join(" • ") || "Confira esta oferta selecionada pela LIA.";
   const url = `https://go.botlia.com.br/${encodeURIComponent(slug)}`;
+  const imageUrl = safeHttpsImageUrl(offer.imageUrl);
   const meta = [
     `<meta property="og:title" content="${escapeHtml(title)}" />`,
     `<meta property="og:description" content="${escapeHtml(description)}" />`,
     `<meta property="og:url" content="${escapeHtml(url)}" />`,
     `<meta property="og:type" content="website" />`,
-    `<meta name="twitter:card" content="summary" />`,
+    ...(imageUrl
+      ? [
+          `<meta property="og:image" content="${escapeHtml(imageUrl)}" />`,
+          `<meta name="twitter:image" content="${escapeHtml(imageUrl)}" />`,
+        ]
+      : []),
+    `<meta name="twitter:card" content="${imageUrl ? "summary_large_image" : "summary"}" />`,
   ].join("\n    ");
 
   return `<!doctype html>

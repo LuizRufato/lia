@@ -54,6 +54,23 @@ export const CanonicalOfferSchema = z.object({
 
 export type CanonicalOffer = z.infer<typeof CanonicalOfferSchema>;
 
+/** Return the first real HTTPS image URL, or null when the source is absent or unsafe. */
+export function firstHttpsImageUrl(images: unknown): string | null {
+  if (!Array.isArray(images)) return null;
+
+  for (const candidate of images) {
+    if (typeof candidate !== "string") continue;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === "https:") return parsed.toString();
+    } catch {
+      // Invalid image URLs are treated as absent data.
+    }
+  }
+
+  return null;
+}
+
 export function validateCanonicalOffer(data: unknown): CanonicalOffer {
   return CanonicalOfferSchema.parse(data);
 }
