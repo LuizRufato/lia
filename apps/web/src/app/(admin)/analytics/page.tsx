@@ -30,10 +30,16 @@ type AnalyticsData = {
   clicksNow: number;
   uniqueClicks: number;
   botsExcluded: number;
-  publishedOffers: number;
+  sales: number;
   topProducts: Array<{ name: string; clicks: number }>;
   timeline: Array<{ at: string; clicks: number }>;
   recentClicks: RecentClick[];
+};
+
+type AnalyticsOverview = {
+  today?: {
+    sales?: number;
+  };
 };
 
 const EMPTY: AnalyticsData = {
@@ -41,7 +47,7 @@ const EMPTY: AnalyticsData = {
   clicksNow: 0,
   uniqueClicks: 0,
   botsExcluded: 0,
-  publishedOffers: 0,
+  sales: 0,
   topProducts: [],
   timeline: [],
   recentClicks: [],
@@ -64,11 +70,22 @@ export default function AnalyticsPage() {
     let mounted = true;
     const load = async () => {
       try {
-        const response = await fetchAuth("/analytics/realtime");
-        if (!response.ok) throw new Error("analytics unavailable");
-        const next = (await response.json()) as Partial<AnalyticsData>;
+        const [realtimeResponse, overviewResponse] = await Promise.all([
+          fetchAuth("/analytics/realtime"),
+          fetchAuth("/analytics/overview"),
+        ]);
+        if (!realtimeResponse.ok || !overviewResponse.ok) {
+          throw new Error("analytics unavailable");
+        }
+        const next = (await realtimeResponse.json()) as Partial<AnalyticsData>;
+        const overview = (await overviewResponse.json()) as AnalyticsOverview;
         if (mounted) {
-          setData({ ...EMPTY, ...next });
+          setData({
+            ...EMPTY,
+            ...next,
+            // Sales are confirmed MarketplaceConversion records only.
+            sales: overview.today?.sales ?? 0,
+          });
           setError(false);
         }
       } catch {
@@ -100,7 +117,7 @@ export default function AnalyticsPage() {
       icon: Target,
       tooltip: "Cliques humanos válidos; crawlers ficam fora desta métrica.",
     },
-    { name: "Vendas", value: data.publishedOffers, icon: TrendingUp },
+    { name: "Vendas", value: data.sales, icon: TrendingUp },
   ];
 
   return (
