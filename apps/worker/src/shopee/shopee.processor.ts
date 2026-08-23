@@ -92,22 +92,31 @@ export class ShopeeProcessor extends WorkerHost {
     const client = new ShopeeAffiliateClient(appId, appSecret);
 
     try {
-      // 3. Sync Logic (Limit 20, sortType 5 = COMMISSION_DESC)
-      const response = await client.getProductOfferV2(1, 20, 5);
-
-      const items = response.data?.productOfferV2?.nodes || [];
-
-      // 4. Transform and Ingest
+      // 3. Sync all available pages (sortType 5 = COMMISSION_DESC). A single
+      // page is not enough to re-observe the real catalog and would leave old
+      // offers with stale score components.
       let processed = 0;
-      for (const item of items) {
-        const canonical = ShopeeAdapter.toCanonicalOffer(item);
-        await this.ingestionService.processIncomingOffer({
-          correlationId: `shopee-${tenantId}-${canonical.externalOfferId}-${syncRunId}`,
-          schemaVersion: '1.0',
-          tenantId,
-          data: canonical,
-        });
-        processed++;
+      let page = 1;
+      let hasNextPage = true;
+      const maxPages = 50;
+      while (hasNextPage && page <= maxPages) {
+        const response = await client.getProductOfferV2(page, 20, 5);
+        const productOffer = response.data?.productOfferV2;
+        const items = productOffer?.nodes || [];
+
+        for (const item of items) {
+          const canonical = ShopeeAdapter.toCanonicalOffer(item);
+          await this.ingestionService.processIncomingOffer({
+            correlationId: `shopee-${tenantId}-${canonical.externalOfferId}-${syncRunId}`,
+            schemaVersion: '1.0',
+            tenantId,
+            data: canonical,
+          });
+          processed++;
+        }
+
+        hasNextPage = productOffer?.pageInfo?.hasNextPage === true;
+        page++;
       }
 
       // 5. Update Status

@@ -29,6 +29,18 @@ export class ShopeeAdapter {
       .mul(10000)
       .toNumber();
 
+    // These are real signals returned by Shopee's product-offer API.  Keep
+    // invalid or missing values absent instead of manufacturing a fallback:
+    // the score engine will then apply its normal data-coverage rules.
+    const rating =
+      Number.isFinite(item.ratingStar) && item.ratingStar >= 0 && item.ratingStar <= 5
+        ? item.ratingStar
+        : undefined;
+    const marketplaceSalesCount =
+      Number.isFinite(item.sales) && Number.isInteger(item.sales) && item.sales >= 0
+        ? item.sales
+        : undefined;
+
     return {
       externalOfferId: item.itemId.toString(),
       externalProductId: item.itemId.toString(),
@@ -60,7 +72,10 @@ export class ShopeeAdapter {
       },
       canonicalUrl: item.productLink,
       shipping: {},
-      metrics: {},
+      metrics: {
+        ...(rating === undefined ? {} : { rating }),
+        ...(marketplaceSalesCount === undefined ? {} : { marketplaceSalesCount }),
+      },
       discoveredAt: new Date(),
       rawObservation: {
         priceMax: priceMaxCents,

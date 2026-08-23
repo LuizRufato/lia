@@ -1,5 +1,6 @@
-import { Controller, Get, Post, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards, Request, Body } from '@nestjs/common';
 import { AutopilotService } from './autopilot.service';
+import type { OneShotRequest } from './autopilot.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('autopilot')
@@ -23,5 +24,23 @@ export class AutopilotController {
   async saveConfig(@Request() req: any) {
     const tenantId = req.user.tenantId;
     return this.autopilotService.saveConfig(tenantId, req.body);
+  }
+
+  @Post('one-shot/preflight')
+  async preflightOneShot(@Request() req: any, @Body() body: OneShotRequest) {
+    return this.autopilotService.preflightOneShot(
+      req.user.tenantId,
+      req.user.role,
+      body,
+    );
+  }
+
+  @Post('one-shot')
+  async executeOneShot(@Request() req: any, @Body() body: OneShotRequest) {
+    return this.autopilotService.executeOneShot(
+      req.user.tenantId,
+      req.user.role,
+      body,
+    );
   }
 }

@@ -25,6 +25,10 @@ export class PublisherProcessor extends WorkerHost {
   }
 
   async process(job: Job<PublishCandidateJobData, any, string>): Promise<any> {
+    if (job.name === 'controlled-one-shot') {
+      return this.processControlledOneShot(job as Job<any, any, string>);
+    }
+
     const { candidateId, channelId } = job.data;
 
     if (!channelId) {
@@ -77,6 +81,7 @@ export class PublisherProcessor extends WorkerHost {
         enabled: true,
         provider: { in: ['TELEGRAM', 'WHATSAPP'] },
       },
+      include: { tenant: { include: { channelIntegrations: true } } },
     });
     const isConfigured = Boolean(
       config &&
@@ -146,6 +151,171 @@ export class PublisherProcessor extends WorkerHost {
     }
 
     return { results: [result] };
+  }
+
+  /**
+   * Execute one explicitly selected candidate/channel. This path is never
+   * selected by the scheduler and does not require AUTO, but it repeats the
+   * safety checks before entering the same real Publisher pipeline.
+   */
+  private async processControlledOneShot(job: Job<any, any, string>) {
+    const { tenantId, candidateId, channelId, confirmation } = job.data || {};
+    if (
+      confirmation !== 'CONTROLLED_ONE_SHOT_REAL' ||
+      typeof tenantId !== 'string' ||
+      typeof candidateId !== 'string' ||
+      typeof channelId !== 'string'
+    ) {
+      throw new UnrecoverableError('Invalid controlled one-shot request.');
+    }
+
+    const candidate = await this.prisma.publicationCandidate.findUnique({
+      where: { id: candidateId },
+      include: {
+        evaluation: {
+          include: {
+            observation: {
+              include: {
+                offer: {
+                  include: {
+                    monetization: true,
+                    marketplace: true,
+                    priceHistories: {
+                      orderBy: { createdAt: 'desc' },
+                      take: 1,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!candidate || candidate.evaluation.observation.offer.tenantId !== tenantId) {
+      throw new UnrecoverableError('Controlled one-shot candidate not found.');
+    }
+
+    const offer = candidate.evaluation.observation.offer;
+    const config = await this.prisma.autopilotConfig.findUnique({
+      where: { tenantId },
+      include: { enabledMarketplaces: true },
+    });
+    const marketplaceIntegration = await this.prisma.marketplaceIntegration.findUnique({
+      where: {
+        tenantId_provider: {
+          tenantId,
+          provider: offer.marketplace.type,
+        },
+      },
+      select: { status: true },
+    });
+    const channel = await this.prisma.channel.findFirst({
+      where: {
+        id: channelId,
+        tenantId,
+        provider: { in: ['TELEGRAM', 'WHATSAPP'] },
+      },
+      include: { tenant: { include: { channelIntegrations: true } } },
+    });
+
+    const blocker =
+      !config
+        ? 'AUTOPILOT_CONFIG_NOT_FOUND'
+        : candidate.status !== 'PENDING' && candidate.status !== 'DEFERRED'
+          ? 'CANDIDATE_NOT_PENDING'
+          : candidate.evaluation.decision !== 'ELIGIBLE'
+            ? 'EVALUATION_NOT_ELIGIBLE'
+            : offer.status !== 'ACTIVE'
+              ? 'OFFER_NOT_ACTIVE'
+              : (candidate.evaluation.score?.toNumber() ?? 0) < config.minScore.toNumber()
+                ? 'SCORE_BELOW_MINIMUM'
+                : !config.enabledMarketplaces.some(
+                      (item) => item.marketplaceId === offer.marketplaceId,
+                    )
+                  ? 'MARKETPLACE_NOT_ENABLED'
+                  : marketplaceIntegration?.status !== 'CONNECTED'
+                    ? 'MARKETPLACE_INTEGRATION_UNHEALTHY'
+                : !offer.monetization ||
+                    offer.monetization.status !== 'VERIFIED' ||
+                    !offer.monetization.destinationUrl?.startsWith('https://')
+                  ? 'MONETIZATION_NOT_VERIFIED'
+                    : !channel
+                      ? 'CHANNEL_NOT_FOUND'
+                      : !channel.enabled
+                        ? 'CHANNEL_DISABLED'
+                        : channel.provider !== 'WHATSAPP'
+                          ? 'CHANNEL_PROVIDER_UNSUPPORTED'
+                          : undefined;
+    if (blocker) return { blocked: true, reason: blocker };
+
+    const claimed = await this.prisma.publicationCandidate.updateMany({
+      where: { id: candidateId, status: { in: ['PENDING', 'DEFERRED'] } },
+      data: { status: 'PUBLISHING', deferredReason: null, retryAt: null },
+    });
+    if (!claimed.count) {
+      return { skipped: true, reason: 'CANDIDATE_ALREADY_CLAIMED' };
+    }
+
+    let result: any;
+    try {
+      result = await this.processChannel(job, candidate, offer, channel);
+    } catch (error: any) {
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidateId },
+        data: { status: 'FAILED', deferredReason: error.message },
+      });
+      throw error;
+    }
+
+    if (result.failed) {
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidateId },
+        data:
+          result.reason === 'REJECTED_MONETIZATION' || result.reason === 'SAFETY_GOVERNOR'
+            ? {
+                status: 'DEFERRED',
+                deferredReason: result.deferredReason || result.reason,
+                retryAt: result.retryAt || new Date(Date.now() + 15 * 60_000),
+              }
+            : { status: 'FAILED', deferredReason: result.reason || null },
+      });
+    } else if (result.published) {
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidateId },
+        data: { status: 'PUBLISHED' },
+      });
+    }
+
+    const publication = await this.prisma.publication.findUnique({
+      where: { candidateId_channelId: { candidateId, channelId } },
+      select: { id: true, status: true },
+    });
+    await this.prisma.autopilotAudit.create({
+      data: {
+        tenantId,
+        candidateId,
+        evaluationId: candidate.evaluation.id,
+        channelId,
+        decision: result.published
+          ? 'APPROVED'
+          : result.reason === 'DELIVERY_UNKNOWN'
+            ? 'DELIVERY_UNKNOWN'
+            : 'SKIPPED_PERMANENT_POLICY',
+        liaScore: candidate.evaluation.score || 0,
+        details: {
+          executionMode: 'CONTROLLED_ONE_SHOT_REAL',
+          candidateId,
+          offerId: offer.id,
+          channelId,
+          tenantId,
+          publicationId: publication?.id || null,
+          publicationStatus: publication?.status || null,
+        },
+      },
+    });
+
+    return { results: [result], publicationId: publication?.id || null };
   }
 
   private async processChannel(

@@ -77,4 +77,30 @@ describe("ShopeeAdapter", () => {
     expect(offer.pricing.currentPriceCents).toBe(0);
     expect(offer.commission.estimatedAmountCents).toBe(0);
   });
+
+  it("maps real Shopee rating and sales metrics without inventing fields", () => {
+    const offer = ShopeeAdapter.toCanonicalOffer({
+      itemId: 1,
+      productName: "Test",
+      ratingStar: 4.8,
+      sales: 1500,
+    } as ShopeeProductOfferItemV2);
+
+    expect(offer.metrics.rating).toBe(4.8);
+    expect(offer.metrics.marketplaceSalesCount).toBe(1500);
+    expect(offer.metrics.reviewsCount).toBeUndefined();
+    expect(offer.shipping.isFree).toBeUndefined();
+  });
+
+  it("does not persist invalid rating or sales as score metrics", () => {
+    const offer = ShopeeAdapter.toCanonicalOffer({
+      itemId: 1,
+      productName: "Test",
+      ratingStar: 6,
+      sales: -1,
+    } as ShopeeProductOfferItemV2);
+
+    expect(offer.metrics.rating).toBeUndefined();
+    expect(offer.metrics.marketplaceSalesCount).toBeUndefined();
+  });
 });
