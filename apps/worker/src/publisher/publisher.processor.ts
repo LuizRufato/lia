@@ -186,6 +186,9 @@ export class PublisherProcessor extends WorkerHost {
         offer,
         observedAt: candidate.evaluation.observation.observedAt,
         score: candidate.evaluation.score ? Number(candidate.evaluation.score) : 0,
+        category: candidate.evaluation.observation.category,
+        sellerId:
+          (candidate.evaluation.observation.canonicalPayload as any)?.seller?.externalId || null,
       });
       if (!safety.allowed) {
         return {

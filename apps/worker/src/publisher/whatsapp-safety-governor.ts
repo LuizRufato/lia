@@ -9,6 +9,8 @@ export interface WhatsAppGovernorInput {
   offer: any;
   observedAt?: Date;
   score?: number | null;
+  category?: string | null;
+  sellerId?: string | null;
   now?: Date;
 }
 
@@ -19,6 +21,15 @@ export interface WhatsAppGovernorDecision {
 }
 
 const minuteOfDay = (date: Date) => date.getHours() * 60 + date.getMinutes();
+// Reuse the existing FatigueRule policy: three real publications in 12h.
+// DELIVERY_UNKNOWN is included conservatively because delivery may have happened.
+const SATURATION_WINDOW_MS = 12 * 60 * 60 * 1000;
+const SATURATION_LIMIT = 3;
+const REAL_PUBLICATION_STATUSES: Array<'PUBLISHED' | 'PUBLISHING' | 'DELIVERY_UNKNOWN'> = [
+  'PUBLISHED',
+  'PUBLISHING',
+  'DELIVERY_UNKNOWN',
+];
 
 /** Database-backed, conservative gate immediately before a WhatsApp send. */
 @Injectable()
@@ -116,10 +127,18 @@ export class WhatsAppSafetyGovernor {
     const dayAgo = new Date(now.getTime() - 24 * 60 * 60_000);
     const [hourCount, dayCount, lastPublication] = await Promise.all([
       this.prisma.publication.count({
-        where: { channelId: input.channelId, status: 'PUBLISHED', publishedAt: { gte: hourAgo } },
+        where: {
+          channelId: input.channelId,
+          status: { in: REAL_PUBLICATION_STATUSES },
+          createdAt: { gte: hourAgo },
+        },
       }),
       this.prisma.publication.count({
-        where: { channelId: input.channelId, status: 'PUBLISHED', publishedAt: { gte: dayAgo } },
+        where: {
+          channelId: input.channelId,
+          status: { in: REAL_PUBLICATION_STATUSES },
+          createdAt: { gte: dayAgo },
+        },
       }),
       this.prisma.publication.findFirst({
         where: { channelId: input.channelId, status: 'PUBLISHED' },
@@ -127,8 +146,60 @@ export class WhatsAppSafetyGovernor {
         select: { publishedAt: true },
       }),
     ]);
+    const tenantCounts = await Promise.all([
+      this.prisma.publication.count({
+        where: {
+          channel: { tenantId: input.tenantId },
+          status: { in: REAL_PUBLICATION_STATUSES },
+          createdAt: { gte: hourAgo },
+        },
+      }),
+      this.prisma.publication.count({
+        where: {
+          channel: { tenantId: input.tenantId },
+          status: { in: REAL_PUBLICATION_STATUSES },
+          createdAt: { gte: dayAgo },
+        },
+      }),
+    ]);
+    const saturationSince = new Date(now.getTime() - SATURATION_WINDOW_MS);
+    const categoryCount = input.category
+      ? await this.prisma.publication.count({
+          where: {
+            channelId: input.channelId,
+            status: { in: REAL_PUBLICATION_STATUSES },
+            createdAt: { gte: saturationSince },
+            candidate: { evaluation: { observation: { category: input.category } } },
+          },
+        })
+      : 0;
+    const sellerCount = input.sellerId
+      ? await this.prisma.publication.count({
+          where: {
+            channelId: input.channelId,
+            status: { in: REAL_PUBLICATION_STATUSES },
+            createdAt: { gte: saturationSince },
+            candidate: {
+              evaluation: {
+                observation: {
+                  canonicalPayload: {
+                    path: ['seller', 'externalId'],
+                    equals: input.sellerId,
+                  },
+                },
+              },
+            },
+          } as any,
+        })
+      : 0;
     const channelHourly = input.channel.safetyMaxPerHour ?? 10;
     const channelDaily = input.channel.safetyMaxPerDay ?? 50;
+    if (tenantCounts[0] >= maxPerHour) {
+      return { allowed: false, reason: 'WHATSAPP_TENANT_HOURLY_LIMIT', retryAt: new Date(now.getTime() + 60 * 60_000) };
+    }
+    if (tenantCounts[1] >= maxPerDay) {
+      return { allowed: false, reason: 'WHATSAPP_TENANT_DAILY_LIMIT', retryAt: new Date(now.getTime() + 24 * 60 * 60_000) };
+    }
     if (hourCount >= Math.min(maxPerHour, channelHourly)) {
       return { allowed: false, reason: 'WHATSAPP_HOURLY_LIMIT', retryAt: new Date(now.getTime() + 60 * 60_000) };
     }
@@ -141,6 +212,12 @@ export class WhatsAppSafetyGovernor {
         reason: 'WHATSAPP_MIN_INTERVAL',
         retryAt: new Date(lastPublication.publishedAt.getTime() + minIntervalSeconds * 1000),
       };
+    }
+    if (categoryCount >= SATURATION_LIMIT) {
+      return { allowed: false, reason: 'WHATSAPP_CATEGORY_SATURATION', retryAt: new Date(saturationSince.getTime() + SATURATION_WINDOW_MS) };
+    }
+    if (sellerCount >= SATURATION_LIMIT) {
+      return { allowed: false, reason: 'WHATSAPP_SELLER_SATURATION', retryAt: new Date(saturationSince.getTime() + SATURATION_WINDOW_MS) };
     }
 
     return { allowed: true };

@@ -62,4 +62,24 @@ describe('WhatsAppEvolutionProvider lifecycle safety', () => {
       new WhatsAppEvolutionProvider().sendGroupMessage('lia-tenant', 'key', 'group@g.us', 'test'),
     ).resolves.toBeNull();
   });
+
+  it('normalizes the current Evolution group response shape', async () => {
+    api.get.mockResolvedValueOnce({
+      data: {
+        groups: [
+          { id: '123@g.us', subject: 'Ofertas', participants: [{ id: 'a' }, { id: 'b' }] },
+          { jid: '456@g.us', name: 'Sem assunto', size: 4 },
+        ],
+      },
+    });
+    await expect(new WhatsAppEvolutionProvider().fetchGroups('lia-tenant', 'instance-key'))
+      .resolves.toEqual([
+        { id: '123@g.us', subject: 'Ofertas', participants: 2 },
+        { id: '456@g.us', subject: 'Sem assunto', participants: 4 },
+      ]);
+    expect(api.get).toHaveBeenCalledWith(
+      '/group/fetchAllGroups/lia-tenant?getParticipants=true',
+      { headers: { apikey: 'instance-key' } },
+    );
+  });
 });

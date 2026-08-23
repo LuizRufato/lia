@@ -34,9 +34,12 @@ describe('WhatsAppSafetyGovernor', () => {
       upsert: jest.fn(),
     },
     publication: {
-      count: jest.fn()
-        .mockResolvedValueOnce(counts[0])
-        .mockResolvedValueOnce(counts[1]),
+      count: (() => {
+        const mock = jest.fn();
+        counts.forEach((value) => mock.mockResolvedValueOnce(value));
+        mock.mockResolvedValue(0);
+        return mock;
+      })(),
       findFirst: jest.fn().mockResolvedValue(counts[2]),
     },
   });
@@ -105,6 +108,50 @@ describe('WhatsAppSafetyGovernor', () => {
     await governor.recordFailure('tenant-1');
     expect(prisma.whatsAppSafetyConfig.upsert).toHaveBeenCalledWith(expect.objectContaining({
       update: expect.objectContaining({ circuitState: 'OPEN', consecutiveErrors: 3 }),
+    }));
+  });
+
+  it('blocks category saturation using real publication rows', async () => {
+    const prisma = makePrisma(null, [0, 0, 0, 0, 3, 0]);
+    const governor = new WhatsAppSafetyGovernor(prisma as any);
+    await expect(governor.evaluate({
+      ...baseInput(),
+      category: 'Electronics',
+    })).resolves.toMatchObject({
+      allowed: false,
+      reason: 'WHATSAPP_CATEGORY_SATURATION',
+    });
+    expect(prisma.publication.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        status: { in: ['PUBLISHED', 'PUBLISHING', 'DELIVERY_UNKNOWN'] },
+        candidate: { evaluation: { observation: { category: 'Electronics' } } },
+      }),
+    }));
+  });
+
+  it('blocks seller saturation only when a reliable seller id exists', async () => {
+    const prisma = makePrisma(null, [0, 0, 0, 0, 3]);
+    const governor = new WhatsAppSafetyGovernor(prisma as any);
+    await expect(governor.evaluate({
+      ...baseInput(),
+      sellerId: 'shop-123',
+    })).resolves.toMatchObject({
+      allowed: false,
+      reason: 'WHATSAPP_SELLER_SATURATION',
+    });
+    expect(prisma.publication.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        candidate: expect.objectContaining({
+          evaluation: expect.objectContaining({
+            observation: expect.objectContaining({
+              canonicalPayload: expect.objectContaining({
+                path: ['seller', 'externalId'],
+                equals: 'shop-123',
+              }),
+            }),
+          }),
+        }),
+      }),
     }));
   });
 });

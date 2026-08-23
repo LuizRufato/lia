@@ -622,17 +622,29 @@ export class IntegrationsService {
     // Retrieve connection state before groups
     const masterKey = getEncryptionKey();
 
-    const instanceToken = decryptSecret(
-      integration.encryptedAccessToken!,
-      integration.tokenIv!,
-      integration.tokenAuthTag!,
-      masterKey,
-    );
+    let instanceToken: string;
+    try {
+      instanceToken = decryptSecret(
+        integration.encryptedAccessToken!,
+        integration.tokenIv!,
+        integration.tokenAuthTag!,
+        masterKey,
+      );
+    } catch {
+      await this.markEvolutionGroupsError(integration.id, 'EVOLUTION_CREDENTIALS_INVALID');
+      throw new BadRequestException('As credenciais da Evolution estão inválidas ou indisponíveis.');
+    }
 
-    const state = await provider.getConnectionState(
-      integration.externalInstanceName,
-      instanceToken,
-    );
+    let state: Awaited<ReturnType<WhatsAppEvolutionProvider['getConnectionState']>>;
+    try {
+      state = await provider.getConnectionState(
+        integration.externalInstanceName,
+        instanceToken,
+      );
+    } catch {
+      await this.markEvolutionGroupsError(integration.id, 'EVOLUTION_UNAVAILABLE');
+      throw new BadRequestException('Falha ao consultar a Evolution.');
+    }
 
     if (state !== 'open') {
       await this.prisma.channelIntegration.update({
@@ -657,10 +669,16 @@ export class IntegrationsService {
       });
     }
 
-    const groups = await provider.fetchGroups(
-      integration.externalInstanceName,
-      instanceToken,
-    );
+    let groups;
+    try {
+      groups = await provider.fetchGroups(
+        integration.externalInstanceName,
+        instanceToken,
+      );
+    } catch {
+      await this.markEvolutionGroupsError(integration.id, 'EVOLUTION_GROUPS_FETCH_FAILED');
+      throw new BadRequestException('Falha ao consultar grupos na Evolution.');
+    }
 
     // Upsert channels as DISABLED by default if not exists
     const results = [];
@@ -702,6 +720,21 @@ export class IntegrationsService {
     });
 
     return { success: true, groups: results };
+  }
+
+  private async markEvolutionGroupsError(integrationId: string, errorCode: string) {
+    try {
+      await this.prisma.channelIntegration.update({
+        where: { id: integrationId },
+        data: {
+          status: 'ERROR',
+          lastErrorAt: new Date(),
+          lastErrorCode: errorCode,
+        },
+      });
+    } catch {
+      // Keep the safe client-facing error even if recording diagnostics fails.
+    }
   }
 
   async getWhatsAppSafety(tenantId: string) {
