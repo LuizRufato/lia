@@ -20,7 +20,6 @@ export function ShopeeConfigModal({
   const [currentAppId, setCurrentAppId] = useState(appId);
   const [appSecret, setAppSecret] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -64,37 +63,12 @@ export function ShopeeConfigModal({
         );
       }
 
-      setSuccess("Credenciais salvas com segurança.");
+      setSuccess("Credenciais testadas e salvas com segurança.");
       onSuccess();
     } catch (e: any) {
       setError(e.message);
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleTestConnection = async () => {
-    setIsTesting(true);
-    setError("");
-    setSuccess("");
-
-    try {
-      const res = await fetchAuth("/integrations/shopee/test", {
-        method: "POST",
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || "Falha ao testar conexão.");
-      }
-
-      setSuccess("Conexão realizada com sucesso!");
-      onSuccess();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setIsTesting(false);
     }
   };
 
@@ -175,24 +149,12 @@ export function ShopeeConfigModal({
               Cancelar
             </button>
             <button
-              type="button"
-              onClick={handleTestConnection}
-              disabled={isTesting || !currentAppId}
-              className="flex-1 px-4 py-2 border border-blue-200 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {isTesting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                "Testar Conexão"
-              )}
-            </button>
-            <button
               type="submit"
-              disabled={isSaving}
+              disabled={isSaving || !currentAppId || !appSecret}
               className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-              Salvar
+              Salvar e testar
             </button>
           </div>
         </form>

@@ -136,6 +136,7 @@ model MarketplaceIntegration {
   keyVersion            Int               @default(1)
   status                IntegrationStatus @default(NOT_CONNECTED)
   lastSyncAt            DateTime?
+  lastSyncProcessedCount Int?
   lastError             String?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
@@ -579,6 +580,13 @@ enum AttributionStatus {
   UNATTRIBUTED
 }
 
+enum ConversionCommissionStatus {
+  ESTIMATED
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
 enum ConversionOrderStatus {
   UNPAID
   PENDING
@@ -600,6 +608,7 @@ model MarketplaceConversion {
   utmContent        String?
   attributionKey    String?
   attributionStatus AttributionStatus @default(UNATTRIBUTED)
+  commissionStatus  ConversionCommissionStatus @default(PENDING)
 
   affiliateLinkId String?
   affiliateLink   AffiliateLink? @relation(fields: [affiliateLinkId], references: [id])

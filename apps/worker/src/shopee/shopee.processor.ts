@@ -12,6 +12,7 @@ import { IngestionService } from '../ingestion.service';
 
 export interface ShopeeSyncJobData {
   tenantId: string;
+  syncRunId?: string;
 }
 
 @Processor('shopee-api-queue', {
@@ -34,7 +35,7 @@ export class ShopeeProcessor extends WorkerHost {
   }
 
   async process(job: Job<ShopeeSyncJobData, any, string>): Promise<any> {
-    const { tenantId } = job.data;
+    const { tenantId, syncRunId = `job-${job.id}` } = job.data;
     const masterKey = this.configService.get<string>(
       'INTEGRATION_ENCRYPTION_KEY',
     );
@@ -101,7 +102,7 @@ export class ShopeeProcessor extends WorkerHost {
       for (const item of items) {
         const canonical = ShopeeAdapter.toCanonicalOffer(item);
         await this.ingestionService.processIncomingOffer({
-          correlationId: `shopee-${canonical.externalOfferId}-${Date.now()}`,
+          correlationId: `shopee-${tenantId}-${canonical.externalOfferId}-${syncRunId}`,
           schemaVersion: '1.0',
           tenantId,
           data: canonical,
@@ -112,7 +113,12 @@ export class ShopeeProcessor extends WorkerHost {
       // 5. Update Status
       await this.prisma.marketplaceIntegration.update({
         where: { id: integration.id },
-        data: { lastSyncAt: new Date(), lastError: null, status: 'CONNECTED' },
+        data: {
+          lastSyncAt: new Date(),
+          lastSyncProcessedCount: processed,
+          lastError: null,
+          status: 'CONNECTED',
+        },
       });
 
       return { success: true, processed };

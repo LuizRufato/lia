@@ -433,7 +433,10 @@ export class PublisherProcessor extends WorkerHost {
       const updateResult = await this.prisma.affiliateLink.updateMany({
         where: {
           id: affiliateLink.id,
-          status: { in: ['UNVERIFIED', 'FAILED'] },
+          OR: [
+            { status: { in: ['UNVERIFIED', 'FAILED'] } },
+            { status: 'VERIFIED', affiliateUrl: null },
+          ],
         },
         data: { status: 'VERIFYING', attributionKey },
       });
@@ -499,6 +502,27 @@ export class PublisherProcessor extends WorkerHost {
         data: {
           status: 'VERIFIED',
           affiliateUrl: shortLink,
+          verifiedAt: new Date(),
+        },
+      });
+
+      await this.prisma.monetizationRecord.upsert({
+        where: { offerId: offer.id },
+        update: {
+          provider: 'SHOPEE',
+          source: 'shopee_short_link',
+          status: 'VERIFIED',
+          destinationUrl: shortLink,
+          commissionAmountCents: offer.commission ?? null,
+          verifiedAt: new Date(),
+        },
+        create: {
+          offerId: offer.id,
+          provider: 'SHOPEE',
+          source: 'shopee_short_link',
+          status: 'VERIFIED',
+          destinationUrl: shortLink,
+          commissionAmountCents: offer.commission ?? null,
           verifiedAt: new Date(),
         },
       });

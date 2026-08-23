@@ -44,28 +44,86 @@ export class IntegrationsService {
       status: integration.status,
       appId: integration.publicIdentifier,
       lastSyncAt: integration.lastSyncAt,
+      lastSyncProcessedCount: integration.lastSyncProcessedCount,
       lastError: integration.lastError,
       // Never return the actual encrypted/decrypted secret to frontend
     };
   }
 
   async connectShopee(tenantId: string, appId: string, appSecret: string) {
-    const masterKey = getEncryptionKey();
+    const normalizedAppId = appId?.trim();
+    const normalizedSecret = appSecret?.trim();
+    if (!normalizedAppId || !normalizedSecret) {
+      throw new BadRequestException('App ID e App Secret são obrigatórios.');
+    }
 
+    const existing = await this.prisma.marketplaceIntegration.findUnique({
+      where: { tenantId_provider: { tenantId, provider: 'SHOPEE' } },
+    });
+
+    // The submitted credentials are tested before they can become CONNECTED.
+    // This prevents a typo from silently replacing a known-good integration.
+    try {
+      await this.verifyShopeeCredentials(normalizedAppId, normalizedSecret);
+    } catch (error: any) {
+      const message = this.sanitizeShopeeError(error);
+      const preserveKnownGood = Boolean(
+        existing?.status === 'CONNECTED' &&
+          existing.publicIdentifier &&
+          existing.encryptedSecret &&
+          existing.iv &&
+          existing.authTag,
+      );
+
+      if (preserveKnownGood) {
+        await this.prisma.marketplaceIntegration.update({
+          where: { id: existing!.id },
+          data: { lastError: message },
+        });
+      } else {
+        const masterKey = getEncryptionKey();
+        const { encryptedSecret, iv, authTag } = encryptSecret(
+          normalizedSecret,
+          masterKey,
+        );
+        await this.prisma.marketplaceIntegration.upsert({
+          where: {
+            tenantId_provider: { tenantId, provider: 'SHOPEE' },
+          },
+          update: {
+            publicIdentifier: normalizedAppId,
+            encryptedSecret,
+            iv,
+            authTag,
+            status: 'ERROR',
+            lastError: message,
+          },
+          create: {
+            tenantId,
+            provider: 'SHOPEE',
+            publicIdentifier: normalizedAppId,
+            encryptedSecret,
+            iv,
+            authTag,
+            status: 'ERROR',
+            lastError: message,
+          },
+        });
+      }
+
+      throw new BadRequestException(message);
+    }
+
+    const masterKey = getEncryptionKey();
     const { encryptedSecret, iv, authTag } = encryptSecret(
-      appSecret,
+      normalizedSecret,
       masterKey,
     );
 
     await this.prisma.marketplaceIntegration.upsert({
-      where: {
-        tenantId_provider: {
-          tenantId,
-          provider: 'SHOPEE',
-        },
-      },
+      where: { tenantId_provider: { tenantId, provider: 'SHOPEE' } },
       update: {
-        publicIdentifier: appId,
+        publicIdentifier: normalizedAppId,
         encryptedSecret,
         iv,
         authTag,
@@ -75,7 +133,7 @@ export class IntegrationsService {
       create: {
         tenantId,
         provider: 'SHOPEE',
-        publicIdentifier: appId,
+        publicIdentifier: normalizedAppId,
         encryptedSecret,
         iv,
         authTag,
@@ -83,7 +141,7 @@ export class IntegrationsService {
       },
     });
 
-    return { success: true };
+    return { success: true, status: 'CONNECTED', tested: true };
   }
 
   async disconnectShopee(tenantId: string) {
@@ -109,12 +167,16 @@ export class IntegrationsService {
       throw new BadRequestException('Shopee is not connected.');
     }
 
-    // Add to BullMQ for the worker to process
+    const syncBucket = Math.floor(Date.now() / (15 * 60 * 1000));
     await this.shopeeQueue.add(
       'sync-shopee',
-      { tenantId },
+      { tenantId, syncRunId: `manual-${syncBucket}` },
       {
-        jobId: `shopee-sync-${tenantId}-${Date.now()}`, // Prevents immediate duplicates if run repeatedly
+        jobId: `shopee-sync-${tenantId}-${syncBucket}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: { age: 24 * 60 * 60 },
+        removeOnFail: { age: 7 * 24 * 60 * 60 },
       },
     );
 
@@ -132,8 +194,10 @@ export class IntegrationsService {
       throw new BadRequestException('Shopee is not connected.');
     }
 
+    const safeDays = Math.min(Math.max(Math.floor(days), 1), 30);
     const end = Math.floor(Date.now() / 1000);
-    const start = end - days * 24 * 60 * 60;
+    const start = end - safeDays * 24 * 60 * 60;
+    const syncBucket = Math.floor(Date.now() / (30 * 60 * 1000));
 
     await this.shopeeConversionsQueue.add(
       'sync',
@@ -141,9 +205,14 @@ export class IntegrationsService {
         tenantId,
         purchaseTimeStart: start,
         purchaseTimeEnd: end,
+        syncRunId: `manual-${syncBucket}`,
       },
       {
-        jobId: `shopee-conv-sync-${tenantId}-${Date.now()}`,
+        jobId: `shopee-conv-sync-${tenantId}-${syncBucket}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 35000 },
+        removeOnComplete: { age: 24 * 60 * 60 },
+        removeOnFail: { age: 7 * 24 * 60 * 60 },
       },
     );
 
@@ -159,7 +228,6 @@ export class IntegrationsService {
 
     if (
       !integration ||
-      integration.status !== 'CONNECTED' ||
       !integration.encryptedSecret ||
       !integration.iv ||
       !integration.authTag ||
@@ -188,26 +256,25 @@ export class IntegrationsService {
     );
 
     try {
-      const result = await client.getProductOfferV2(1, 1);
+      await client.getProductOfferV2(1, 1);
 
       // Mark as connected in DB (update timestamp)
       await this.prisma.marketplaceIntegration.update({
         where: { id: integration.id },
-        data: { status: 'CONNECTED', lastError: null, lastSyncAt: new Date() },
+        data: { status: 'CONNECTED', lastError: null },
       });
 
       return { success: true };
     } catch (error: any) {
+      const message = this.sanitizeShopeeError(error);
       await this.prisma.marketplaceIntegration.update({
         where: { id: integration.id },
         data: {
           status: 'ERROR',
-          lastError: error.message || 'Connection failed',
+          lastError: message,
         },
       });
-      throw new BadRequestException(
-        error.message || 'Shopee connection test failed.',
-      );
+      throw new BadRequestException(message);
     }
   }
 
@@ -510,6 +577,16 @@ export class IntegrationsService {
     }
 
     return { success: true, groups: results };
+  }
+
+  private async verifyShopeeCredentials(appId: string, appSecret: string) {
+    const client = new ShopeeAffiliateClient(appId, appSecret);
+    await client.getProductOfferV2(1, 1);
+  }
+
+  private sanitizeShopeeError(error: any): string {
+    const raw = String(error?.message || 'Falha ao validar credenciais Shopee.');
+    return raw.replace(/(secret|token|authorization|credential)\s*[=:]\s*[^\s,;]+/gi, '$1=[redacted]').slice(0, 240);
   }
 
   async sendWhatsAppEvolutionTestMessage(

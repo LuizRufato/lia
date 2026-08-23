@@ -10,6 +10,11 @@ import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { ShopeeAffiliateClient, decryptSecret } from '@lia/integrations';
 import Decimal from 'decimal.js';
+import {
+  conversionPageJobId,
+  deriveCommissionStatus,
+  normalizeOrderStatus,
+} from './conversion-state';
 
 export interface ShopeeConversionsSyncJobData {
   tenantId: string;
@@ -17,6 +22,7 @@ export interface ShopeeConversionsSyncJobData {
   purchaseTimeEnd: number;
   scrollId?: string;
   pageCount?: number;
+  syncRunId?: string;
 }
 
 @Processor('shopee-conversions-queue', {
@@ -48,6 +54,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       purchaseTimeEnd,
       scrollId,
       pageCount = 0,
+      syncRunId = `job-${job.id}`,
     } = job.data;
     const masterKey = this.configService.get<string>(
       'INTEGRATION_ENCRYPTION_KEY',
@@ -113,10 +120,29 @@ export class ShopeeConversionsProcessor extends WorkerHost {
 
       for (const node of nodes) {
         processedCount++;
-        // 1. Attribution
+        const existingConversion =
+          await this.prisma.marketplaceConversion.findUnique({
+            where: {
+              tenantId_provider_externalConversionId: {
+                tenantId,
+                provider: 'SHOPEE',
+                externalConversionId: String(node.conversionId),
+              },
+            },
+            select: {
+              id: true,
+              attributionKey: true,
+              attributionStatus: true,
+              affiliateLinkId: true,
+              offerId: true,
+            },
+          });
+
+        // 1. Attribution. Once attributed, a later report page must not
+        // regress it to UNATTRIBUTED.
         let finalAttributionStatus = 'UNATTRIBUTED';
-        let affiliateLinkId = null;
-        let offerId = null;
+        let affiliateLinkId: string | null = null;
+        let offerId: string | null = null;
 
         // Try to find attribution key from subIds in utmContent
         // In Shopee, utmContent is an array of strings, usually subIds
@@ -144,6 +170,13 @@ export class ShopeeConversionsProcessor extends WorkerHost {
           }
         }
 
+        if (existingConversion?.attributionStatus === 'ATTRIBUTED') {
+          finalAttributionStatus = 'ATTRIBUTED';
+          affiliateLinkId = existingConversion.affiliateLinkId;
+          offerId = existingConversion.offerId;
+          foundAttributionKey = existingConversion.attributionKey;
+        }
+
         // 2. Format Cents using Decimal.js
         const shopeeCappedCents = new Decimal(
           node.shopeeCommissionCapped || '0',
@@ -164,6 +197,13 @@ export class ShopeeConversionsProcessor extends WorkerHost {
           .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
           .toNumber();
 
+        const normalizedOrderStatuses = (node.orders || []).map((order) =>
+          normalizeOrderStatus(order.orderStatus),
+        );
+        const commissionStatus = deriveCommissionStatus(
+          normalizedOrderStatuses,
+        );
+
         // 3. Upsert Conversion
         const conversion = await this.prisma.marketplaceConversion.upsert({
           where: {
@@ -182,6 +222,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             utmContent: JSON.stringify(node.utmContent || []),
             attributionKey: foundAttributionKey,
             attributionStatus: finalAttributionStatus as any,
+            commissionStatus,
             affiliateLinkId,
             offerId,
             buyerType: String(node.buyerType),
@@ -193,12 +234,23 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             netCommissionCents: netCents,
           },
           update: {
-            // Update financial fields and status if it changed
+            purchaseTime: new Date(node.purchaseTime * 1000),
+            clickTime: node.clickTime ? new Date(node.clickTime * 1000) : null,
+            utmContent: JSON.stringify(node.utmContent || []),
             shopeeCommissionCappedCents: shopeeCappedCents,
             sellerCommissionCents: sellerCents,
             totalCommissionCents: totalCents,
             netCommissionCents: netCents,
-            // We do NOT override attribution status if already attributed (or we could, but better to keep it static once attributed)
+            commissionStatus,
+            ...(existingConversion?.attributionStatus !== 'ATTRIBUTED'
+              ? {
+                  attributionKey:
+                    foundAttributionKey ?? existingConversion?.attributionKey ?? null,
+                  attributionStatus: finalAttributionStatus as any,
+                  affiliateLinkId,
+                  offerId,
+                }
+              : {}),
           },
         });
 
@@ -214,11 +266,11 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             create: {
               conversionId: conversion.id,
               externalOrderId: String(order.orderId),
-              orderStatus: order.orderStatus as any,
+              orderStatus: normalizeOrderStatus(order.orderStatus),
               shopType: order.shopType,
             },
             update: {
-              orderStatus: order.orderStatus as any,
+              orderStatus: normalizeOrderStatus(order.orderStatus),
             },
           });
 
@@ -301,8 +353,15 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             purchaseTimeEnd,
             scrollId: pageInfo.scrollId,
             pageCount: pageCount + 1,
+            syncRunId,
           },
           {
+            jobId: conversionPageJobId(
+              tenantId,
+              purchaseTimeStart,
+              purchaseTimeEnd,
+              pageInfo.scrollId,
+            ),
             removeOnComplete: true,
             attempts: 3,
             backoff: { type: 'fixed', delay: 35000 }, // If fails (e.g. scrollId expires), wait 35s and it will restart without scrollId? Wait, if scrollId fails, we shouldn't retry with the same scrollId.

@@ -29,10 +29,15 @@ export class ShopeeSyncSchedulerService {
     for (const integration of integrations) {
       await this.shopeeQueue.add(
         'sync-shopee',
-        { tenantId: integration.tenantId },
+        {
+          tenantId: integration.tenantId,
+          syncRunId: `scheduled-${intervalBucket}`,
+        },
         {
           // Avoid duplicate polls if more than one Worker is briefly online.
-          jobId: `shopee-scheduled-${integration.tenantId}-${intervalBucket}`,
+          jobId: `shopee-sync-${integration.tenantId}-${intervalBucket}`,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
           removeOnComplete: { age: 24 * 60 * 60 },
           removeOnFail: { age: 7 * 24 * 60 * 60 },
         },

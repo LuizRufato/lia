@@ -67,8 +67,8 @@ export interface ShopeeConversionItem {
   itemSellerCommissionRate: string;
   itemShopeeCommissionCapped: string;
   itemShopeeCommissionRate: string;
-  displayItemStatus: string;
-  fraudStatus: string;
+  displayItemStatus?: string;
+  fraudStatus?: string;
   globalCategoryLv1Name?: string;
   globalCategoryLv2Name?: string;
   globalCategoryLv3Name?: string;
@@ -86,16 +86,16 @@ export interface ShopeeConversionOrder {
 export interface ShopeeConversionNode {
   conversionId: string;
   purchaseTime: number;
-  clickTime: number;
+  clickTime?: number;
   shopeeCommissionCapped: string;
   sellerCommission: string;
   totalCommission: string;
   netCommission: string;
   utmContent: string[];
-  buyerType: number;
-  device: string;
-  campaignType: string;
-  orders: ShopeeConversionOrder[];
+  buyerType?: number;
+  device?: string;
+  campaignType?: string;
+  orders?: ShopeeConversionOrder[];
 }
 
 export interface ShopeeConversionResponse {
@@ -104,7 +104,7 @@ export interface ShopeeConversionResponse {
       nodes: ShopeeConversionNode[];
       pageInfo: {
         hasNextPage: boolean;
-        scrollId: string;
+        scrollId?: string;
         limit: number;
       };
     };

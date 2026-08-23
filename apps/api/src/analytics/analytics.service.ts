@@ -100,17 +100,33 @@ export class AnalyticsService {
       },
     });
 
-    // Only count non-cancelled
-    const validConversions = conversionsToday; // Or filter by status if we had one at the root, but status is in orders.
-    // Wait, let's just count all that are ATTRIBUTED. If order is cancelled, we might still want to show it or subtract it.
-    // Let's sum the estimatedTotalCommissionCents
+    const summarize = (conversions: any[]) => {
+      const confirmed = conversions.filter(
+        (conversion) => conversion.commissionStatus === 'CONFIRMED',
+      );
+      const pending = conversions.filter((conversion) =>
+        ['ESTIMATED', 'PENDING'].includes(conversion.commissionStatus),
+      );
+      const cancelled = conversions.filter(
+        (conversion) => conversion.commissionStatus === 'CANCELLED',
+      );
 
-    let totalSales = validConversions.length;
-    let totalCommissionCents = 0;
+      return {
+        sales: confirmed.length,
+        commissionCents: confirmed.reduce(
+          (sum, conversion) => sum + (conversion.totalCommissionCents || 0),
+          0,
+        ),
+        pendingSales: pending.length,
+        pendingCommissionCents: pending.reduce(
+          (sum, conversion) => sum + (conversion.totalCommissionCents || 0),
+          0,
+        ),
+        cancelledSales: cancelled.length,
+      };
+    };
 
-    for (const conv of validConversions) {
-      totalCommissionCents += conv.totalCommissionCents || 0;
-    }
+    const today = summarize(conversionsToday);
 
     // Also get previous day for comparison
     const startOfYesterday = new Date(startOfDay);
@@ -125,21 +141,11 @@ export class AnalyticsService {
         },
       });
 
-    let yesterdaySales = conversionsYesterday.length;
-    let yesterdayCommissionCents = 0;
-    for (const conv of conversionsYesterday) {
-      yesterdayCommissionCents += conv.totalCommissionCents || 0;
-    }
+    const yesterday = summarize(conversionsYesterday);
 
     return {
-      today: {
-        sales: totalSales,
-        commissionCents: totalCommissionCents,
-      },
-      yesterday: {
-        sales: yesterdaySales,
-        commissionCents: yesterdayCommissionCents,
-      },
+      today,
+      yesterday,
     };
   }
 
@@ -162,6 +168,7 @@ export class AnalyticsService {
       id: c.id,
       purchaseTime: c.purchaseTime,
       attributionStatus: c.attributionStatus,
+      commissionStatus: c.commissionStatus,
       totalCommissionCents: c.totalCommissionCents,
       offerTitle: c.offer?.title || null,
       offerUrl: c.offer?.url || null,

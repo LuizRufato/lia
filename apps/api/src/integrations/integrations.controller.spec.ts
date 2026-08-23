@@ -4,6 +4,8 @@ import { IntegrationsService } from './integrations.service';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
+const mockShopeeGetProductOfferV2 = jest.fn();
+
 jest.mock('@lia/integrations', () => ({
   encryptSecret: jest.fn(),
   getEncryptionKey: jest
@@ -12,7 +14,7 @@ jest.mock('@lia/integrations', () => ({
       '0123456789012345678901234567890101234567890123456789012345678901',
     ),
   ShopeeAffiliateClient: jest.fn().mockImplementation(() => ({
-    getProductOfferV2: jest.fn().mockResolvedValue({}),
+    getProductOfferV2: mockShopeeGetProductOfferV2,
   })),
   WhatsAppCloudProvider: jest.fn().mockImplementation(() => ({
     testConnection: jest.fn().mockResolvedValue(true),
@@ -27,6 +29,7 @@ describe('IntegrationsController Security', () => {
   let prisma: PrismaService;
 
   beforeEach(async () => {
+    mockShopeeGetProductOfferV2.mockResolvedValue({});
     const module: TestingModule = await Test.createTestingModule({
       controllers: [IntegrationsController],
       providers: [
@@ -140,6 +143,68 @@ describe('IntegrationsController Security', () => {
         create: expect.objectContaining({
           publicIdentifier: largeAppId,
         }),
+      }),
+    );
+    expect(mockShopeeGetProductOfferV2).toHaveBeenCalledWith(1, 1);
+  });
+
+  it('must not replace a known-good integration when current credentials fail', async () => {
+    const existing = {
+      id: 'integration-id',
+      tenantId: 'tenant-123',
+      provider: 'SHOPEE',
+      publicIdentifier: 'known-good-app',
+      encryptedSecret: 'encrypted',
+      iv: 'iv',
+      authTag: 'tag',
+      status: 'CONNECTED',
+    };
+    (prisma.marketplaceIntegration.findUnique as jest.Mock).mockResolvedValue(
+      existing,
+    );
+    prisma.marketplaceIntegration.update = jest.fn();
+    prisma.marketplaceIntegration.upsert = jest.fn();
+    mockShopeeGetProductOfferV2.mockRejectedValue(
+      new Error('Authentication/Credential Error: invalid credentials'),
+    );
+
+    await expect(
+      controller.connectShopee(
+        { user: { tenantId: 'tenant-123' } },
+        { appId: 'new-app', appSecret: 'wrong-secret' },
+      ),
+    ).rejects.toThrow('Authentication/Credential Error');
+
+    expect(prisma.marketplaceIntegration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: existing.id },
+        data: expect.objectContaining({ lastError: expect.any(String) }),
+      }),
+    );
+    expect(prisma.marketplaceIntegration.upsert).not.toHaveBeenCalled();
+  });
+
+  it('stores a failed first attempt as ERROR, never CONNECTED', async () => {
+    (prisma.marketplaceIntegration.findUnique as jest.Mock).mockResolvedValue(
+      null,
+    );
+    const upsertSpy = jest.fn();
+    prisma.marketplaceIntegration.upsert = upsertSpy;
+    mockShopeeGetProductOfferV2.mockRejectedValue(
+      new Error('Authentication/Credential Error'),
+    );
+
+    await expect(
+      controller.connectShopee(
+        { user: { tenantId: 'tenant-123' } },
+        { appId: 'invalid-app', appSecret: 'invalid-secret' },
+      ),
+    ).rejects.toThrow('Authentication/Credential Error');
+
+    expect(upsertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: 'ERROR' }),
+        update: expect.objectContaining({ status: 'ERROR' }),
       }),
     );
   });

@@ -21,6 +21,7 @@ import { AutopilotSchedulerService } from './autopilot/scheduler.service';
 import { WhatsAppWebhookProcessor } from './publisher/whatsapp-webhook.processor';
 import { WhatsAppPublisher } from './publisher/whatsapp.publisher';
 import { ShopeeConversionsProcessor } from './shopee/shopee-conversions.processor';
+import { ShopeeConversionsSchedulerService } from './shopee/shopee-conversions.scheduler';
 import { getBullMqRedisConnection } from '@lia/core';
 
 @Module({
@@ -76,6 +77,8 @@ import { getBullMqRedisConnection } from '@lia/core';
     BullModule.registerQueue({
       name: 'shopee-conversions-queue',
       defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 35000 },
         removeOnComplete: true,
       },
     }),
@@ -96,6 +99,7 @@ import { getBullMqRedisConnection } from '@lia/core';
     WhatsAppWebhookProcessor,
     WhatsAppPublisher,
     ShopeeConversionsProcessor,
+    ShopeeConversionsSchedulerService,
   ],
 })
 export class AppModule {}
