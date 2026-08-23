@@ -61,6 +61,60 @@ describe('WhatsAppEvolutionProvider lifecycle safety', () => {
     await expect(
       new WhatsAppEvolutionProvider().sendGroupMessage('lia-tenant', 'key', 'group@g.us', 'test'),
     ).resolves.toBeNull();
+    expect(api.post).toHaveBeenCalledWith(
+      '/message/sendText/lia-tenant',
+      { number: 'group@g.us', text: 'test' },
+      { headers: { apikey: 'key' } },
+    );
+  });
+
+  it('uses the Evolution v2.3.7 top-level text payload and extracts the real message id', async () => {
+    api.post.mockResolvedValueOnce({ data: { key: { id: 'evo-message-id' } } });
+    await expect(
+      new WhatsAppEvolutionProvider().sendGroupMessage('lia-tenant', 'instance-key', '120@g.us', 'Oferta teste'),
+    ).resolves.toBe('evo-message-id');
+    expect(api.post).toHaveBeenCalledWith(
+      '/message/sendText/lia-tenant',
+      { number: '120@g.us', text: 'Oferta teste' },
+      { headers: { apikey: 'instance-key' } },
+    );
+  });
+
+  it('returns a sanitized provider message for a rejected 4xx request without secrets', async () => {
+    api.post.mockRejectedValueOnce({
+      response: {
+        status: 400,
+        data: {
+          message: 'text must be a string',
+          apikey: 'do-not-leak',
+          token: 'do-not-leak',
+        },
+        headers: { authorization: 'do-not-leak' },
+      },
+    });
+    let caught: unknown;
+    try {
+      await new WhatsAppEvolutionProvider().sendGroupMessage('lia-tenant', 'secret-key', 'group@g.us', 'test');
+    } catch (error) {
+      caught = error;
+    }
+    expect(String(caught)).toContain('Evolution sendText rejected request (HTTP 400): text must be a string');
+    expect(String(caught)).not.toContain('do-not-leak');
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps 5xx and timeout failures ambiguous without retrying', async () => {
+    api.post.mockRejectedValueOnce({ response: { status: 503 } });
+    await expect(
+      new WhatsAppEvolutionProvider().sendGroupMessage('lia-tenant', 'key', 'group@g.us', 'test'),
+    ).rejects.toThrow('WhatsApp provider response ambiguous');
+    expect(api.post).toHaveBeenCalledTimes(1);
+
+    api.post.mockRejectedValueOnce({ code: 'ECONNABORTED' });
+    await expect(
+      new WhatsAppEvolutionProvider().sendGroupMessage('lia-tenant', 'key', 'group@g.us', 'test'),
+    ).rejects.toThrow('WhatsApp provider response ambiguous');
+    expect(api.post).toHaveBeenCalledTimes(2);
   });
 
   it('normalizes the current Evolution group response shape', async () => {

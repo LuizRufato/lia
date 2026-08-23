@@ -225,8 +225,7 @@ export class WhatsAppEvolutionProvider {
     try {
       const response = await this.api.post(`/message/sendText/${instanceName}`, {
         number: groupJid,
-        options: { delay: 1200, presence: "composing" },
-        textMessage: { text },
+        text,
       }, { headers: { apikey: token } });
       return response.data?.key?.id || response.data?.message?.key?.id || null;
     } catch (error: any) {
@@ -234,7 +233,15 @@ export class WhatsAppEvolutionProvider {
       if (!status || status >= 500 || error.code === "ECONNABORTED") {
         throw new Error("WhatsApp provider response ambiguous");
       }
-      throw new Error(`Failed to send message: ${error.message}`);
+      const providerMessage = error.response?.data?.message;
+      const safeMessage = Array.isArray(providerMessage)
+        ? providerMessage.map(String).join("; ")
+        : typeof providerMessage === "string"
+          ? providerMessage
+          : typeof error.response?.data?.error === "string"
+            ? error.response.data.error
+            : "Provider rejected the request";
+      throw new Error(`Evolution sendText rejected request (HTTP ${status}): ${safeMessage.slice(0, 240)}`);
     }
   }
 }
