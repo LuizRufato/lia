@@ -92,6 +92,9 @@ describe('ShopeeConversionsProcessor', () => {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockResolvedValue({ id: 'conversion-db-1' }),
       },
+      adminAlert: {
+        upsert: jest.fn().mockResolvedValue({ id: 'alert-db-1' }),
+      },
       affiliateLink: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'affiliate-1',
@@ -132,6 +135,169 @@ describe('ShopeeConversionsProcessor', () => {
         data: expect.objectContaining({
           lastConversionSyncAt: new Date(2 * 1000),
           lastConversionError: null,
+        }),
+      }),
+    );
+
+    expect(prisma.adminAlert.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          dedupeKey: 'tenant-1:NEW_SHOPEE_SALE:SHOPEE:conversion-1',
+        },
+        create: expect.objectContaining({
+          type: 'NEW_SHOPEE_SALE',
+          provider: 'SHOPEE',
+          externalEventId: 'conversion-1',
+          marketplaceConversionId: 'conversion-db-1',
+          payload: expect.objectContaining({
+            conversionId: 'conversion-1',
+            commissionStatus: 'CANCELLED',
+            orders: [
+              expect.objectContaining({
+                orderId: 'order-1',
+                status: 'CANCELLED',
+              }),
+            ],
+          }),
+        }),
+        update: {},
+      }),
+    );
+  });
+
+  it('keeps one alert for the same conversion across a repeated sync', async () => {
+    const alerts = new Map<string, unknown>();
+    prisma.marketplaceConversion.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'conversion-db-1',
+        attributionStatus: 'UNATTRIBUTED',
+        attributionKey: null,
+        affiliateLinkId: null,
+        offerId: null,
+      });
+    prisma.adminAlert.upsert.mockImplementation(async (args: any) => {
+      alerts.set(args.where.dedupeKey, { id: 'alert-db-1' });
+      return { id: 'alert-db-1' };
+    });
+
+    const job = {
+      id: 'job-repeat',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any;
+    await processor.process(job);
+    await processor.process(job);
+
+    expect(alerts.size).toBe(1);
+    expect(prisma.adminAlert.upsert).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates the alert when a retry finds an existing conversion without an alert', async () => {
+    prisma.marketplaceConversion.findUnique.mockResolvedValue({
+      id: 'conversion-db-1',
+      attributionStatus: 'UNATTRIBUTED',
+      attributionKey: null,
+      affiliateLinkId: null,
+      offerId: null,
+    });
+
+    await processor.process({
+      id: 'job-retry-alert',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any);
+
+    expect(prisma.adminAlert.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores all conversion items in the alert payload', async () => {
+    const secondItem = {
+      ...conversionNode.orders[0].items[0],
+      itemId: 'item-2',
+      itemName: 'Segundo produto',
+      qty: 2,
+      itemPrice: '4.00',
+      actualAmount: '3.50',
+    };
+    const nodeWithTwoItems = {
+      ...conversionNode,
+      orders: [
+        {
+          ...conversionNode.orders[0],
+          items: [conversionNode.orders[0].items[0], secondItem],
+        },
+      ],
+    };
+    mockGetConversionReport.mockResolvedValueOnce({
+      data: {
+        conversionReport: {
+          nodes: [nodeWithTwoItems],
+          pageInfo: { hasNextPage: false, scrollId: undefined, limit: 500 },
+        },
+      },
+    });
+
+    await processor.process({
+      id: 'job-items',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any);
+
+    const payload = prisma.adminAlert.upsert.mock.calls[0][0].create.payload;
+    expect(payload.orders[0].items).toEqual([
+      expect.objectContaining({ itemName: 'Produto', qty: 1 }),
+      expect.objectContaining({
+        itemName: 'Segundo produto',
+        qty: 2,
+        itemPriceCents: 400,
+        actualAmountCents: 350,
+      }),
+    ]);
+  });
+
+  it('does not create an alert when conversion persistence fails before orders and items', async () => {
+    prisma.marketplaceConversion.upsert.mockRejectedValueOnce(
+      new Error('database unavailable'),
+    );
+
+    await expect(
+      processor.process({
+        id: 'job-conversion-failure',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toThrow('database unavailable');
+
+    expect(prisma.adminAlert.upsert).not.toHaveBeenCalled();
+    expect(prisma.marketplaceConversionOrder.upsert).not.toHaveBeenCalled();
+    expect(prisma.marketplaceConversionItem.upsert).not.toHaveBeenCalled();
+  });
+
+  it('fails and remains retryable when alert persistence fails', async () => {
+    prisma.adminAlert.upsert.mockRejectedValueOnce(
+      new Error('alert database unavailable'),
+    );
+
+    await expect(
+      processor.process({
+        id: 'job-alert-failure',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toThrow('Admin alert persistence failed');
+
+    expect(prisma.marketplaceConversion.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.marketplaceConversionItem.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.marketplaceIntegration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionError: expect.stringContaining(
+            'Admin alert persistence failed',
+          ),
         }),
       }),
     );

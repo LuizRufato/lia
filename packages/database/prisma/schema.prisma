@@ -27,13 +27,15 @@ model Tenant {
   marketplaceIntegrations MarketplaceIntegration[]
   affiliateLinks          AffiliateLink[]
 
-  memberships     TenantMembership[]
-  autopilotConfig AutopilotConfig?
-  autopilotAudits AutopilotAudit[]
+  memberships      TenantMembership[]
+  autopilotConfig  AutopilotConfig?
+  autopilotAudits  AutopilotAudit[]
+  adminAlertConfig AdminAlertConfig?
+  adminAlerts      AdminAlert[]
 
-  createdAt              DateTime                @default(now())
-  updatedAt              DateTime                @updatedAt
-  marketplaceConversions MarketplaceConversion[]
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+  marketplaceConversions     MarketplaceConversion[]
   marketplaceBrowserSessions MarketplaceBrowserSession[]
 }
 
@@ -71,23 +73,23 @@ enum ChannelVisibility {
 }
 
 model Channel {
-  id             String            @id @default(uuid())
-  tenantId       String
-  tenant         Tenant            @relation(fields: [tenantId], references: [id])
-  provider       ChannelProvider
-  externalChatId String
-  displayName    String
-  visibility     ChannelVisibility @default(PRIVATE)
-  enabled        Boolean           @default(true)
-  safetyMaxPerHour       Int       @default(10)
-  safetyMaxPerDay        Int       @default(50)
-  safetyMinIntervalSeconds Int     @default(60)
-  safetyWindowStartMinute Int?
-  safetyWindowEndMinute   Int?
-  lastSeenAt              DateTime?
-  staleAt                 DateTime?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  id                       String            @id @default(uuid())
+  tenantId                 String
+  tenant                   Tenant            @relation(fields: [tenantId], references: [id])
+  provider                 ChannelProvider
+  externalChatId           String
+  displayName              String
+  visibility               ChannelVisibility @default(PRIVATE)
+  enabled                  Boolean           @default(true)
+  safetyMaxPerHour         Int               @default(10)
+  safetyMaxPerDay          Int               @default(50)
+  safetyMinIntervalSeconds Int               @default(60)
+  safetyWindowStartMinute  Int?
+  safetyWindowEndMinute    Int?
+  lastSeenAt               DateTime?
+  staleAt                  DateTime?
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
 
   publications     Publication[]
   autopilotConfigs AutopilotChannelConfig[]
@@ -129,37 +131,37 @@ model ChannelIntegration {
 }
 
 model MarketplaceIntegration {
-  id                    String            @id @default(uuid())
-  tenantId              String
-  tenant                Tenant            @relation(fields: [tenantId], references: [id])
-  provider              MarketplaceType
-  publicIdentifier      String? // e.g. App ID / Meli User ID
-  encryptedSecret       String? // AES-256-GCM encrypted secret / Access Token
-  iv                    String?
-  authTag               String?
-  encryptedRefreshToken String?
-  refreshIv             String?
-  refreshAuthTag        String?
-  expiresAt             DateTime?
-  keyVersion            Int               @default(1)
-  status                IntegrationStatus @default(NOT_CONNECTED)
-  lastSyncAt            DateTime?
-  lastSyncProcessedCount Int?
-  lastSyncFoundCount    Int?
-  lastSyncCreatedCount  Int?
-  lastSyncUpdatedCount  Int?
-  lastSyncIgnoredCount  Int?
-  lastConversionSyncAt  DateTime?
-  lastConversionError   String?
-  lastDiscoveryAt       DateTime?
+  id                         String            @id @default(uuid())
+  tenantId                   String
+  tenant                     Tenant            @relation(fields: [tenantId], references: [id])
+  provider                   MarketplaceType
+  publicIdentifier           String? // e.g. App ID / Meli User ID
+  encryptedSecret            String? // AES-256-GCM encrypted secret / Access Token
+  iv                         String?
+  authTag                    String?
+  encryptedRefreshToken      String?
+  refreshIv                  String?
+  refreshAuthTag             String?
+  expiresAt                  DateTime?
+  keyVersion                 Int               @default(1)
+  status                     IntegrationStatus @default(NOT_CONNECTED)
+  lastSyncAt                 DateTime?
+  lastSyncProcessedCount     Int?
+  lastSyncFoundCount         Int?
+  lastSyncCreatedCount       Int?
+  lastSyncUpdatedCount       Int?
+  lastSyncIgnoredCount       Int?
+  lastConversionSyncAt       DateTime?
+  lastConversionError        String?
+  lastDiscoveryAt            DateTime?
   lastDiscoveryCategoryCount Int?
-  lastDiscoveryFoundCount Int?
-  lastDiscoveryCreatedCount Int?
-  lastDiscoveryIgnoredCount Int?
-  lastDiscoveryError    String?
-  lastError             String?
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  lastDiscoveryFoundCount    Int?
+  lastDiscoveryCreatedCount  Int?
+  lastDiscoveryIgnoredCount  Int?
+  lastDiscoveryError         String?
+  lastError                  String?
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
 
   @@unique([tenantId, provider])
 }
@@ -253,7 +255,7 @@ model Offer {
   productId     String?
   product       Product?    @relation(fields: [productId], references: [id])
 
-  title      String @default("")
+  title      String  @default("")
   price      Int
   commission Int?
   url        String
@@ -314,12 +316,12 @@ model OfferObservation {
   schemaVersion    String
   canonicalPayload Json
   category         String?
-  discoverySource String?
+  discoverySource  String?
   sourceCategoryId String?
-  rankingPosition Int?
+  rankingPosition  Int?
   sourceEntityType String?
 
-  evaluations OfferEvaluation[]
+  evaluations  OfferEvaluation[]
   priceHistory PriceHistory?
 
   observedAt DateTime
@@ -354,9 +356,9 @@ model PublicationCandidate {
   evaluationId String          @unique
   evaluation   OfferEvaluation @relation(fields: [evaluationId], references: [id])
 
-  status PublicationCandidateStatus @default(PENDING)
+  status         PublicationCandidateStatus @default(PENDING)
   deferredReason String?
-  retryAt DateTime?
+  retryAt        DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -420,19 +422,19 @@ model PublicationDeliveryEvent {
 }
 
 model PriceHistory {
-  id                String            @id @default(uuid())
-  offerId           String
-  offer             Offer             @relation(fields: [offerId], references: [id])
-  observationId     String?           @unique
-  observation       OfferObservation? @relation(fields: [observationId], references: [id])
-  priceCents        Int
+  id                 String            @id @default(uuid())
+  offerId            String
+  offer              Offer             @relation(fields: [offerId], references: [id])
+  observationId      String?           @unique
+  observation        OfferObservation? @relation(fields: [observationId], references: [id])
+  priceCents         Int
   originalPriceCents Int?
-  discountBps       Int?
-  commissionCents   Int?
-  salesCount        Int?
-  rating            Float?
-  observedAt        DateTime          @default(now())
-  createdAt         DateTime          @default(now())
+  discountBps        Int?
+  commissionCents    Int?
+  salesCount         Int?
+  rating             Float?
+  observedAt         DateTime          @default(now())
+  createdAt          DateTime          @default(now())
 
   @@index([offerId, createdAt])
   @@index([offerId, observedAt])
@@ -444,24 +446,24 @@ enum WhatsAppCircuitState {
 }
 
 model WhatsAppSafetyConfig {
-  id                         String              @id @default(uuid())
-  tenantId                   String              @unique
-  tenant                     Tenant              @relation(fields: [tenantId], references: [id])
-  enabled                    Boolean             @default(true)
-  killSwitch                 Boolean             @default(false)
-  minIntervalSeconds         Int                 @default(60)
-  maxPerHour                 Int                 @default(20)
-  maxPerDay                  Int                 @default(100)
-  quietStartMinute           Int?
-  quietEndMinute             Int?
-  reconnectionCooldownSeconds Int                @default(90)
-  minQualityScore            Float               @default(0)
-  maxObservationAgeMinutes   Int                 @default(1440)
-  circuitState               WhatsAppCircuitState @default(CLOSED)
-  consecutiveErrors          Int                 @default(0)
-  circuitOpenedAt            DateTime?
-  createdAt                  DateTime            @default(now())
-  updatedAt                  DateTime            @updatedAt
+  id                          String               @id @default(uuid())
+  tenantId                    String               @unique
+  tenant                      Tenant               @relation(fields: [tenantId], references: [id])
+  enabled                     Boolean              @default(true)
+  killSwitch                  Boolean              @default(false)
+  minIntervalSeconds          Int                  @default(60)
+  maxPerHour                  Int                  @default(20)
+  maxPerDay                   Int                  @default(100)
+  quietStartMinute            Int?
+  quietEndMinute              Int?
+  reconnectionCooldownSeconds Int                  @default(90)
+  minQualityScore             Float                @default(0)
+  maxObservationAgeMinutes    Int                  @default(1440)
+  circuitState                WhatsAppCircuitState @default(CLOSED)
+  consecutiveErrors           Int                  @default(0)
+  circuitOpenedAt             DateTime?
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
 }
 
 model TrackedLink {
@@ -494,12 +496,12 @@ enum ClickIntelligenceClass {
 }
 
 model ClickEvent {
-  id                   String              @id @default(uuid())
-  eventId              String              @unique
+  id                   String                  @id @default(uuid())
+  eventId              String                  @unique
   linkId               String
-  link                 TrackedLink         @relation(fields: [linkId], references: [id])
-  clickedAt            DateTime            @default(now())
-  classification       ClickClassification @default(VALID)
+  link                 TrackedLink             @relation(fields: [linkId], references: [id])
+  clickedAt            DateTime                @default(now())
+  classification       ClickClassification     @default(VALID)
   classificationReason String?
   intelligenceClass    ClickIntelligenceClass?
   visitorHash          String?
@@ -670,7 +672,7 @@ model MarketplaceConversion {
 
   utmContent        String?
   attributionKey    String?
-  attributionStatus AttributionStatus @default(UNATTRIBUTED)
+  attributionStatus AttributionStatus          @default(UNATTRIBUTED)
   commissionStatus  ConversionCommissionStatus @default(PENDING)
 
   affiliateLinkId String?
@@ -691,6 +693,8 @@ model MarketplaceConversion {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  adminAlerts AdminAlert[]
 
   @@unique([tenantId, provider, externalConversionId])
   @@index([tenantId, attributionStatus, purchaseTime])
@@ -745,4 +749,63 @@ model MarketplaceConversionItem {
   updatedAt DateTime @updatedAt
 
   @@unique([orderId, externalLineKey])
+}
+
+enum AdminAlertType {
+  NEW_SHOPEE_SALE
+  COMMISSION_CONFIRMED
+  SALE_CANCELLED
+  HIGH_VALUE_SALE
+  CRITICAL_ERROR
+  DAILY_SUMMARY
+}
+
+enum AdminAlertDeliveryStatus {
+  NOT_REQUESTED
+  PENDING
+  SENT
+  FAILED
+}
+
+model AdminAlert {
+  id                      String                   @id @default(uuid())
+  tenantId                String
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id])
+  type                    AdminAlertType
+  provider                MarketplaceType?
+  externalEventId         String?
+  marketplaceConversionId String?
+  marketplaceConversion   MarketplaceConversion?   @relation(fields: [marketplaceConversionId], references: [id], onDelete: SetNull)
+  dedupeKey               String                   @unique
+  payload                 Json
+  deliveryStatus          AdminAlertDeliveryStatus @default(NOT_REQUESTED)
+  deliveryAttempts        Int                      @default(0)
+  lastDeliveryError       String?
+  sentAt                  DateTime?
+  readAt                  DateTime?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, type, createdAt])
+}
+
+model AdminAlertConfig {
+  id                         String    @id @default(uuid())
+  tenantId                   String    @unique
+  tenant                     Tenant    @relation(fields: [tenantId], references: [id])
+  enabled                    Boolean   @default(false)
+  encryptedRecipient         String?
+  recipientIv                String?
+  recipientAuthTag           String?
+  keyVersion                 Int       @default(1)
+  newShopeeSaleEnabled       Boolean   @default(true)
+  commissionConfirmedEnabled Boolean   @default(false)
+  saleCancelledEnabled       Boolean   @default(false)
+  highValueSaleEnabled       Boolean   @default(false)
+  criticalErrorEnabled       Boolean   @default(false)
+  dailySummaryEnabled        Boolean   @default(false)
+  enabledAt                  DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
 }

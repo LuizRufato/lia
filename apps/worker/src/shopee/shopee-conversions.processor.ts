@@ -223,7 +223,10 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         },
       });
 
-      if (isRetryableShopeeConversionError(error)) {
+      if (
+        isRetryableShopeeConversionError(error) ||
+        error?.code === 'ADMIN_ALERT_PERSISTENCE'
+      ) {
         throw error;
       }
       throw new UnrecoverableError(error.message);
@@ -474,9 +477,85 @@ export class ShopeeConversionsProcessor extends WorkerHost {
           });
         }
       }
+
+      // Persist the event only after the conversion, all orders, and all items
+      // for this conversion have completed successfully. The unique dedupe key
+      // makes retries safe even when the conversion already exists.
+      await this.ensureNewShopeeSaleAlert(
+        tenantId,
+        node,
+        conversion.id,
+        commissionStatus,
+        totalCents,
+        netCents,
+        foundAttributionKey,
+        offerId,
+      );
     }
 
     return { processedCount, attributedCount };
+  }
+
+  private async ensureNewShopeeSaleAlert(
+    tenantId: string,
+    node: ShopeeConversionNode,
+    marketplaceConversionId: string,
+    commissionStatus: string,
+    totalCommissionCents: number,
+    netCommissionCents: number,
+    attributionKey: string | null,
+    offerId: string | null,
+  ): Promise<void> {
+    const externalEventId = String(node.conversionId);
+    const dedupeKey = `${tenantId}:NEW_SHOPEE_SALE:SHOPEE:${externalEventId}`;
+    const payload = {
+      conversionId: externalEventId,
+      purchaseTime: new Date(node.purchaseTime * 1000).toISOString(),
+      commissionStatus,
+      totalCommissionCents,
+      netCommissionCents,
+      attributionKey,
+      offerId,
+      orders: (node.orders || []).map((order) => ({
+        orderId: String(order.orderId),
+        status: normalizeOrderStatus(order.orderStatus),
+        items: (order.items || []).map((item) => ({
+          itemName: item.itemName,
+          qty: item.qty,
+          itemPriceCents: new Decimal(item.itemPrice || '0')
+            .mul(100)
+            .toDecimalPlaces(0)
+            .toNumber(),
+          actualAmountCents: new Decimal(item.actualAmount || '0')
+            .mul(100)
+            .toDecimalPlaces(0)
+            .toNumber(),
+        })),
+      })),
+    };
+
+    try {
+      await this.prisma.adminAlert.upsert({
+        where: { dedupeKey },
+        create: {
+          tenantId,
+          type: 'NEW_SHOPEE_SALE',
+          provider: 'SHOPEE',
+          externalEventId,
+          marketplaceConversionId,
+          dedupeKey,
+          payload,
+        },
+        update: {},
+      });
+    } catch (error: any) {
+      const alertError = new Error(
+        `Admin alert persistence failed: ${error?.message || error}`,
+      );
+      (alertError as any).code = 'ADMIN_ALERT_PERSISTENCE';
+      (alertError as any).cause = error;
+      throw alertError;
+    }
   }
 
   @OnWorkerEvent('failed')
