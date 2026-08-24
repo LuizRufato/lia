@@ -6,6 +6,11 @@ import {
   getEncryptionKey,
   decryptSecret,
 } from '@lia/integrations';
+import {
+  CopyEngine,
+  DEFAULT_PUBLICATION_TEMPLATES,
+  PublicationCopyContext,
+} from '@lia/core';
 
 @Injectable()
 export class WhatsAppPublisher {
@@ -27,6 +32,10 @@ export class WhatsAppPublisher {
     title: string,
     priceCents: number,
     discountBps: number | null,
+    copyContext?: Omit<
+      PublicationCopyContext,
+      'title' | 'priceCents' | 'finalLink'
+    >,
   ): Promise<string | null> {
     // 1. Load Channel Integration and Configuration
     const channel = await this.prisma.channel.findUnique({
@@ -66,13 +75,24 @@ export class WhatsAppPublisher {
         masterKey,
       );
 
-      // Copy Engine manual para o grupo
-      const priceStr = `R$ ${(priceCents / 100).toFixed(2).replace('.', ',')}`;
-      const discountStr = discountBps
-        ? ` 🔥 ${(discountBps / 100).toFixed(0)}% OFF`
-        : '';
-
-      const copyText = `*${title}*\n\n💰 Por apenas: ${priceStr}${discountStr}\n\n🛒 Compre aqui: ${finalUrl}`;
+      let templates = DEFAULT_PUBLICATION_TEMPLATES;
+      const templateClient = (this.prisma as any).publicationTemplate;
+      if (templateClient?.findMany) {
+        const persisted = await templateClient.findMany({
+          where: { tenantId: channel.tenantId, enabled: true },
+          orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+        });
+        if (persisted.length) templates = persisted;
+      }
+      const rendered = CopyEngine.renderPublication(templates, {
+        title,
+        priceCents,
+        discountBps,
+        finalLink: finalUrl,
+        locale: 'pt-BR',
+        currency: 'BRL',
+        ...copyContext,
+      });
 
       this.logger.log(
         `Publishing offer ${offerId} to WhatsApp Group ${channel.externalChatId} via Evolution`,
@@ -82,7 +102,7 @@ export class WhatsAppPublisher {
         whatsappIntegration.externalInstanceName,
         instanceToken,
         channel.externalChatId, // groupJid
-        copyText,
+        rendered.text,
       );
 
       return messageId;

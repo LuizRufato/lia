@@ -38,6 +38,7 @@ model Tenant {
   updatedAt                  DateTime                    @updatedAt
   marketplaceConversions     MarketplaceConversion[]
   marketplaceBrowserSessions MarketplaceBrowserSession[]
+  publicationTemplates       PublicationTemplate[]
 }
 
 enum TenantRole {
@@ -278,6 +279,38 @@ model Offer {
   marketplaceConversions MarketplaceConversion[]
 
   @@unique([tenantId, marketplaceId, externalId])
+}
+
+enum PublicationTemplateType {
+  ACHADINHO
+  OFERTA
+  PRECO_CAIU
+  MAIS_VENDIDO
+  GENERIC
+}
+
+enum PublicationTemplateCtaMode {
+  AUTO
+  CUSTOM
+}
+
+model PublicationTemplate {
+  id        String                     @id @default(uuid())
+  tenantId  String
+  tenant    Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  type      PublicationTemplateType
+  enabled   Boolean                    @default(true)
+  isDefault Boolean                    @default(false)
+  body      String
+  ctaMode   PublicationTemplateCtaMode @default(AUTO)
+  customCta String?
+  priority  Int                        @default(0)
+  createdAt DateTime                   @default(now())
+  updatedAt DateTime                   @updatedAt
+
+  @@index([tenantId, enabled])
+  @@index([tenantId, type])
 }
 
 enum AffiliateLinkStatus {

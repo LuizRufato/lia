@@ -19,6 +19,7 @@ import { ChannelsModule } from './channels/channels.module';
 import { getBullMqRedisConnection } from '@lia/core';
 import { getRateLimitPolicy } from './rate-limit.policy';
 import { AdminAlertsModule } from './admin-alerts/admin-alerts.module';
+import { TemplatesModule } from './templates/templates.module';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { AdminAlertsModule } from './admin-alerts/admin-alerts.module';
     OffersModule,
     ChannelsModule,
     AdminAlertsModule,
+    TemplatesModule,
   ],
   controllers: [AppController],
   providers: [

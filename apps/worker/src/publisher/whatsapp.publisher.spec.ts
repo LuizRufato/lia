@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { WhatsAppPublisher } from './whatsapp.publisher';
 import { PrismaService } from '../prisma.service';
-import { WhatsAppCloudProvider } from '@lia/integrations';
+import {
+  WhatsAppCloudProvider,
+  WhatsAppEvolutionProvider,
+} from '@lia/integrations';
 
 jest.mock('@lia/integrations', () => {
   return {
@@ -12,6 +15,11 @@ jest.mock('@lia/integrations', () => {
           .mockResolvedValue({ messages: [{ id: 'wamid.test' }] }),
       };
     }),
+    WhatsAppEvolutionProvider: jest.fn().mockImplementation(() => ({
+      sendGroupMessage: jest.fn().mockResolvedValue('evolution-message'),
+    })),
+    getEncryptionKey: jest.fn().mockReturnValue('key'),
+    decryptSecret: jest.fn().mockReturnValue('instance-token'),
   };
 });
 
@@ -76,5 +84,53 @@ describe('WhatsAppPublisher', () => {
       null,
     );
     expect(messageId).toBe('wamid.test');
+  });
+
+  it('renders the configured safe copy and preserves Evolution payload shape', async () => {
+    const mockChannel = {
+      id: 'chan1',
+      externalChatId: 'group@g.us',
+      tenantId: 'tenant1',
+      tenant: {
+        channelIntegrations: [
+          {
+            provider: 'WHATSAPP',
+            status: 'CONNECTED',
+            transport: 'WEB_UNOFFICIAL',
+            externalInstanceName: 'lia',
+            encryptedAccessToken: 'encrypted',
+            tokenIv: 'iv',
+            tokenAuthTag: 'tag',
+          },
+        ],
+      },
+    };
+    (prismaService.channel.findUnique as jest.Mock).mockResolvedValue(
+      mockChannel,
+    );
+    const messageId = await publisher.publish(
+      'offer1',
+      'pub1',
+      'chan1',
+      'https://go.botlia.com.br/slug',
+      'Oferta real',
+      1250,
+      null,
+    );
+    expect(messageId).toBe('evolution-message');
+    const results = (WhatsAppEvolutionProvider as jest.Mock).mock.results;
+    const provider = results[results.length - 1]?.value;
+    expect(provider.sendGroupMessage).toHaveBeenCalledWith(
+      'lia',
+      'instance-token',
+      'group@g.us',
+      expect.stringContaining('Oferta real'),
+    );
+    expect(provider.sendGroupMessage.mock.calls[0][3]).toContain(
+      'https://go.botlia.com.br/slug',
+    );
+    expect(provider.sendGroupMessage.mock.calls[0][3]).not.toContain(
+      'undefined',
+    );
   });
 });

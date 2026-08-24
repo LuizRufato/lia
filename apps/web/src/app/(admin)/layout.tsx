@@ -28,6 +28,7 @@ const MENU_ITEMS = [
   { name: "Publicações", href: "/publications", icon: Send },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Piloto Automático", href: "/autopilot", icon: Bot },
+  { name: "Templates", href: "/templates", icon: FileText },
   { name: "Integrações", href: "/integrations", icon: Store },
   { name: "Canais", href: "/channels", icon: MessagesSquare },
   { name: "Configurações", href: "/settings", icon: Settings },

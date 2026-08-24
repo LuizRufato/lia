@@ -49,9 +49,10 @@ export class PublisherProcessor extends WorkerHost {
                   include: {
                     monetization: true,
                     marketplace: true,
+                    product: true,
                     priceHistories: {
-                      orderBy: { createdAt: 'desc' },
-                      take: 1,
+                      orderBy: { observedAt: 'desc' },
+                      take: 20,
                     },
                   },
                 },
@@ -85,11 +86,11 @@ export class PublisherProcessor extends WorkerHost {
     });
     const isConfigured = Boolean(
       config &&
-        config.mode === 'AUTO' &&
-        config.enabledChannels.some((item) => item.channelId === channelId) &&
-        config.enabledMarketplaces.some(
-          (item) => item.marketplaceId === offer.marketplaceId,
-        ),
+      config.mode === 'AUTO' &&
+      config.enabledChannels.some((item) => item.channelId === channelId) &&
+      config.enabledMarketplaces.some(
+        (item) => item.marketplaceId === offer.marketplaceId,
+      ),
     );
     if (!channel || !isConfigured) {
       await this.prisma.publicationCandidate.update({
@@ -135,7 +136,8 @@ export class PublisherProcessor extends WorkerHost {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
         data:
-          result.reason === 'REJECTED_MONETIZATION' || result.reason === 'SAFETY_GOVERNOR'
+          result.reason === 'REJECTED_MONETIZATION' ||
+          result.reason === 'SAFETY_GOVERNOR'
             ? {
                 status: 'DEFERRED',
                 deferredReason: result.deferredReason || result.reason,
@@ -180,9 +182,10 @@ export class PublisherProcessor extends WorkerHost {
                   include: {
                     monetization: true,
                     marketplace: true,
+                    product: true,
                     priceHistories: {
-                      orderBy: { createdAt: 'desc' },
-                      take: 1,
+                      orderBy: { observedAt: 'desc' },
+                      take: 20,
                     },
                   },
                 },
@@ -192,7 +195,10 @@ export class PublisherProcessor extends WorkerHost {
         },
       },
     });
-    if (!candidate || candidate.evaluation.observation.offer.tenantId !== tenantId) {
+    if (
+      !candidate ||
+      candidate.evaluation.observation.offer.tenantId !== tenantId
+    ) {
       throw new UnrecoverableError('Controlled one-shot candidate not found.');
     }
 
@@ -201,7 +207,10 @@ export class PublisherProcessor extends WorkerHost {
     if (offer.marketplace.type === 'MERCADO_LIVRE') {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
-        data: { status: 'SKIPPED', deferredReason: 'MERCADO_LIVRE_PUBLICATION_BLOCKED' },
+        data: {
+          status: 'SKIPPED',
+          deferredReason: 'MERCADO_LIVRE_PUBLICATION_BLOCKED',
+        },
       });
       return { skipped: true, reason: 'MERCADO_LIVRE_PUBLICATION_BLOCKED' };
     }
@@ -209,15 +218,16 @@ export class PublisherProcessor extends WorkerHost {
       where: { tenantId },
       include: { enabledMarketplaces: true },
     });
-    const marketplaceIntegration = await this.prisma.marketplaceIntegration.findUnique({
-      where: {
-        tenantId_provider: {
-          tenantId,
-          provider: offer.marketplace.type,
+    const marketplaceIntegration =
+      await this.prisma.marketplaceIntegration.findUnique({
+        where: {
+          tenantId_provider: {
+            tenantId,
+            provider: offer.marketplace.type,
+          },
         },
-      },
-      select: { status: true },
-    });
+        select: { status: true },
+      });
     const channel = await this.prisma.channel.findFirst({
       where: {
         id: channelId,
@@ -227,27 +237,27 @@ export class PublisherProcessor extends WorkerHost {
       include: { tenant: { include: { channelIntegrations: true } } },
     });
 
-    const blocker =
-      !config
-        ? 'AUTOPILOT_CONFIG_NOT_FOUND'
-        : candidate.status !== 'PENDING' && candidate.status !== 'DEFERRED'
-          ? 'CANDIDATE_NOT_PENDING'
-          : candidate.evaluation.decision !== 'ELIGIBLE'
-            ? 'EVALUATION_NOT_ELIGIBLE'
-            : offer.status !== 'ACTIVE'
-              ? 'OFFER_NOT_ACTIVE'
-              : (candidate.evaluation.score?.toNumber() ?? 0) < config.minScore.toNumber()
-                ? 'SCORE_BELOW_MINIMUM'
-                : !config.enabledMarketplaces.some(
-                      (item) => item.marketplaceId === offer.marketplaceId,
-                    )
-                  ? 'MARKETPLACE_NOT_ENABLED'
-                  : marketplaceIntegration?.status !== 'CONNECTED'
-                    ? 'MARKETPLACE_INTEGRATION_UNHEALTHY'
-                : !offer.monetization ||
-                    offer.monetization.status !== 'VERIFIED' ||
-                    !offer.monetization.destinationUrl?.startsWith('https://')
-                  ? 'MONETIZATION_NOT_VERIFIED'
+    const blocker = !config
+      ? 'AUTOPILOT_CONFIG_NOT_FOUND'
+      : candidate.status !== 'PENDING' && candidate.status !== 'DEFERRED'
+        ? 'CANDIDATE_NOT_PENDING'
+        : candidate.evaluation.decision !== 'ELIGIBLE'
+          ? 'EVALUATION_NOT_ELIGIBLE'
+          : offer.status !== 'ACTIVE'
+            ? 'OFFER_NOT_ACTIVE'
+            : (candidate.evaluation.score?.toNumber() ?? 0) <
+                config.minScore.toNumber()
+              ? 'SCORE_BELOW_MINIMUM'
+              : !config.enabledMarketplaces.some(
+                    (item) => item.marketplaceId === offer.marketplaceId,
+                  )
+                ? 'MARKETPLACE_NOT_ENABLED'
+                : marketplaceIntegration?.status !== 'CONNECTED'
+                  ? 'MARKETPLACE_INTEGRATION_UNHEALTHY'
+                  : !offer.monetization ||
+                      offer.monetization.status !== 'VERIFIED' ||
+                      !offer.monetization.destinationUrl?.startsWith('https://')
+                    ? 'MONETIZATION_NOT_VERIFIED'
                     : !channel
                       ? 'CHANNEL_NOT_FOUND'
                       : !channel.enabled
@@ -280,7 +290,8 @@ export class PublisherProcessor extends WorkerHost {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
         data:
-          result.reason === 'REJECTED_MONETIZATION' || result.reason === 'SAFETY_GOVERNOR'
+          result.reason === 'REJECTED_MONETIZATION' ||
+          result.reason === 'SAFETY_GOVERNOR'
             ? {
                 status: 'DEFERRED',
                 deferredReason: result.deferredReason || result.reason,
@@ -333,13 +344,22 @@ export class PublisherProcessor extends WorkerHost {
     channel: any,
   ) {
     const existing = await this.prisma.publication.findUnique({
-      where: { candidateId_channelId: { candidateId: candidate.id, channelId: channel.id } },
+      where: {
+        candidateId_channelId: {
+          candidateId: candidate.id,
+          channelId: channel.id,
+        },
+      },
       select: { id: true, status: true, externalMessageId: true },
     });
     if (existing) {
       // No external retry is safe once a provider call may have happened.
       if (existing.status === 'PUBLISHED') {
-        return { skipped: true, published: true, reason: 'PUBLICATION_ALREADY_PUBLISHED' };
+        return {
+          skipped: true,
+          published: true,
+          reason: 'PUBLICATION_ALREADY_PUBLISHED',
+        };
       }
       if (existing.status === 'DELIVERY_UNKNOWN') {
         return { failed: true, reason: 'DELIVERY_UNKNOWN' };
@@ -363,10 +383,13 @@ export class PublisherProcessor extends WorkerHost {
         integration: whatsappIntegration,
         offer,
         observedAt: candidate.evaluation.observation.observedAt,
-        score: candidate.evaluation.score ? Number(candidate.evaluation.score) : 0,
+        score: candidate.evaluation.score
+          ? Number(candidate.evaluation.score)
+          : 0,
         category: candidate.evaluation.observation.category,
         sellerId:
-          (candidate.evaluation.observation.canonicalPayload as any)?.seller?.externalId || null,
+          (candidate.evaluation.observation.canonicalPayload as any)?.seller
+            ?.externalId || null,
       });
       if (!safety.allowed) {
         return {
@@ -516,6 +539,22 @@ export class PublisherProcessor extends WorkerHost {
           offer.title,
           offer.price,
           discountBps,
+          {
+            currentOriginalPriceCents:
+              offer.priceHistories?.[0]?.originalPriceCents ?? null,
+            currentObservedAt: candidate.evaluation.observation.observedAt,
+            previousPrices: (offer.priceHistories || [])
+              .slice(1)
+              .map((history: any) => ({
+                priceCents: history.priceCents,
+                observedAt: history.observedAt,
+              })),
+            salesCount: offer.priceHistories?.[0]?.salesCount ?? null,
+            rating: offer.priceHistories?.[0]?.rating ?? null,
+            marketplace:
+              offer.marketplace?.name || offer.marketplace?.type || 'Shopee',
+            category: candidate.evaluation.observation.category,
+          },
         );
       } else {
         throw new Error(`Provider ${channel.provider} not supported`);
@@ -528,7 +567,8 @@ export class PublisherProcessor extends WorkerHost {
           where: { id: publication.id },
           data: {
             status: 'DELIVERY_UNKNOWN',
-            errorReason: 'Provider não retornou messageId; entrega desconhecida.',
+            errorReason:
+              'Provider não retornou messageId; entrega desconhecida.',
           },
         });
         return { failed: true, reason: 'DELIVERY_UNKNOWN' };
