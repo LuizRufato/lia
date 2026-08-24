@@ -5,6 +5,14 @@ import type { Response } from 'express';
 
 describe('AuthController', () => {
   let controller: AuthController;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalCookieDomain = process.env.AUTH_COOKIE_DOMAIN;
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
+    if (originalCookieDomain === undefined) delete process.env.AUTH_COOKIE_DOMAIN;
+    else process.env.AUTH_COOKIE_DOMAIN = originalCookieDomain;
+  });
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -27,6 +35,8 @@ describe('AuthController', () => {
   });
 
   it('sets and clears the HttpOnly cookie using the same path', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.AUTH_COOKIE_DOMAIN = 'botlia.com.br';
     const response = { cookie: jest.fn() } as unknown as Response;
 
     await controller.login(
@@ -41,6 +51,9 @@ describe('AuthController', () => {
       'token-1',
       expect.objectContaining({
         httpOnly: true,
+        secure: true,
+        domain: 'botlia.com.br',
+        maxAge: 24 * 60 * 60 * 1000,
         path: '/',
         sameSite: 'strict',
       }),
@@ -52,6 +65,8 @@ describe('AuthController', () => {
       expect.objectContaining({
         expires: expect.any(Date),
         maxAge: 0,
+        secure: true,
+        domain: 'botlia.com.br',
         path: '/',
       }),
     );

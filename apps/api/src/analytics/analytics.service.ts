@@ -1,18 +1,33 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { getRedisConfig } from '@lia/core';
+import { getRedisConfig, startOfLocalDay } from '@lia/core';
 import { PrismaService } from '../prisma.service';
 
 @Injectable()
 export class AnalyticsService {
   private readonly redis: Redis;
+  private static readonly DEFAULT_TIMEZONE = 'America/Campo_Grande';
 
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
   ) {
     this.redis = new Redis(getRedisConfig().url);
+  }
+
+  private async getTenantTimezone(tenantId: string): Promise<string> {
+    const config = await this.prisma.autopilotConfig.findUnique({
+      where: { tenantId },
+      select: { timezone: true },
+    });
+    const timezone = config?.timezone || AnalyticsService.DEFAULT_TIMEZONE;
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+      return timezone;
+    } catch {
+      return AnalyticsService.DEFAULT_TIMEZONE;
+    }
   }
 
   async getRealtimeMetrics(tenantId: string) {
@@ -39,9 +54,9 @@ export class AnalyticsService {
       }
     }
 
-    // To get "Clicks Hoje" we need to query PostgreSQL for historical accuracy
-    const startOfDay = new Date();
-    startOfDay.setUTCHours(0, 0, 0, 0);
+    // Persist timestamps in UTC, but define the day in the tenant's local zone.
+    const timezone = await this.getTenantTimezone(tenantId);
+    const startOfDay = startOfLocalDay(new Date(), timezone);
 
     const [clicksToday, uniqueClicks, botsExcluded, publishedOffers] =
       await Promise.all([
@@ -52,7 +67,7 @@ export class AnalyticsService {
             classification: 'VALID',
           },
         }),
-        // A unique click is scoped to tracked link + visitor HMAC + UTC day.
+        // A unique click is scoped to tracked link + visitor HMAC + tenant-local day.
         // The raw IP is never stored or exposed.
         this.prisma.clickEvent
           .findMany({
@@ -157,8 +172,8 @@ export class AnalyticsService {
   }
 
   async getOverview(tenantId: string) {
-    const startOfDay = new Date();
-    startOfDay.setUTCHours(0, 0, 0, 0);
+    const timezone = await this.getTenantTimezone(tenantId);
+    const startOfDay = startOfLocalDay(new Date(), timezone);
 
     const conversionsToday = await this.prisma.marketplaceConversion.findMany({
       where: {
@@ -197,8 +212,10 @@ export class AnalyticsService {
     const today = summarize(conversionsToday);
 
     // Also get previous day for comparison
-    const startOfYesterday = new Date(startOfDay);
-    startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+    const startOfYesterday = startOfLocalDay(
+      new Date(startOfDay.getTime() - 1),
+      timezone,
+    );
 
     const conversionsYesterday =
       await this.prisma.marketplaceConversion.findMany({
