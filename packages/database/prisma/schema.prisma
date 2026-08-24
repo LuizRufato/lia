@@ -145,6 +145,10 @@ model MarketplaceIntegration {
   status                IntegrationStatus @default(NOT_CONNECTED)
   lastSyncAt            DateTime?
   lastSyncProcessedCount Int?
+  lastSyncFoundCount    Int?
+  lastSyncCreatedCount  Int?
+  lastSyncUpdatedCount  Int?
+  lastSyncIgnoredCount  Int?
   lastError             String?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
@@ -217,6 +221,7 @@ enum EvaluationDecision {
   REJECTED_FATIGUE
   REJECTED_DUPLICATE
   REJECTED_INSUFFICIENT_DATA
+  REJECTED_MARKETPLACE_POLICY
   ERROR
 }
 

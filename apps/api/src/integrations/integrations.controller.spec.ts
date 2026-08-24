@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
+import { MercadoLivreService } from './mercadolivre.service';
+import { MercadoLivreSyncService } from './mercadolivre-sync.service';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
@@ -34,6 +36,8 @@ describe('IntegrationsController Security', () => {
       controllers: [IntegrationsController],
       providers: [
         IntegrationsService,
+        { provide: MercadoLivreService, useValue: {} },
+        { provide: MercadoLivreSyncService, useValue: { syncNow: jest.fn() } },
         {
           provide: PrismaService,
           useValue: {
@@ -63,6 +67,10 @@ describe('IntegrationsController Security', () => {
           useValue: {
             add: jest.fn(),
           },
+        },
+        {
+          provide: getQueueToken('offer-processing'),
+          useValue: { add: jest.fn() },
         },
       ],
     }).compile();

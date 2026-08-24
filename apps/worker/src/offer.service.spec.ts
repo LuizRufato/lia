@@ -142,4 +142,38 @@ describe('OfferService historical processing', () => {
     ]);
     expect(candidates).toHaveLength(2);
   });
+
+  it('persists Mercado Livre observations without creating publication candidates', async () => {
+    const mlOffer = canonical(1000, '2026-08-01T10:00:00Z');
+    mlOffer.marketplace = 'MERCADO_LIVRE';
+    const candidateUpsert = jest.fn();
+    const prisma: any = {
+      offerObservation: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'ml-obs',
+          offerId: 'ml-offer',
+          observedAt: new Date('2026-08-01T10:00:00Z'),
+          canonicalPayload: mlOffer,
+          offer: { id: 'ml-offer', tenantId: 'tenant-1' },
+        }),
+      },
+      $transaction: async (callback: (tx: any) => Promise<unknown>) =>
+        callback({
+          priceHistory: {
+            findMany: jest.fn().mockResolvedValue([]),
+            upsert: jest.fn().mockResolvedValue({}),
+          },
+          publication: { count: jest.fn().mockResolvedValue(0) },
+          offerEvaluation: {
+            upsert: jest.fn().mockResolvedValue({ id: 'ml-evaluation' }),
+          },
+          publicationCandidate: { upsert: candidateUpsert },
+          offer: { update: jest.fn().mockResolvedValue({}) },
+        }),
+    };
+
+    await new OfferService(prisma).processObservation('ml-obs');
+
+    expect(candidateUpsert).not.toHaveBeenCalled();
+  });
 });

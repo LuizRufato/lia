@@ -1,0 +1,7 @@
+ALTER TYPE "EvaluationDecision" ADD VALUE IF NOT EXISTS 'REJECTED_MARKETPLACE_POLICY';
+
+ALTER TABLE "MarketplaceIntegration"
+  ADD COLUMN IF NOT EXISTS "lastSyncFoundCount" INTEGER,
+  ADD COLUMN IF NOT EXISTS "lastSyncCreatedCount" INTEGER,
+  ADD COLUMN IF NOT EXISTS "lastSyncUpdatedCount" INTEGER,
+  ADD COLUMN IF NOT EXISTS "lastSyncIgnoredCount" INTEGER;

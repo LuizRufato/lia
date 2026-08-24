@@ -9,12 +9,16 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { IntegrationsService } from './integrations.service';
+import { MercadoLivreSyncService } from './mercadolivre-sync.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('integrations')
 @UseGuards(JwtAuthGuard)
 export class IntegrationsController {
-  constructor(private readonly integrationsService: IntegrationsService) {}
+  constructor(
+    private readonly integrationsService: IntegrationsService,
+    private readonly mercadoLivreSyncService: MercadoLivreSyncService,
+  ) {}
 
   @Get('shopee')
   async getShopee(@Req() req: any) {
@@ -112,6 +116,11 @@ export class IntegrationsController {
       tenantId,
       body?.phoneNumber,
     );
+  }
+
+  @Post('mercadolivre/sync')
+  async syncMercadoLivre(@Req() req: any) {
+    return this.mercadoLivreSyncService.syncNow(req.user.tenantId);
   }
 
   @Get('whatsapp/safety')

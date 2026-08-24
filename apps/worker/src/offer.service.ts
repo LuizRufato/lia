@@ -62,7 +62,10 @@ export class OfferService {
       let nextDecision: string = 'ELIGIBLE';
       let reasons: string[] = ['Offer is eligible for publication'];
 
-      if (this.dedupRule.isDuplicate(canonicalOffer, previousPrice)) {
+      if (canonicalOffer.marketplace === 'MERCADO_LIVRE') {
+        nextDecision = 'REJECTED_MARKETPLACE_POLICY';
+        reasons = ['Mercado Livre permanece em ingestão somente até a calibração do score e monetização.'];
+      } else if (this.dedupRule.isDuplicate(canonicalOffer, previousPrice)) {
         nextDecision = 'REJECTED_DUPLICATE';
         reasons = ['No significant price drop'];
       } else if (breakdown.dataCoverage < 0.6) {

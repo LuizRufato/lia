@@ -4,6 +4,7 @@ import { IntegrationsController } from './integrations.controller';
 import { IntegrationsService } from './integrations.service';
 import { MercadoLivreController } from './mercadolivre.controller';
 import { MercadoLivreService } from './mercadolivre.service';
+import { MercadoLivreSyncService } from './mercadolivre-sync.service';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { WhatsAppWebhookController } from '../webhooks/whatsapp.controller';
@@ -19,6 +20,9 @@ import { WhatsAppWebhookController } from '../webhooks/whatsapp.controller';
     BullModule.registerQueue({
       name: 'whatsapp-webhooks',
     }),
+    BullModule.registerQueue({
+      name: 'offer-processing',
+    }),
   ],
   controllers: [
     IntegrationsController,
@@ -28,6 +32,7 @@ import { WhatsAppWebhookController } from '../webhooks/whatsapp.controller';
   providers: [
     IntegrationsService,
     MercadoLivreService,
+    MercadoLivreSyncService,
     PrismaService,
     ConfigService,
   ],

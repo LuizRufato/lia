@@ -197,6 +197,14 @@ export class PublisherProcessor extends WorkerHost {
     }
 
     const offer = candidate.evaluation.observation.offer;
+
+    if (offer.marketplace.type === 'MERCADO_LIVRE') {
+      await this.prisma.publicationCandidate.update({
+        where: { id: candidateId },
+        data: { status: 'SKIPPED', deferredReason: 'MERCADO_LIVRE_PUBLICATION_BLOCKED' },
+      });
+      return { skipped: true, reason: 'MERCADO_LIVRE_PUBLICATION_BLOCKED' };
+    }
     const config = await this.prisma.autopilotConfig.findUnique({
       where: { tenantId },
       include: { enabledMarketplaces: true },

@@ -36,4 +36,23 @@ describe("MercadoLivreAdapter", () => {
     expect(offer.commission.estimatedAmountCents).toBeUndefined();
     expect(offer.commission.rateBps).toBeUndefined();
   });
+
+  it("keeps only real HTTPS images and rejects missing required item fields", () => {
+    const offer = MercadoLivreAdapter.toCanonicalOffer({
+      id: "MLB1",
+      title: "Produto",
+      price: 10,
+      currency_id: "BRL",
+      permalink: "https://produto.mercadolivre.com.br/MLB-1",
+      pictures: [
+        { secure_url: "https://http2.mlstatic.com/real.jpg" },
+        { secure_url: "http://insecure.example/image.jpg" },
+      ],
+    });
+
+    expect(offer.product.images).toEqual([
+      "https://http2.mlstatic.com/real.jpg",
+    ]);
+    expect(() => MercadoLivreAdapter.toCanonicalOffer({ id: "MLB2" })).toThrow();
+  });
 });

@@ -10,6 +10,7 @@ function MercadoLivreIntegrationContent() {
   const [loading, setLoading] = useState(true);
   const [integration, setIntegration] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   useEffect(() => {
     loadIntegration();
@@ -50,6 +51,33 @@ function MercadoLivreIntegrationContent() {
       }
     } catch (err) {
       alert("Erro ao tentar autenticar.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleSync() {
+    if (submitting) return;
+    setSubmitting(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetchAuth("/integrations/mercadolivre/sync", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message = Array.isArray(data?.message)
+          ? data.message.join(", ")
+          : data?.message;
+        setSyncMessage(message || "Falha segura ao sincronizar Mercado Livre.");
+        return;
+      }
+      setSyncMessage(
+        `Sincronização concluída: ${data.foundCount} encontrados, ${data.processedCount} processados, ${data.createdCount} criados, ${data.updatedCount} atualizados e ${data.ignoredCount} ignorados.`,
+      );
+      await loadIntegration();
+    } catch {
+      setSyncMessage("Não foi possível concluir a sincronização agora.");
     } finally {
       setSubmitting(false);
     }
@@ -134,11 +162,10 @@ function MercadoLivreIntegrationContent() {
               <div className="flex gap-3">
                 <button
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm font-medium transition-colors"
-                  onClick={() =>
-                    alert("Sincronização manual será implementada na Fase 5B")
-                  }
+                  onClick={handleSync}
+                  disabled={submitting}
                 >
-                  Sincronizar Agora
+                  {submitting ? "Sincronizando..." : "Sincronizar Agora"}
                 </button>
                 <button
                   onClick={handleDisconnect}
@@ -158,6 +185,12 @@ function MercadoLivreIntegrationContent() {
               </button>
             )}
           </div>
+        )}
+
+        {syncMessage && (
+          <p className="mt-4 text-sm text-blue-200 bg-blue-900/20 rounded-lg p-3">
+            {syncMessage}
+          </p>
         )}
 
         {isConnected && (

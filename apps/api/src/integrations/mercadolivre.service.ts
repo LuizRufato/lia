@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
-import { encryptSecret } from '@lia/integrations';
+import { decryptSecret, encryptSecret, getEncryptionKey } from '@lia/integrations';
 import { randomBytes, createHash } from 'crypto';
 import Redis from 'ioredis';
 import { getRedisConfig } from '@lia/core';
@@ -39,6 +39,11 @@ export class MercadoLivreService {
       status: integration.status,
       meliUserId: integration.publicIdentifier,
       lastSyncAt: integration.lastSyncAt,
+      lastSyncFoundCount: integration.lastSyncFoundCount,
+      lastSyncCreatedCount: integration.lastSyncCreatedCount,
+      lastSyncUpdatedCount: integration.lastSyncUpdatedCount,
+      lastSyncIgnoredCount: integration.lastSyncIgnoredCount,
+      lastSyncProcessedCount: integration.lastSyncProcessedCount,
       lastError: integration.lastError,
       expiresAt: integration.expiresAt,
     };
@@ -324,6 +329,49 @@ export class MercadoLivreService {
         end
       `;
       await this.redis.eval(luaScript, 1, lockKey, ownerToken);
+    }
+  }
+
+  async getAccessTokenForApi(tenantId: string): Promise<string> {
+    let integration = await this.prisma.marketplaceIntegration.findUnique({
+      where: { tenantId_provider: { tenantId, provider: 'MERCADO_LIVRE' } },
+    });
+
+    if (
+      !integration ||
+      integration.status !== 'CONNECTED' ||
+      !integration.encryptedSecret ||
+      !integration.iv ||
+      !integration.authTag
+    ) {
+      throw new BadRequestException('Mercado Livre não está conectado.');
+    }
+
+    const refreshWindowMs = 60_000;
+    if (!integration.expiresAt || integration.expiresAt.getTime() <= Date.now() + refreshWindowMs) {
+      await this.refreshAccessToken(tenantId);
+      integration = await this.prisma.marketplaceIntegration.findUnique({
+        where: { tenantId_provider: { tenantId, provider: 'MERCADO_LIVRE' } },
+      });
+    }
+
+    if (
+      !integration?.encryptedSecret ||
+      !integration.iv ||
+      !integration.authTag
+    ) {
+      throw new BadRequestException('Token do Mercado Livre indisponível.');
+    }
+
+    try {
+      return decryptSecret(
+        integration.encryptedSecret,
+        integration.iv,
+        integration.authTag,
+        getEncryptionKey(),
+      );
+    } catch {
+      throw new BadRequestException('Não foi possível descriptografar o token do Mercado Livre.');
     }
   }
 }

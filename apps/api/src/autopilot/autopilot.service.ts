@@ -405,6 +405,10 @@ export class AutopilotService {
     });
     if (existingPublication) blockers.push('PUBLICATION_ALREADY_EXISTS');
 
+    if (offer?.marketplace?.type === 'MERCADO_LIVRE') {
+      blockers.push('MERCADO_LIVRE_PUBLICATION_BLOCKED');
+    }
+
     // Reuse the real decision brain for schedule, interval, commission,
     // integration and channel-policy checks. The one-shot is explicit, so it
     // uses an ephemeral AUTO snapshot and never persists that mode.
