@@ -81,4 +81,27 @@ describe("ShopeeAffiliateClient", () => {
       "Shopee Rate Limit Exceeded (10030)",
     );
   });
+
+  it("should send conversion pagination limit and cursor as request variables", async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        data: {
+          conversionReport: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, limit: 500 },
+          },
+        },
+      },
+    });
+
+    await client.getConversionReport(1, 2, 500, "cursor-page-2");
+
+    const [, bodyStr] = mockedAxios.post.mock.calls[0];
+    expect(JSON.parse(bodyStr as string).variables).toEqual({
+      purchaseTimeStart: 1,
+      purchaseTimeEnd: 2,
+      limit: 500,
+      scrollId: "cursor-page-2",
+    });
+  });
 });

@@ -28,6 +28,9 @@ describe("Shopee conversion window", () => {
     expect(isRetryableShopeeConversionError(new Error("request timeout"))).toBe(
       true,
     );
+    expect(isRetryableShopeeConversionError(new Error("cursor expired"))).toBe(
+      true,
+    );
     expect(isRetryableShopeeConversionError({ status: 400 })).toBe(false);
   });
 });

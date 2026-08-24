@@ -1,4 +1,6 @@
 export const SHOPEE_CONVERSION_INTERVAL_MS = 5 * 60 * 1000;
+export const SHOPEE_CONVERSION_CURSOR_DELAY_MS = 20 * 1000;
+export const SHOPEE_CONVERSION_MAX_PAGES = 50;
 export const SHOPEE_CONVERSION_OVERLAP_SECONDS = 15 * 60;
 export const SHOPEE_CONVERSION_INITIAL_LOOKBACK_SECONDS = 7 * 24 * 60 * 60;
 
@@ -42,6 +44,13 @@ export function isRetryableShopeeConversionError(error: unknown): boolean {
   const code = String(candidate?.code ?? "").toUpperCase();
   const status = Number(candidate?.status);
   const message = String(candidate?.message ?? "").toLowerCase();
+  const isExpiredCursor =
+    (message.includes("scrollid") ||
+      message.includes("scroll_id") ||
+      message.includes("cursor")) &&
+    (message.includes("expire") ||
+      message.includes("invalid") ||
+      message.includes("not found"));
 
   return (
     code === "10030" ||
@@ -50,6 +59,7 @@ export function isRetryableShopeeConversionError(error: unknown): boolean {
     status >= 500 ||
     message.includes("rate limit") ||
     message.includes("timeout") ||
-    message.includes("timed out")
+    message.includes("timed out") ||
+    isExpiredCursor
   );
 }

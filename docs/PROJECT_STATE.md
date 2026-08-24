@@ -3,47 +3,58 @@
 Última atualização: 2026-08-23
 
 ## Funcionando (Fase 0 Concluída)
-* Estrutura de pastas do monorepo criada.
-* Documentação base inicializada e atualizada.
-* Git configurado (Branch principal: `main`).
-* Repositório remoto configurado: `https://github.com/LuizRufato/lia` (`origin`).
-* Push inicial já realizado.
-* Docker Desktop configurado com WSL 2 e SVM operacionais.
-* Contêineres PostgreSQL e Redis configurados e operantes localmente.
-* Serviços limitados a `127.0.0.1` e healthchecks aplicados no `docker-compose.yml`.
-* Repositório Git configurado com `.gitignore` devidamente estruturado. Nenhum secret ou `.env` real está rastreado.
+
+- Estrutura de pastas do monorepo criada.
+- Documentação base inicializada e atualizada.
+- Git configurado (Branch principal: `main`).
+- Repositório remoto configurado: `https://github.com/LuizRufato/lia` (`origin`).
+- Push inicial já realizado.
+- Docker Desktop configurado com WSL 2 e SVM operacionais.
+- Contêineres PostgreSQL e Redis configurados e operantes localmente.
+- Serviços limitados a `127.0.0.1` e healthchecks aplicados no `docker-compose.yml`.
+- Repositório Git configurado com `.gitignore` devidamente estruturado. Nenhum secret ou `.env` real está rastreado.
 
 ## Parcial
-* Nenhuma pendência da Fase 0.
+
+- Nenhuma pendência da Fase 0.
 
 ## Aguardando credenciais / Ações do Usuário
-* Nenhuma ação necessária no momento.
+
+- Nenhuma ação necessária no momento.
 
 ## Não iniciado
-* Módulos, Tracker, Shopee, ML, WhatsApp, Telegram, etc.
+
+- Módulos, Tracker, Shopee, ML, WhatsApp, Telegram, etc.
 
 ## Problemas conhecidos
-* Build local do Web pode falhar sem acesso à Google Fonts; o código não foi alterado para contornar isso nesta fase.
+
+- Build local do Web pode falhar sem acesso à Google Fonts; o código não foi alterado para contornar isso nesta fase.
 
 ## Estado atual — Tracker Intelligence / Analytics (P0.5)
-* `/analytics` consome `/analytics/realtime` com polling autenticado de 3 segundos.
-* Cliques válidos, únicos por link/visitante-HMAC/dia UTC, produtos, timeline e atividade recente são exibidos sem IP bruto.
-* Crawlers de preview recebem Open Graph real e não geram `ClickEvent`; navegadores humanos mantêm o redirect 302 e o enfileiramento assíncrono.
-* Migration aditiva `20260823100000_tracker_click_intelligence` adiciona classificação de inteligência, sistema operacional e referrer normalizado.
-* O E2E real anterior permanece como única publicação/mensagem real; nenhum novo clique ou envio foi gerado nesta fase.
+
+- `/analytics` consome `/analytics/realtime` com polling autenticado de 3 segundos.
+- Cliques válidos, únicos por link/visitante-HMAC/dia UTC, produtos, timeline e atividade recente são exibidos sem IP bruto.
+- Crawlers de preview recebem Open Graph real e não geram `ClickEvent`; navegadores humanos mantêm o redirect 302 e o enfileiramento assíncrono.
+- Migration aditiva `20260823100000_tracker_click_intelligence` adiciona classificação de inteligência, sistema operacional e referrer normalizado.
+- O E2E real anterior permanece como única publicação/mensagem real; nenhum novo clique ou envio foi gerado nesta fase.
 
 ## Estado atual — Smart Link Preview com imagem (P0.6)
-* `Offer.imageUrl` persiste somente uma URL HTTPS real fornecida pelo marketplace.
-* Migration aditiva `20260823120000_offer_image_url` faz backfill seguro a partir das observações já existentes, sem buscar URLs externamente.
-* O Tracker emite `og:image`/`twitter:image` apenas para URLs HTTPS válidas; preview crawlers continuam sem `ClickEvent`.
-* Nenhum clique artificial, envio WhatsApp ou mudança no Analytics realtime/Autopilot foi feito nesta fase.
+
+- `Offer.imageUrl` persiste somente uma URL HTTPS real fornecida pelo marketplace.
+- Migration aditiva `20260823120000_offer_image_url` faz backfill seguro a partir das observações já existentes, sem buscar URLs externamente.
+- O Tracker emite `og:image`/`twitter:image` apenas para URLs HTTPS válidas; preview crawlers continuam sem `ClickEvent`.
+- Nenhum clique artificial, envio WhatsApp ou mudança no Analytics realtime/Autopilot foi feito nesta fase.
 
 ## Estado atual — Shopee Conversion Sync incremental (P1.0)
-* Scheduler de conversões reduzido de 30 para 5 minutos.
-* Após a primeira janela de 7 dias, cada execução consulta somente desde o último sucesso com sobreposição de 15 minutos.
-* `conversionId` continua protegido por upsert; estados ESTIMATED/PENDING/CONFIRMED/CANCELLED continuam atualizáveis sem duplicação.
-* Limiter da fila usa 20 segundos para permanecer abaixo do TTL aproximado de 30 segundos do `scrollId`; falhas 10030/429/timeout permanecem retryable.
-* O ponto seguro para futuros eventos `SHOPEE_CONVERSION_CREATED/UPDATED` é imediatamente após o upsert da conversão, antes do processamento de pedidos/itens. Nenhuma mensagem ou alerta é emitido nesta fase.
+
+- Scheduler de conversões reduzido de 30 para 5 minutos.
+- Após a primeira janela de 7 dias, cada execução consulta somente desde o último sucesso com sobreposição de 15 minutos.
+- `conversionId` continua protegido por upsert; estados ESTIMATED/PENDING/CONFIRMED/CANCELLED continuam atualizáveis sem duplicação.
+- Limiter da fila usa 20 segundos para permanecer abaixo do TTL aproximado de 30 segundos do `scrollId`; falhas 10030/429/timeout permanecem retryable.
+- A continuação da paginação permanece no mesmo job, com no máximo uma chamada Shopee ativa; a próxima chamada é temporizada antes da persistência pesada da página anterior terminar.
+- `hasNextPage=true` sem `scrollId`, erro de cursor expirado e guarda de páginas falham sem checkpoint; retries reiniciam a janela sem reutilizar cursor.
+- O request mantém `limit=500` por página. Não foi confirmado um máximo oficial público para esse campo na documentação oficial acessível; portanto, o risco de volume acima de 50 páginas permanece explicitamente protegido por falha segura.
+- O ponto seguro para futuros eventos `SHOPEE_CONVERSION_CREATED/UPDATED` é imediatamente após o upsert da conversão, antes do processamento de pedidos/itens. Nenhuma mensagem ou alerta é emitido nesta fase.
 
 ## Fases do Projeto
 
@@ -98,15 +109,18 @@
   - ✅ Protocolos inseguros rejeitados sem proxy ou placeholder
 
 ## Próximos Passos
+
 - Extensão futura de Projects/templates, quando priorizada pelo usuário.
 
 ## Integrações
+
 Shopee: Conexão estrutural completa e homologada. (Aguardando usuário testar no navegador)
 Mercado Livre: Não conectada (E2E pendente)
 Telegram: Congelado
 WhatsApp: Evolution lifecycle, grupos e Safety Governor implementados; envio real permanece controlado e não foi executado nesta fase.
 
 ## Últimos testes
-* `docker compose config` validado.
-* Teste de conexão no PostgreSQL e Redis realizados.
-* Status dos healthchecks dos contêineres validados (healthy).
+
+- `docker compose config` validado.
+- Teste de conexão no PostgreSQL e Redis realizados.
+- Status dos healthchecks dos contêineres validados (healthy).

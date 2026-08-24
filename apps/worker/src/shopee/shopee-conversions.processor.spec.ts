@@ -1,13 +1,21 @@
 const mockGetConversionReport = jest.fn();
 
 jest.mock('@lia/integrations', () => ({
+  SHOPEE_CONVERSION_CURSOR_DELAY_MS: 0,
+  SHOPEE_CONVERSION_MAX_PAGES: 50,
   decryptSecret: jest.fn().mockReturnValue('secret'),
   isRetryableShopeeConversionError: jest.fn((error: any) => {
     const message = String(error?.message ?? '').toLowerCase();
     return (
       error?.code === 10030 ||
+      error?.status === 429 ||
+      Number(error?.status) >= 500 ||
       message.includes('rate limit') ||
-      message.includes('timeout')
+      message.includes('timeout') ||
+      (message.includes('scrollid') &&
+        (message.includes('expire') ||
+          message.includes('invalid') ||
+          message.includes('cursor')))
     );
   }),
   ShopeeAffiliateClient: jest.fn().mockImplementation(() => ({
@@ -18,7 +26,6 @@ jest.mock('@lia/integrations', () => ({
 import { ShopeeConversionsProcessor } from './shopee-conversions.processor';
 
 describe('ShopeeConversionsProcessor', () => {
-  const queue = { add: jest.fn() };
   let prisma: any;
   let processor: ShopeeConversionsProcessor;
 
@@ -98,11 +105,9 @@ describe('ShopeeConversionsProcessor', () => {
         upsert: jest.fn().mockResolvedValue({ id: 'item-db-1' }),
       },
     };
-    processor = new ShopeeConversionsProcessor(
-      prisma,
-      { get: jest.fn().mockReturnValue('encryption-key') } as any,
-      queue as any,
-    );
+    processor = new ShopeeConversionsProcessor(prisma, {
+      get: jest.fn().mockReturnValue('encryption-key'),
+    } as any);
   });
 
   it('upserts conversions idempotently and excludes cancelled orders from confirmed commission', async () => {
@@ -164,6 +169,239 @@ describe('ShopeeConversionsProcessor', () => {
     expect(secondUpdate.attributionStatus).toBeUndefined();
     expect(secondUpdate.attributionKey).toBeUndefined();
     expect(secondUpdate.affiliateLinkId).toBeUndefined();
+  });
+
+  it('fetches the next page before the current page finishes persistence', async () => {
+    jest.useFakeTimers();
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<{ id: string }>((resolve) => {
+      releasePersistence = () => resolve({ id: 'conversion-db-1' });
+    });
+    const secondNode = { ...conversionNode, conversionId: 'conversion-2' };
+    mockGetConversionReport
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [conversionNode],
+            pageInfo: { hasNextPage: true, scrollId: 'cursor-1', limit: 500 },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [secondNode],
+            pageInfo: { hasNextPage: false, scrollId: undefined, limit: 500 },
+          },
+        },
+      });
+    prisma.marketplaceConversion.upsert.mockImplementationOnce(
+      () => persistenceGate,
+    );
+
+    const processing = processor.process({
+      id: 'job-pipeline',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any);
+
+    try {
+      await jest.runOnlyPendingTimersAsync();
+      expect(mockGetConversionReport).toHaveBeenCalledTimes(2);
+      expect(prisma.marketplaceConversion.upsert).toHaveBeenCalledTimes(1);
+
+      releasePersistence();
+      await processing;
+
+      expect(prisma.marketplaceIntegration.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            lastConversionSyncAt: new Date(2 * 1000),
+            lastConversionError: null,
+          }),
+        }),
+      );
+    } finally {
+      releasePersistence();
+      await processing.catch(() => undefined);
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not checkpoint when hasNextPage is true without a cursor', async () => {
+    mockGetConversionReport.mockReset().mockResolvedValueOnce({
+      data: {
+        conversionReport: {
+          nodes: [conversionNode],
+          pageInfo: { hasNextPage: true, scrollId: undefined, limit: 500 },
+        },
+      },
+    });
+
+    await expect(
+      processor.process({
+        id: 'job-missing-cursor',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toThrow('hasNextPage=true without scrollId');
+
+    expect(prisma.marketplaceIntegration.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionSyncAt: expect.any(Date),
+        }),
+      }),
+    );
+  });
+
+  it('restarts a legacy cursor job from the root after cursor expiry', async () => {
+    const error = new Error('invalid or expired scrollId');
+    const updateData = jest.fn().mockResolvedValue(undefined);
+    mockGetConversionReport.mockReset().mockRejectedValueOnce(error);
+
+    await expect(
+      processor.process({
+        id: 'job-expired-cursor',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+          scrollId: 'expired-cursor',
+          pageCount: 1,
+        },
+        updateData,
+      } as any),
+    ).rejects.toThrow('invalid or expired scrollId');
+
+    expect(updateData).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      purchaseTimeStart: 1,
+      purchaseTimeEnd: 2,
+    });
+    expect(prisma.marketplaceIntegration.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionSyncAt: expect.any(Date),
+        }),
+      }),
+    );
+  });
+
+  it('retries an expired continuation cursor from the root window', async () => {
+    const error = new Error('invalid or expired scrollId cursor');
+    mockGetConversionReport
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [conversionNode],
+            pageInfo: { hasNextPage: true, scrollId: 'cursor-1', limit: 500 },
+          },
+        },
+      })
+      .mockRejectedValueOnce(error);
+
+    await expect(
+      processor.process({
+        id: 'job-expired-continuation',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toBe(error);
+
+    expect(prisma.marketplaceIntegration.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionSyncAt: expect.any(Date),
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ['429', Object.assign(new Error('rate limit exceeded'), { status: 429 })],
+    ['timeout', new Error('request timeout')],
+    ['5xx', Object.assign(new Error('upstream failure'), { status: 503 })],
+  ])(
+    'does not checkpoint after a %s on a continuation page',
+    async (_label, error) => {
+      mockGetConversionReport
+        .mockReset()
+        .mockResolvedValueOnce({
+          data: {
+            conversionReport: {
+              nodes: [conversionNode],
+              pageInfo: { hasNextPage: true, scrollId: 'cursor-1', limit: 500 },
+            },
+          },
+        })
+        .mockRejectedValueOnce(error);
+
+      await expect(
+        processor.process({
+          id: `job-${_label}`,
+          data: {
+            tenantId: 'tenant-1',
+            purchaseTimeStart: 1,
+            purchaseTimeEnd: 2,
+          },
+        } as any),
+      ).rejects.toBe(error);
+
+      expect(prisma.marketplaceIntegration.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            lastConversionSyncAt: expect.any(Date),
+          }),
+        }),
+      );
+    },
+  );
+
+  it('fails safely instead of succeeding when the page guard is reached', async () => {
+    let requestCount = 0;
+    mockGetConversionReport.mockReset().mockImplementation(async () => {
+      requestCount++;
+      return {
+        data: {
+          conversionReport: {
+            nodes: [],
+            pageInfo: {
+              hasNextPage: true,
+              scrollId: `cursor-${requestCount}`,
+              limit: 500,
+            },
+          },
+        },
+      };
+    });
+
+    await expect(
+      processor.process({
+        id: 'job-page-guard',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toThrow('page guard reached');
+
+    expect(requestCount).toBe(51);
+    expect(prisma.marketplaceIntegration.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionSyncAt: expect.any(Date),
+        }),
+      }),
+    );
   });
 
   it('retries a Shopee rate-limit response and records the safe error', async () => {
