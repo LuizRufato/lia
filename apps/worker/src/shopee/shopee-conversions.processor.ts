@@ -1,6 +1,8 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job, UnrecoverableError } from 'bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -50,6 +52,9 @@ export class ShopeeConversionsProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    @Optional()
+    @InjectQueue('admin-alerts')
+    private readonly adminAlertsQueue?: Queue,
   ) {
     super();
   }
@@ -535,7 +540,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
     };
 
     try {
-      await this.prisma.adminAlert.upsert({
+      const alert = await this.prisma.adminAlert.upsert({
         where: { dedupeKey },
         create: {
           tenantId,
@@ -547,7 +552,14 @@ export class ShopeeConversionsProcessor extends WorkerHost {
           payload,
         },
         update: {},
+        select: {
+          id: true,
+          createdAt: true,
+          deliveryStatus: true,
+        },
       });
+
+      await this.enqueueAdminAlert(tenantId, alert);
     } catch (error: any) {
       const alertError = new Error(
         `Admin alert persistence failed: ${error?.message || error}`,
@@ -556,6 +568,76 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       (alertError as any).cause = error;
       throw alertError;
     }
+  }
+
+  private async enqueueAdminAlert(
+    tenantId: string,
+    alert: { id: string; createdAt: Date; deliveryStatus: string },
+  ): Promise<void> {
+    if (!this.adminAlertsQueue || alert.deliveryStatus === 'SENT') return;
+
+    const config = await this.prisma.adminAlertConfig.findUnique({
+      where: { tenantId },
+      select: {
+        enabled: true,
+        newShopeeSaleEnabled: true,
+        encryptedRecipient: true,
+        recipientIv: true,
+        recipientAuthTag: true,
+        adminWhatsappIntegrationId: true,
+        enabledAt: true,
+      },
+    });
+
+    if (
+      !config?.enabled ||
+      !config.newShopeeSaleEnabled ||
+      !config.encryptedRecipient ||
+      !config.recipientIv ||
+      !config.recipientAuthTag ||
+      !config.adminWhatsappIntegrationId ||
+      !config.enabledAt ||
+      alert.createdAt < config.enabledAt
+    ) {
+      return;
+    }
+
+    const sender = await this.prisma.channelIntegration.findFirst({
+      where: {
+        id: config.adminWhatsappIntegrationId,
+        tenantId,
+        provider: 'WHATSAPP',
+        transport: 'WEB_UNOFFICIAL',
+        status: 'CONNECTED',
+        externalInstanceName: { not: null },
+        encryptedAccessToken: { not: null },
+        tokenIv: { not: null },
+        tokenAuthTag: { not: null },
+      },
+      select: { id: true },
+    });
+    if (!sender) return;
+
+    const pending = await this.prisma.adminAlert.updateMany({
+      where: {
+        id: alert.id,
+        deliveryStatus: { in: ['NOT_REQUESTED', 'PENDING'] },
+      },
+      data: { deliveryStatus: 'PENDING', lastDeliveryError: null },
+    });
+    if (pending.count === 0) return;
+
+    await this.adminAlertsQueue.add(
+      'deliver-admin-alert',
+      { alertId: alert.id },
+      {
+        jobId: `admin-alert:${alert.id}`,
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 20000 },
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    );
   }
 
   @OnWorkerEvent('failed')

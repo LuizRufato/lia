@@ -7,6 +7,11 @@ export class UpdateAdminAlertConfigDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  adminWhatsappIntegrationId?: string | null;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(40)
   recipient?: string;
 

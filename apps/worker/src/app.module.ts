@@ -25,6 +25,7 @@ import { ShopeeConversionsSchedulerService } from './shopee/shopee-conversions.s
 import { getBullMqRedisConnection } from '@lia/core';
 import { EvolutionReconciliationService } from './whatsapp/evolution-reconciliation.service';
 import { WhatsAppSafetyGovernor } from './publisher/whatsapp-safety-governor';
+import { AdminAlertsProcessor } from './admin-alerts/admin-alerts.processor';
 
 @Module({
   imports: [
@@ -84,6 +85,15 @@ import { WhatsAppSafetyGovernor } from './publisher/whatsapp-safety-governor';
         removeOnComplete: true,
       },
     }),
+    BullModule.registerQueue({
+      name: 'admin-alerts',
+      defaultJobOptions: {
+        attempts: 5,
+        backoff: { type: 'exponential', delay: 20000 },
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    }),
     TelegramModule,
   ],
   controllers: [],
@@ -104,6 +114,7 @@ import { WhatsAppSafetyGovernor } from './publisher/whatsapp-safety-governor';
     ShopeeConversionsSchedulerService,
     EvolutionReconciliationService,
     WhatsAppSafetyGovernor,
+    AdminAlertsProcessor,
   ],
 })
 export class AppModule {}

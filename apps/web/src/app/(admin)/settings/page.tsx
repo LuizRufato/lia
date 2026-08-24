@@ -16,6 +16,9 @@ type AdminAlertConfig = {
   enabled: boolean;
   hasRecipient: boolean;
   recipientMasked: string | null;
+  adminWhatsappIntegrationId: string | null;
+  senderIntegrationName: string | null;
+  senderIntegrations: Array<{ id: string; name: string }>;
   newShopeeSaleEnabled: boolean;
   commissionConfirmedEnabled: boolean;
   saleCancelledEnabled: boolean;
@@ -48,6 +51,7 @@ export default function SettingsPage() {
   const [alertConfig, setAlertConfig] = useState<AdminAlertConfig | null>(null);
   const [alertLoading, setAlertLoading] = useState(true);
   const [alertSaving, setAlertSaving] = useState(false);
+  const [alertTesting, setAlertTesting] = useState(false);
   const [alertError, setAlertError] = useState<string | null>(null);
   const [alertSaved, setAlertSaved] = useState(false);
   const [recipient, setRecipient] = useState("");
@@ -105,6 +109,8 @@ export default function SettingsPage() {
     try {
       const body: Record<string, unknown> = {
         enabled: alertConfig.enabled,
+        adminWhatsappIntegrationId:
+          alertConfig.adminWhatsappIntegrationId || null,
         newShopeeSaleEnabled: alertConfig.newShopeeSaleEnabled,
         commissionConfirmedEnabled: alertConfig.commissionConfirmedEnabled,
         saleCancelledEnabled: alertConfig.saleCancelledEnabled,
@@ -135,6 +141,27 @@ export default function SettingsPage() {
       setAlertError(err?.message || "Não foi possível salvar os alertas.");
     } finally {
       setAlertSaving(false);
+    }
+  };
+
+  const sendTestAlert = async () => {
+    if (!alertConfig || alertTesting) return;
+    setAlertError(null);
+    setAlertSaved(false);
+    setAlertTesting(true);
+    try {
+      const res = await fetchAuth("/admin-alerts/config/test", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message || "Não foi possível enviar o teste.");
+      }
+      setAlertSaved(true);
+    } catch (err: any) {
+      setAlertError(err?.message || "Não foi possível enviar o teste.");
+    } finally {
+      setAlertTesting(false);
     }
   };
 
@@ -280,6 +307,40 @@ export default function SettingsPage() {
 
             <div className="border-t pt-6">
               <div className="flex items-center gap-2 mb-2">
+                <ShieldCheck className="w-4 h-4 text-gray-400" />
+                <h3 className="font-semibold text-gray-900">
+                  WhatsApp remetente
+                </h3>
+              </div>
+              <select
+                value={alertConfig.adminWhatsappIntegrationId || ""}
+                onChange={(event) =>
+                  setAlertConfig({
+                    ...alertConfig,
+                    adminWhatsappIntegrationId: event.target.value || null,
+                    senderIntegrationName:
+                      alertConfig.senderIntegrations.find(
+                        (integration) => integration.id === event.target.value,
+                      )?.name || null,
+                  })
+                }
+                className="w-full border border-gray-300 rounded-md p-2.5 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">Selecione uma instância conectada</option>
+                {alertConfig.senderIntegrations.map((integration) => (
+                  <option key={integration.id} value={integration.id}>
+                    {integration.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-2">
+                A instância Evolution selecionada será usada somente para
+                alertas privados.
+              </p>
+            </div>
+
+            <div className="border-t pt-6">
+              <div className="flex items-center gap-2 mb-2">
                 <Phone className="w-4 h-4 text-gray-400" />
                 <h3 className="font-semibold text-gray-900">
                   WhatsApp autorizado
@@ -371,6 +432,20 @@ export default function SettingsPage() {
             )}
 
             <div className="flex justify-end border-t pt-6">
+              <button
+                type="button"
+                onClick={sendTestAlert}
+                disabled={
+                  alertTesting ||
+                  !alertConfig.enabled ||
+                  !alertConfig.hasRecipient ||
+                  !alertConfig.adminWhatsappIntegrationId
+                }
+                className="mr-3 inline-flex items-center gap-2 rounded-md border border-blue-200 px-4 py-2.5 text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+              >
+                {alertTesting && <Loader2 className="w-4 h-4 animate-spin" />}
+                Enviar mensagem de teste
+              </button>
               <button
                 type="submit"
                 disabled={alertSaving}

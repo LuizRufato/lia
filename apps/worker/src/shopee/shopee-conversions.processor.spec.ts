@@ -303,6 +303,55 @@ describe('ShopeeConversionsProcessor', () => {
     );
   });
 
+  it('enqueues one deterministic admin-alert job for an eligible sale', async () => {
+    const jobs = new Map<string, unknown>();
+    const adminAlertsQueue = {
+      add: jest.fn(async (_name: string, data: any, options: any) => {
+        jobs.set(String(options.jobId), data);
+        return { id: options.jobId };
+      }),
+    };
+    prisma.adminAlert.upsert.mockResolvedValue({
+      id: 'alert-db-1',
+      createdAt: new Date('2026-08-24T20:01:00.000Z'),
+      deliveryStatus: 'NOT_REQUESTED',
+    });
+    prisma.adminAlertConfig = {
+      findUnique: jest.fn().mockResolvedValue({
+        enabled: true,
+        newShopeeSaleEnabled: true,
+        encryptedRecipient: 'encrypted-recipient',
+        recipientIv: 'recipient-iv',
+        recipientAuthTag: 'recipient-tag',
+        adminWhatsappIntegrationId: 'sender-a',
+        enabledAt: new Date('2026-08-24T20:00:00.000Z'),
+      }),
+    };
+    prisma.channelIntegration = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'sender-a' }),
+    };
+    prisma.adminAlert.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+
+    const queuedProcessor = new ShopeeConversionsProcessor(
+      prisma,
+      { get: jest.fn().mockReturnValue('encryption-key') } as any,
+      adminAlertsQueue as any,
+    );
+    const job = {
+      id: 'job-queue',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any;
+
+    await queuedProcessor.process(job);
+    await queuedProcessor.process(job);
+
+    expect(prisma.adminAlert.upsert).toHaveBeenCalledTimes(2);
+    expect(adminAlertsQueue.add).toHaveBeenCalledTimes(2);
+    expect(jobs.size).toBe(1);
+    expect([...jobs.keys()][0]).toBe('admin-alert:alert-db-1');
+    expect([...jobs.values()][0]).toEqual({ alertId: 'alert-db-1' });
+  });
+
   it('allows UNATTRIBUTED to become ATTRIBUTED but never regresses it', async () => {
     prisma.marketplaceConversion.findUnique
       .mockResolvedValueOnce({

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminAlertsService } from './admin-alerts.service';
 import { UpdateAdminAlertConfigDto } from './dto/update-admin-alert-config.dto';
@@ -19,6 +27,14 @@ export class AdminAlertsController {
       req.user.tenantId,
       req.user.role,
       body,
+    );
+  }
+
+  @Post('test')
+  sendTest(@Req() req: any) {
+    return this.adminAlertsService.sendTestMessage(
+      req.user.tenantId,
+      req.user.role,
     );
   }
 }

@@ -1,5 +1,9 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { decryptSecret, encryptSecret } from '@lia/integrations';
+import {
+  decryptSecret,
+  encryptSecret,
+  WhatsAppEvolutionProvider,
+} from '@lia/integrations';
 import { AdminAlertsService } from './admin-alerts.service';
 
 describe('AdminAlertsService', () => {
@@ -14,10 +18,15 @@ describe('AdminAlertsService', () => {
 
   beforeEach(() => {
     process.env.INTEGRATION_ENCRYPTION_KEY = encryptionKey;
+    process.env.EVOLUTION_API_URL = 'http://evolution.test';
     prisma = {
       adminAlertConfig: {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn(),
+      },
+      channelIntegration: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
     };
     service = new AdminAlertsService(prisma as any);
@@ -28,6 +37,9 @@ describe('AdminAlertsService', () => {
       enabled: false,
       hasRecipient: false,
       recipientMasked: null,
+      adminWhatsappIntegrationId: null,
+      senderIntegrationName: null,
+      senderIntegrations: [],
       newShopeeSaleEnabled: true,
       commissionConfirmedEnabled: false,
       saleCancelledEnabled: false,
@@ -157,6 +169,74 @@ describe('AdminAlertsService', () => {
     expect(prisma.adminAlertConfig.upsert).not.toHaveBeenCalled();
   });
 
+  it('does not allow enabling without a usable sender integration', async () => {
+    prisma.adminAlertConfig.upsert.mockImplementation(async (args: any) => ({
+      ...args.create,
+    }));
+
+    await expect(
+      service.updateConfig('tenant-a', 'OWNER', {
+        enabled: true,
+        recipient: '5511999991234',
+        adminWhatsappIntegrationId: 'sender-a',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.adminAlertConfig.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sender integration from another tenant', async () => {
+    await expect(
+      service.updateConfig('tenant-a', 'ADMIN', {
+        adminWhatsappIntegrationId: 'sender-from-tenant-b',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.channelIntegration.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'sender-from-tenant-b',
+          tenantId: 'tenant-a',
+        }),
+      }),
+    );
+  });
+
+  it('sends only the explicit manual test through the private provider', async () => {
+    const encrypted = encryptSecret('5511999991234', encryptionKey);
+    const encryptedToken = encryptSecret('instance-token', encryptionKey);
+    const config = {
+      enabled: true,
+      encryptedRecipient: encrypted.encryptedSecret,
+      recipientIv: encrypted.iv,
+      recipientAuthTag: encrypted.authTag,
+      adminWhatsappIntegrationId: 'sender-a',
+    };
+    prisma.adminAlertConfig.findUnique.mockResolvedValue(config);
+    prisma.channelIntegration.findFirst.mockResolvedValue({
+      id: 'sender-a',
+      externalInstanceName: 'lia-tenant-a',
+      encryptedAccessToken: encryptedToken.encryptedSecret,
+      tokenIv: encryptedToken.iv,
+      tokenAuthTag: encryptedToken.authTag,
+    });
+    const sendPrivateMessage = jest
+      .spyOn(WhatsAppEvolutionProvider.prototype, 'sendPrivateMessage')
+      .mockResolvedValue('test-message-id');
+
+    await expect(service.sendTestMessage('tenant-a', 'ADMIN')).resolves.toEqual(
+      expect.objectContaining({ success: true, status: 'SENT' }),
+    );
+    expect(sendPrivateMessage).toHaveBeenCalledWith(
+      'lia-tenant-a',
+      expect.any(String),
+      '5511999991234',
+      expect.stringContaining('Teste de alertas LIA'),
+    );
+    expect(
+      JSON.stringify(prisma.adminAlertConfig.upsert.mock.calls),
+    ).not.toContain('5511999991234');
+    sendPrivateMessage.mockRestore();
+  });
+
   it('sets enabledAt on activation and refreshes it after reactivation', async () => {
     const encrypted = encryptSecret('5511999991234', encryptionKey);
     const recipient = {
@@ -169,6 +249,7 @@ describe('AdminAlertsService', () => {
       enabled: false,
       enabledAt: null,
       ...recipient,
+      adminWhatsappIntegrationId: 'sender-a',
       newShopeeSaleEnabled: true,
       commissionConfirmedEnabled: false,
       saleCancelledEnabled: false,
@@ -179,6 +260,13 @@ describe('AdminAlertsService', () => {
     prisma.adminAlertConfig.upsert.mockImplementation(async (args: any) => ({
       ...args.update,
     }));
+    prisma.channelIntegration.findFirst.mockResolvedValue({
+      id: 'sender-a',
+      externalInstanceName: 'lia-tenant-a',
+      encryptedAccessToken: 'encrypted-token',
+      tokenIv: 'token-iv',
+      tokenAuthTag: 'token-tag',
+    });
 
     await service.updateConfig('tenant-a', 'ADMIN', { enabled: true });
     const firstEnabledAt =
@@ -187,6 +275,7 @@ describe('AdminAlertsService', () => {
 
     prisma.adminAlertConfig.findUnique.mockResolvedValue({
       ...recipient,
+      adminWhatsappIntegrationId: 'sender-a',
       enabled: true,
       enabledAt: firstEnabledAt,
       newShopeeSaleEnabled: true,
@@ -203,6 +292,7 @@ describe('AdminAlertsService', () => {
 
     prisma.adminAlertConfig.findUnique.mockResolvedValue({
       ...recipient,
+      adminWhatsappIntegrationId: 'sender-a',
       enabled: false,
       enabledAt: firstEnabledAt,
       newShopeeSaleEnabled: true,

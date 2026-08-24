@@ -127,6 +127,8 @@ model ChannelIntegration {
   createdAt            DateTime          @default(now())
   updatedAt            DateTime          @updatedAt
 
+  adminAlertConfigs AdminAlertConfig[]
+
   @@unique([tenantId, provider])
 }
 
@@ -791,21 +793,23 @@ model AdminAlert {
 }
 
 model AdminAlertConfig {
-  id                         String    @id @default(uuid())
-  tenantId                   String    @unique
-  tenant                     Tenant    @relation(fields: [tenantId], references: [id])
-  enabled                    Boolean   @default(false)
+  id                         String              @id @default(uuid())
+  tenantId                   String              @unique
+  tenant                     Tenant              @relation(fields: [tenantId], references: [id])
+  adminWhatsappIntegrationId String?
+  adminWhatsappIntegration   ChannelIntegration? @relation(fields: [adminWhatsappIntegrationId], references: [id], onDelete: SetNull)
+  enabled                    Boolean             @default(false)
   encryptedRecipient         String?
   recipientIv                String?
   recipientAuthTag           String?
-  keyVersion                 Int       @default(1)
-  newShopeeSaleEnabled       Boolean   @default(true)
-  commissionConfirmedEnabled Boolean   @default(false)
-  saleCancelledEnabled       Boolean   @default(false)
-  highValueSaleEnabled       Boolean   @default(false)
-  criticalErrorEnabled       Boolean   @default(false)
-  dailySummaryEnabled        Boolean   @default(false)
+  keyVersion                 Int                 @default(1)
+  newShopeeSaleEnabled       Boolean             @default(true)
+  commissionConfirmedEnabled Boolean             @default(false)
+  saleCancelledEnabled       Boolean             @default(false)
+  highValueSaleEnabled       Boolean             @default(false)
+  criticalErrorEnabled       Boolean             @default(false)
+  dailySummaryEnabled        Boolean             @default(false)
   enabledAt                  DateTime?
-  createdAt                  DateTime  @default(now())
-  updatedAt                  DateTime  @updatedAt
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
 }
