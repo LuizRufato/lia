@@ -97,7 +97,13 @@ describe("ShopeeAffiliateClient", () => {
     await client.getConversionReport(1, 2, 500, "cursor-page-2");
 
     const [, bodyStr] = mockedAxios.post.mock.calls[0];
-    expect(JSON.parse(bodyStr as string).variables).toEqual({
+    const body = JSON.parse(bodyStr as string);
+    expect(body.query).toContain(
+      "$purchaseTimeStart: Int64!, $purchaseTimeEnd: Int64!",
+    );
+    expect(body.query).not.toContain("$purchaseTimeStart: Int!");
+    expect(body.query).not.toContain("$purchaseTimeEnd: Int!");
+    expect(body.variables).toEqual({
       purchaseTimeStart: 1,
       purchaseTimeEnd: 2,
       limit: 500,

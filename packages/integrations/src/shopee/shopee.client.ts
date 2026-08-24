@@ -179,7 +179,7 @@ export class ShopeeAffiliateClient {
 
     const bodyObj = {
       query: `
-        query conversionReport($purchaseTimeStart: Int!, $purchaseTimeEnd: Int!, $limit: Int!, $scrollId: String) {
+        query conversionReport($purchaseTimeStart: Int64!, $purchaseTimeEnd: Int64!, $limit: Int!, $scrollId: String) {
           conversionReport(purchaseTimeStart: $purchaseTimeStart, purchaseTimeEnd: $purchaseTimeEnd, limit: $limit, scrollId: $scrollId) {
             nodes {
               conversionId
