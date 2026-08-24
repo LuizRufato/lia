@@ -16,6 +16,8 @@ type AdminAlertConfig = {
   enabled: boolean;
   hasRecipient: boolean;
   recipientMasked: string | null;
+  recipients: Array<{ id: string; masked: string; enabled: boolean }>;
+  maxRecipients: number;
   adminWhatsappIntegrationId: string | null;
   senderIntegrationName: string | null;
   senderIntegrations: Array<{ id: string; name: string }>;
@@ -52,10 +54,58 @@ export default function SettingsPage() {
   const [alertLoading, setAlertLoading] = useState(true);
   const [alertSaving, setAlertSaving] = useState(false);
   const [alertTesting, setAlertTesting] = useState(false);
+  const [alertSimulating, setAlertSimulating] = useState(false);
   const [alertError, setAlertError] = useState<string | null>(null);
   const [alertSaved, setAlertSaved] = useState(false);
   const [recipient, setRecipient] = useState("");
   const [removeRecipient, setRemoveRecipient] = useState(false);
+
+  const addAlertRecipient = async () => {
+    if (!recipient.trim() || !alertConfig) return;
+    setAlertError(null);
+    try {
+      const res = await fetchAuth("/admin-alerts/config/recipients", {
+        method: "POST",
+        body: JSON.stringify({ recipient }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok)
+        throw new Error(
+          data?.message || "Não foi possível adicionar o destinatário.",
+        );
+      setAlertConfig(data);
+      setRecipient("");
+    } catch (err: any) {
+      setAlertError(
+        err?.message || "Não foi possível adicionar o destinatário.",
+      );
+    }
+  };
+
+  const updateAlertRecipient = async (id: string, enabled: boolean) => {
+    const res = await fetchAuth(`/admin-alerts/config/recipients/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok)
+      throw new Error(
+        data?.message || "Não foi possível atualizar o destinatário.",
+      );
+    setAlertConfig(data);
+  };
+
+  const removeAlertRecipient = async (id: string) => {
+    const res = await fetchAuth(`/admin-alerts/config/recipients/${id}`, {
+      method: "DELETE",
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok)
+      throw new Error(
+        data?.message || "Não foi possível remover o destinatário.",
+      );
+    setAlertConfig(data);
+  };
 
   useEffect(() => {
     const fetchTenant = async () => {
@@ -162,6 +212,28 @@ export default function SettingsPage() {
       setAlertError(err?.message || "Não foi possível enviar o teste.");
     } finally {
       setAlertTesting(false);
+    }
+  };
+
+  const simulateAlert = async () => {
+    if (!alertConfig || alertSimulating) return;
+    setAlertError(null);
+    setAlertSaved(false);
+    setAlertSimulating(true);
+    try {
+      const res = await fetchAuth("/admin-alerts/config/simulate", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success)
+        throw new Error(
+          data?.message || "Não foi possível enviar a simulação.",
+        );
+      setAlertSaved(true);
+    } catch (err: any) {
+      setAlertError(err?.message || "Não foi possível enviar a simulação.");
+    } finally {
+      setAlertSimulating(false);
     }
   };
 
@@ -343,39 +415,86 @@ export default function SettingsPage() {
               <div className="flex items-center gap-2 mb-2">
                 <Phone className="w-4 h-4 text-gray-400" />
                 <h3 className="font-semibold text-gray-900">
-                  WhatsApp autorizado
+                  Destinatários WhatsApp autorizados
                 </h3>
               </div>
-              {alertConfig.hasRecipient && (
-                <div className="flex items-center gap-2 text-sm text-gray-600 mb-3">
-                  <ShieldCheck className="w-4 h-4 text-green-600" />
-                  Número atual: {alertConfig.recipientMasked}
-                </div>
-              )}
-              <input
-                type="tel"
-                inputMode="tel"
-                value={recipient}
-                onChange={(event) => setRecipient(event.target.value)}
-                placeholder={
-                  alertConfig.hasRecipient
-                    ? "Digite um novo número para substituir"
-                    : "+55 11 99999-9999"
-                }
-                className="w-full border border-gray-300 rounded-md p-2.5 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-              {alertConfig.hasRecipient && (
-                <label className="flex items-center gap-2 mt-3 text-sm text-gray-600">
-                  <input
-                    type="checkbox"
-                    checked={removeRecipient}
-                    onChange={(event) =>
-                      setRemoveRecipient(event.target.checked)
-                    }
-                    className="rounded border-gray-300 text-blue-600"
-                  />
-                  Remover destinatário autorizado
-                </label>
+              <div className="space-y-2 mb-3">
+                {alertConfig.recipients.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between gap-3 rounded-md border border-gray-200 p-3 text-sm"
+                  >
+                    <span className="flex items-center gap-2 text-gray-700">
+                      <ShieldCheck className="w-4 h-4 text-green-600" />{" "}
+                      {item.masked}
+                    </span>
+                    <span className="flex items-center gap-3">
+                      <label className="text-xs text-gray-500">
+                        <input
+                          type="checkbox"
+                          checked={item.enabled}
+                          onChange={async (event) => {
+                            try {
+                              await updateAlertRecipient(
+                                item.id,
+                                event.target.checked,
+                              );
+                            } catch (err: any) {
+                              setAlertError(
+                                err?.message ||
+                                  "Não foi possível atualizar o destinatário.",
+                              );
+                            }
+                          }}
+                          className="mr-1 rounded border-gray-300 text-blue-600"
+                        />
+                        ativo
+                      </label>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await removeAlertRecipient(item.id);
+                          } catch (err: any) {
+                            setAlertError(
+                              err?.message ||
+                                "Não foi possível remover o destinatário.",
+                            );
+                          }
+                        }}
+                        className="text-xs text-red-600 hover:underline"
+                      >
+                        Remover
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  value={recipient}
+                  onChange={(event) => setRecipient(event.target.value)}
+                  placeholder="+55 11 99999-9999"
+                  className="min-w-0 flex-1 border border-gray-300 rounded-md p-2.5 text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={addAlertRecipient}
+                  disabled={
+                    !recipient.trim() ||
+                    alertConfig.recipients.length >= alertConfig.maxRecipients
+                  }
+                  className="rounded-md border border-blue-200 px-3 text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                >
+                  Adicionar
+                </button>
+              </div>
+              {removeRecipient && (
+                <span className="text-xs text-gray-500">
+                  A remoção do destinatário legado será aplicada ao salvar.
+                </span>
               )}
               <p className="text-xs text-gray-500 mt-2">
                 O número é normalizado e armazenado criptografado. Nunca
@@ -445,6 +564,22 @@ export default function SettingsPage() {
               >
                 {alertTesting && <Loader2 className="w-4 h-4 animate-spin" />}
                 Enviar mensagem de teste
+              </button>
+              <button
+                type="button"
+                onClick={simulateAlert}
+                disabled={
+                  alertSimulating ||
+                  !alertConfig.enabled ||
+                  !alertConfig.hasRecipient ||
+                  !alertConfig.adminWhatsappIntegrationId
+                }
+                className="mr-3 inline-flex items-center gap-2 rounded-md border border-amber-200 px-4 py-2.5 text-sm font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+              >
+                {alertSimulating && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                Simular nova venda Shopee
               </button>
               <button
                 type="submit"

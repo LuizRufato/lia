@@ -1,5 +1,14 @@
 import { createHmac } from "crypto";
 
+export function generateAdminAlertRecipientHash(
+  normalizedRecipient: string,
+  secret: string,
+): string {
+  return createHmac("sha256", secret)
+    .update(`admin-alert-recipient:${normalizedRecipient}`)
+    .digest("hex");
+}
+
 /**
  * Generates a privacy-safe, temporal visitor hash.
  * Includes the date (YYYY-MM-DD) so the same user is unique per day, but cannot be tracked long term.

@@ -43,3 +43,14 @@ export class UpdateAdminAlertConfigDto {
   @IsBoolean()
   dailySummaryEnabled?: boolean;
 }
+
+export class AddAdminAlertRecipientDto {
+  @IsString()
+  @MaxLength(40)
+  recipient!: string;
+}
+
+export class SetAdminAlertRecipientDto {
+  @IsBoolean()
+  enabled!: boolean;
+}

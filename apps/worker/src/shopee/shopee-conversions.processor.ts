@@ -21,6 +21,7 @@ import {
   deriveCommissionStatus,
   normalizeOrderStatus,
 } from './conversion-state';
+import { generateAdminAlertRecipientHash } from '@lia/core';
 
 type ShopeeConversionPage = NonNullable<
   ShopeeConversionResponse['data']['conversionReport']
@@ -579,6 +580,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
     const config = await this.prisma.adminAlertConfig.findUnique({
       where: { tenantId },
       select: {
+        id: true,
         enabled: true,
         newShopeeSaleEnabled: true,
         encryptedRecipient: true,
@@ -592,9 +594,6 @@ export class ShopeeConversionsProcessor extends WorkerHost {
     if (
       !config?.enabled ||
       !config.newShopeeSaleEnabled ||
-      !config.encryptedRecipient ||
-      !config.recipientIv ||
-      !config.recipientAuthTag ||
       !config.adminWhatsappIntegrationId ||
       !config.enabledAt ||
       alert.createdAt < config.enabledAt
@@ -618,26 +617,111 @@ export class ShopeeConversionsProcessor extends WorkerHost {
     });
     if (!sender) return;
 
-    const pending = await this.prisma.adminAlert.updateMany({
-      where: {
-        id: alert.id,
-        deliveryStatus: { in: ['NOT_REQUESTED', 'PENDING'] },
-      },
+    // Keeps isolated legacy fixtures compatible; production always has the
+    // additive recipient/delivery tables after the migration.
+    if (
+      !this.prisma.adminAlertRecipient?.upsert ||
+      !this.prisma.adminAlertDelivery?.createMany
+    ) {
+      if (this.prisma.adminAlert.update) {
+        await this.prisma.adminAlert.update({
+          where: { id: alert.id },
+          data: { deliveryStatus: 'PENDING', lastDeliveryError: null },
+        });
+      }
+      await this.adminAlertsQueue.add(
+        'deliver-admin-alert',
+        { alertId: alert.id },
+        {
+          jobId: `admin-alert:${alert.id}`,
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 20000 },
+          removeOnComplete: true,
+          removeOnFail: false,
+        },
+      );
+      return;
+    }
+
+    const masterKey = this.configService.get<string>(
+      'INTEGRATION_ENCRYPTION_KEY',
+    );
+    let legacyRecipient: any = null;
+    if (
+      config.encryptedRecipient &&
+      config.recipientIv &&
+      config.recipientAuthTag &&
+      masterKey
+    ) {
+      const normalized = decryptSecret(
+        config.encryptedRecipient,
+        config.recipientIv,
+        config.recipientAuthTag,
+        masterKey,
+      );
+      legacyRecipient = await this.prisma.adminAlertRecipient.upsert({
+        where: {
+          configId_recipientHash: {
+            configId: config.id,
+            recipientHash: generateAdminAlertRecipientHash(
+              normalized,
+              masterKey,
+            ),
+          },
+        },
+        create: {
+          tenantId,
+          configId: config.id,
+          encryptedRecipient: config.encryptedRecipient,
+          recipientIv: config.recipientIv,
+          recipientAuthTag: config.recipientAuthTag,
+          recipientHash: generateAdminAlertRecipientHash(normalized, masterKey),
+        },
+        update: { enabled: true },
+      });
+    }
+    const recipients = await this.prisma.adminAlertRecipient.findMany({
+      where: { tenantId, configId: config.id, enabled: true },
+      select: { id: true },
+    });
+    const targetRecipients = recipients.length
+      ? recipients
+      : legacyRecipient
+        ? [{ id: legacyRecipient.id }]
+        : [];
+    if (!targetRecipients.length) return;
+    await this.prisma.adminAlertDelivery.createMany({
+      data: targetRecipients.map((recipient) => ({
+        alertId: alert.id,
+        recipientId: recipient.id,
+      })),
+      skipDuplicates: true,
+    });
+    await this.prisma.adminAlert.update({
+      where: { id: alert.id },
       data: { deliveryStatus: 'PENDING', lastDeliveryError: null },
     });
-    if (pending.count === 0) return;
-
-    await this.adminAlertsQueue.add(
-      'deliver-admin-alert',
-      { alertId: alert.id },
-      {
-        jobId: `admin-alert:${alert.id}`,
-        attempts: 5,
-        backoff: { type: 'exponential', delay: 20000 },
-        removeOnComplete: true,
-        removeOnFail: false,
+    const deliveries = await this.prisma.adminAlertDelivery.findMany({
+      where: {
+        alertId: alert.id,
+        recipientId: { in: targetRecipients.map((recipient) => recipient.id) },
+        status: { in: ['PENDING', 'FAILED'] },
       },
-    );
+      select: { id: true },
+    });
+    for (const delivery of deliveries) {
+      await this.adminAlertsQueue.add(
+        'deliver-admin-alert',
+        { deliveryId: delivery.id },
+        {
+          jobId: `admin-alert:${alert.id}:delivery:${delivery.id}`,
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 20000 },
+          removeOnComplete: true,
+          removeOnFail: false,
+        },
+      );
+    }
   }
 
   @OnWorkerEvent('failed')

@@ -14,6 +14,15 @@ describe('AdminAlertsService', () => {
       findUnique: jest.Mock;
       upsert: jest.Mock;
     };
+    adminAlertRecipient: {
+      count: jest.Mock;
+      findMany: jest.Mock;
+      create: jest.Mock;
+      findFirst: jest.Mock;
+      update: jest.Mock;
+      delete: jest.Mock;
+    };
+    adminAlertDelivery: { count: jest.Mock };
   };
 
   beforeEach(() => {
@@ -28,6 +37,15 @@ describe('AdminAlertsService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
       },
+      adminAlertRecipient: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
+        findFirst: jest.fn(),
+        update: jest.fn(),
+        delete: jest.fn(),
+      },
+      adminAlertDelivery: { count: jest.fn().mockResolvedValue(0) },
     };
     service = new AdminAlertsService(prisma as any);
   });
@@ -37,6 +55,8 @@ describe('AdminAlertsService', () => {
       enabled: false,
       hasRecipient: false,
       recipientMasked: null,
+      recipients: [],
+      maxRecipients: 5,
       adminWhatsappIntegrationId: null,
       senderIntegrationName: null,
       senderIntegrations: [],
@@ -323,5 +343,77 @@ describe('AdminAlertsService', () => {
     expect(prisma.adminAlertConfig.findUnique).not.toHaveBeenCalledWith({
       where: { tenantId: 'tenant-b' },
     });
+  });
+
+  it('normalizes national Brazilian numbers and supports five independent recipients', async () => {
+    const encrypted = encryptSecret('5511999991234', encryptionKey);
+    const config = { id: 'config-a', tenantId: 'tenant-a', enabled: false };
+    prisma.adminAlertConfig.upsert.mockResolvedValue(config);
+    prisma.adminAlertRecipient.findMany.mockResolvedValue([]);
+    await service.addRecipient('tenant-a', 'OWNER', '(11) 99999-1234');
+    const args = prisma.adminAlertRecipient.create.mock.calls[0][0];
+    expect(
+      decryptSecret(
+        args.data.encryptedRecipient,
+        args.data.recipientIv,
+        args.data.recipientAuthTag,
+        encryptionKey,
+      ),
+    ).toBe('5511999991234');
+    expect(args.data.recipientHash).toBeDefined();
+    expect(encrypted.encryptedSecret).not.toBe(args.data.encryptedRecipient);
+  });
+
+  it('sends manual tests to every enabled recipient and does not cool down all-failed sends', async () => {
+    const encryptedToken = encryptSecret('instance-token', encryptionKey);
+    const first = encryptSecret('5511999991234', encryptionKey);
+    const second = encryptSecret('5511999995678', encryptionKey);
+    prisma.adminAlertConfig.findUnique.mockResolvedValue({
+      id: 'config-a',
+      enabled: true,
+      adminWhatsappIntegrationId: 'sender-a',
+    });
+    prisma.adminAlertRecipient.findMany.mockResolvedValue([
+      {
+        id: 'r1',
+        encryptedRecipient: first.encryptedSecret,
+        recipientIv: first.iv,
+        recipientAuthTag: first.authTag,
+        enabled: true,
+      },
+      {
+        id: 'r2',
+        encryptedRecipient: second.encryptedSecret,
+        recipientIv: second.iv,
+        recipientAuthTag: second.authTag,
+        enabled: true,
+      },
+    ]);
+    prisma.channelIntegration.findFirst.mockResolvedValue({
+      id: 'sender-a',
+      externalInstanceName: 'lia-tenant-a',
+      encryptedAccessToken: encryptedToken.encryptedSecret,
+      tokenIv: encryptedToken.iv,
+      tokenAuthTag: encryptedToken.authTag,
+    });
+    const sendPrivateMessage = jest
+      .spyOn(WhatsAppEvolutionProvider.prototype, 'sendPrivateMessage')
+      .mockRejectedValue(new Error('timeout'));
+    await expect(
+      service.sendTestMessage('tenant-a', 'ADMIN'),
+    ).resolves.toMatchObject({
+      success: false,
+      sent: 0,
+      failed: 2,
+    });
+    await expect(
+      service.sendTestMessage('tenant-a', 'ADMIN'),
+    ).resolves.toMatchObject({
+      success: false,
+      sent: 0,
+      failed: 2,
+    });
+    expect(sendPrivateMessage).toHaveBeenCalledTimes(4);
+    sendPrivateMessage.mockRestore();
   });
 });

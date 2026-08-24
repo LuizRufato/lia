@@ -10,6 +10,7 @@ export * from "./security/hmac";
 export * from "./tracking/bot-detector";
 export * from "./policies/MarketplacePublicationPolicy";
 export * from "./copy/CopyEngine";
+export * from "./admin-alerts/messages";
 
 export * from "./contracts/jobs";
 export * from "./autopilot/AutopilotBrain";

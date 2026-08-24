@@ -27,11 +27,12 @@ model Tenant {
   marketplaceIntegrations MarketplaceIntegration[]
   affiliateLinks          AffiliateLink[]
 
-  memberships      TenantMembership[]
-  autopilotConfig  AutopilotConfig?
-  autopilotAudits  AutopilotAudit[]
-  adminAlertConfig AdminAlertConfig?
-  adminAlerts      AdminAlert[]
+  memberships          TenantMembership[]
+  autopilotConfig      AutopilotConfig?
+  autopilotAudits      AutopilotAudit[]
+  adminAlertConfig     AdminAlertConfig?
+  adminAlerts          AdminAlert[]
+  adminAlertRecipients AdminAlertRecipient[]
 
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
@@ -788,6 +789,8 @@ model AdminAlert {
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
 
+  deliveries AdminAlertDelivery[]
+
   @@index([tenantId, createdAt])
   @@index([tenantId, type, createdAt])
 }
@@ -812,4 +815,43 @@ model AdminAlertConfig {
   enabledAt                  DateTime?
   createdAt                  DateTime            @default(now())
   updatedAt                  DateTime            @updatedAt
+
+  recipients AdminAlertRecipient[]
+}
+
+model AdminAlertRecipient {
+  id                 String           @id @default(uuid())
+  tenantId           String
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  configId           String
+  config             AdminAlertConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  encryptedRecipient String
+  recipientIv        String
+  recipientAuthTag   String
+  recipientHash      String
+  enabled            Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  deliveries AdminAlertDelivery[]
+
+  @@unique([configId, recipientHash])
+  @@index([tenantId, enabled])
+}
+
+model AdminAlertDelivery {
+  id          String                   @id @default(uuid())
+  alertId     String
+  alert       AdminAlert               @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   AdminAlertRecipient      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  status      AdminAlertDeliveryStatus @default(PENDING)
+  attempts    Int                      @default(0)
+  sentAt      DateTime?
+  lastError   String?
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  @@unique([alertId, recipientId])
+  @@index([recipientId, status])
 }
