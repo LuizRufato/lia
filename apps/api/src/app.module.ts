@@ -18,6 +18,7 @@ import { OffersModule } from './offers/offers.module';
 import { ChannelsModule } from './channels/channels.module';
 import { getBullMqRedisConnection } from '@lia/core';
 import { getRateLimitPolicy } from './rate-limit.policy';
+import { AdminAlertsModule } from './admin-alerts/admin-alerts.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { getRateLimitPolicy } from './rate-limit.policy';
     AutopilotModule,
     OffersModule,
     ChannelsModule,
+    AdminAlertsModule,
   ],
   controllers: [AppController],
   providers: [
