@@ -20,6 +20,10 @@ import {
   normalizeOrderStatus,
 } from './conversion-state';
 
+type ShopeeConversionPage = NonNullable<
+  ShopeeConversionResponse['data']['conversionReport']
+>;
+
 export interface ShopeeConversionsSyncJobData {
   tenantId: string;
   purchaseTimeStart: number;
@@ -105,6 +109,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       }
 
       const limit = 500;
+      const pages: ShopeeConversionPage[] = [];
       let response = await client.getConversionReport(
         purchaseTimeStart,
         purchaseTimeEnd,
@@ -115,6 +120,9 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       let totalProcessedCount = 0;
       let totalAttributedCount = 0;
 
+      // Acquire the complete cursor chain before touching PostgreSQL. The
+      // array is bounded by the page guard and stores response objects by
+      // reference, so persistence cannot delay the next cursor request.
       while (true) {
         const report = response.data?.conversionReport;
         if (!report?.pageInfo) {
@@ -136,24 +144,29 @@ export class ShopeeConversionsProcessor extends WorkerHost {
           );
         }
 
-        let nextPagePromise: Promise<ShopeeConversionResponse> | undefined;
-        if (hasNextPage) {
-          nextPagePromise = this.fetchNextPage(
-            client,
-            purchaseTimeStart,
-            purchaseTimeEnd,
-            limit,
-            nextScrollId!,
-          );
-          // Persistence can fail while the cursor request is already in flight.
-          // Attach a handler immediately so that failure is observed by the
-          // outer await without creating an unhandled rejection.
-          nextPagePromise.catch(() => undefined);
+        pages.push(report);
+
+        if (!hasNextPage) {
+          break;
         }
 
+        response = await this.fetchNextPage(
+          client,
+          purchaseTimeStart,
+          purchaseTimeEnd,
+          limit,
+          nextScrollId!,
+        );
+        currentPage += 1;
+      }
+
+      // Keep database writes sequential. If any write fails, the outer catch
+      // prevents checkpointing and BullMQ retries the root window.
+      currentPage = pageCount;
+      for (const page of pages) {
         const pageResult = await this.persistConversionPage(
           tenantId,
-          report.nodes || [],
+          page.nodes || [],
         );
         totalProcessedCount += pageResult.processedCount;
         totalAttributedCount += pageResult.attributedCount;
@@ -161,27 +174,23 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         this.logger.log(
           `Page ${currentPage} synced for ${tenantId}. Processed: ${pageResult.processedCount}, Attributed: ${pageResult.attributedCount}`,
         );
-
-        if (!nextPagePromise) {
-          await this.prisma.marketplaceIntegration.update({
-            where: { id: integration.id },
-            data: {
-              lastConversionSyncAt: new Date(purchaseTimeEnd * 1000),
-              lastConversionError: null,
-            },
-          });
-
-          return {
-            success: true,
-            processedCount: totalProcessedCount,
-            attributedCount: totalAttributedCount,
-            hasMore: false,
-          };
-        }
-
-        response = await nextPagePromise;
         currentPage += 1;
       }
+
+      await this.prisma.marketplaceIntegration.update({
+        where: { id: integration.id },
+        data: {
+          lastConversionSyncAt: new Date(purchaseTimeEnd * 1000),
+          lastConversionError: null,
+        },
+      });
+
+      return {
+        success: true,
+        processedCount: totalProcessedCount,
+        attributedCount: totalAttributedCount,
+        hasMore: false,
+      };
     } catch (error: any) {
       this.logger.error(
         `Shopee Conversion Sync failed for tenant ${tenantId}: ${error.message}`,

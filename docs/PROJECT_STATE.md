@@ -51,7 +51,8 @@
 - Após a primeira janela de 7 dias, cada execução consulta somente desde o último sucesso com sobreposição de 15 minutos.
 - `conversionId` continua protegido por upsert; estados ESTIMATED/PENDING/CONFIRMED/CANCELLED continuam atualizáveis sem duplicação.
 - Limiter da fila usa 20 segundos para permanecer abaixo do TTL aproximado de 30 segundos do `scrollId`; falhas 10030/429/timeout permanecem retryable.
-- A continuação da paginação permanece no mesmo job, com no máximo uma chamada Shopee ativa; a próxima chamada é temporizada antes da persistência pesada da página anterior terminar.
+- A continuação da paginação permanece no mesmo job, com uma sequência de aquisição independente do PostgreSQL e no máximo uma chamada Shopee ativa; as respostas ficam limitadas à guarda de 50 páginas e são persistidas sequencialmente.
+- O buffer temporário é bounded pela guarda de 50 páginas e pelo `limit=500` por página, sem cópias adicionais dos nodes.
 - `hasNextPage=true` sem `scrollId`, erro de cursor expirado e guarda de páginas falham sem checkpoint; retries reiniciam a janela sem reutilizar cursor.
 - O request mantém `limit=500` por página. Não foi confirmado um máximo oficial público para esse campo na documentação oficial acessível; portanto, o risco de volume acima de 50 páginas permanece explicitamente protegido por falha segura.
 - O ponto seguro para futuros eventos `SHOPEE_CONVERSION_CREATED/UPDATED` é imediatamente após o upsert da conversão, antes do processamento de pedidos/itens. Nenhuma mensagem ou alerta é emitido nesta fase.

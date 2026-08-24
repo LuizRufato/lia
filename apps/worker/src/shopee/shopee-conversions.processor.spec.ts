@@ -206,7 +206,8 @@ describe('ShopeeConversionsProcessor', () => {
     } as any);
 
     try {
-      await jest.runOnlyPendingTimersAsync();
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(0);
       expect(mockGetConversionReport).toHaveBeenCalledTimes(2);
       expect(prisma.marketplaceConversion.upsert).toHaveBeenCalledTimes(1);
 
@@ -226,6 +227,107 @@ describe('ShopeeConversionsProcessor', () => {
       await processing.catch(() => undefined);
       jest.useRealTimers();
     }
+  });
+
+  it('acquires page 3 before page 1 persistence finishes', async () => {
+    let releasePersistence!: () => void;
+    const persistenceGate = new Promise<{ id: string }>((resolve) => {
+      releasePersistence = () => resolve({ id: 'conversion-db-1' });
+    });
+    const secondNode = { ...conversionNode, conversionId: 'conversion-2' };
+    const thirdNode = { ...conversionNode, conversionId: 'conversion-3' };
+    mockGetConversionReport
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [conversionNode],
+            pageInfo: { hasNextPage: true, scrollId: 'cursor-1', limit: 500 },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [secondNode],
+            pageInfo: { hasNextPage: true, scrollId: 'cursor-2', limit: 500 },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [thirdNode],
+            pageInfo: { hasNextPage: false, scrollId: undefined, limit: 500 },
+          },
+        },
+      });
+    prisma.marketplaceConversion.upsert.mockImplementationOnce(
+      () => persistenceGate,
+    );
+
+    const processing = processor.process({
+      id: 'job-three-pages',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any);
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      expect(mockGetConversionReport).toHaveBeenCalledTimes(3);
+      expect(mockGetConversionReport.mock.calls[2][3]).toBe('cursor-2');
+      expect(prisma.marketplaceConversion.upsert).toHaveBeenCalledTimes(1);
+
+      releasePersistence();
+      await processing;
+    } finally {
+      releasePersistence();
+      await processing.catch(() => undefined);
+    }
+  });
+
+  it('does not checkpoint when persistence fails after future pages were acquired', async () => {
+    const persistenceError = new Error('database unavailable');
+    const secondNode = { ...conversionNode, conversionId: 'conversion-2' };
+    mockGetConversionReport
+      .mockReset()
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [conversionNode],
+            pageInfo: { hasNextPage: true, scrollId: 'cursor-1', limit: 500 },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          conversionReport: {
+            nodes: [secondNode],
+            pageInfo: { hasNextPage: false, scrollId: undefined, limit: 500 },
+          },
+        },
+      });
+    prisma.marketplaceConversion.upsert.mockRejectedValueOnce(persistenceError);
+
+    await expect(
+      processor.process({
+        id: 'job-persistence-failure',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toThrow('database unavailable');
+
+    expect(mockGetConversionReport).toHaveBeenCalledTimes(2);
+    expect(prisma.marketplaceIntegration.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionSyncAt: expect.any(Date),
+        }),
+      }),
+    );
   });
 
   it('does not checkpoint when hasNextPage is true without a cursor', async () => {
