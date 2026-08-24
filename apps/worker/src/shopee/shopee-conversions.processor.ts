@@ -8,7 +8,11 @@ import { Job, UnrecoverableError, Queue } from 'bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
-import { ShopeeAffiliateClient, decryptSecret } from '@lia/integrations';
+import {
+  ShopeeAffiliateClient,
+  decryptSecret,
+  isRetryableShopeeConversionError,
+} from '@lia/integrations';
 import Decimal from 'decimal.js';
 import {
   conversionPageJobId,
@@ -29,8 +33,9 @@ export interface ShopeeConversionsSyncJobData {
   concurrency: 1, // Strictly 1 per worker to respect API rate limits and avoid race conditions on cursor
   limiter: {
     max: 1,
-    duration: 35000, // Cooldown >30s if we don't have scrollId, but wait, BullMQ limiter applies to ALL jobs.
-    // Actually, we manage the 30s delay programmatically if there is no scrollId. Let's just set a moderate queue limit.
+    // Shopee cursors expire after roughly 30 seconds; stay below that TTL
+    // while keeping the queue safely below any documented burst concern.
+    duration: 20000,
   },
 })
 @Injectable()
@@ -70,9 +75,6 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       );
       return { success: true, reason: 'Max pages reached', pages: pageCount };
     }
-
-    // Delay > 30s for the first page (no scrollId) as per Shopee guidelines if another sync just ran.
-    // To implement this safely, we assume manual syncs are triggered intentionally. We rely on the client rate limits.
 
     const integration = await this.prisma.marketplaceIntegration.findUnique({
       where: { tenantId_provider: { tenantId, provider: 'SHOPEE' } },
@@ -245,7 +247,9 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             ...(existingConversion?.attributionStatus !== 'ATTRIBUTED'
               ? {
                   attributionKey:
-                    foundAttributionKey ?? existingConversion?.attributionKey ?? null,
+                    foundAttributionKey ??
+                    existingConversion?.attributionKey ??
+                    null,
                   attributionStatus: finalAttributionStatus as any,
                   affiliateLinkId,
                   offerId,
@@ -364,7 +368,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             ),
             removeOnComplete: true,
             attempts: 3,
-            backoff: { type: 'fixed', delay: 35000 }, // If fails (e.g. scrollId expires), wait 35s and it will restart without scrollId? Wait, if scrollId fails, we shouldn't retry with the same scrollId.
+            backoff: { type: 'fixed', delay: 20000 },
           },
         );
 
@@ -377,16 +381,29 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         };
       }
 
+      await this.prisma.marketplaceIntegration.update({
+        where: { id: integration.id },
+        data: {
+          lastConversionSyncAt: new Date(purchaseTimeEnd * 1000),
+          lastConversionError: null,
+        },
+      });
+
       return { success: true, processedCount, attributedCount, hasMore: false };
     } catch (error: any) {
       this.logger.error(
         `Shopee Conversion Sync failed for tenant ${tenantId}: ${error.message}`,
       );
-      // Only throw if we want BullMQ to retry. If it's a 10030 (Rate limit) or network error, retry.
-      if (
-        error.message.includes('Rate Limit') ||
-        error.message.includes('timeout')
-      ) {
+      await this.prisma.marketplaceIntegration.update({
+        where: { id: integration.id },
+        data: {
+          lastConversionError: String(
+            error.message || 'Shopee conversion sync failed',
+          ).slice(0, 500),
+        },
+      });
+
+      if (isRetryableShopeeConversionError(error)) {
         throw error;
       }
       throw new UnrecoverableError(error.message);

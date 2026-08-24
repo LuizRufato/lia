@@ -12,6 +12,7 @@ import {
   WhatsAppEvolutionProvider,
   ShopeeAffiliateClient,
   getEncryptionKey,
+  getShopeeConversionWindow,
 } from '@lia/integrations';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -46,6 +47,8 @@ export class IntegrationsService {
       lastSyncAt: integration.lastSyncAt,
       lastSyncProcessedCount: integration.lastSyncProcessedCount,
       lastError: integration.lastError,
+      lastConversionSyncAt: integration.lastConversionSyncAt,
+      lastConversionError: integration.lastConversionError,
       // Never return the actual encrypted/decrypted secret to frontend
     };
   }
@@ -69,10 +72,10 @@ export class IntegrationsService {
       const message = this.sanitizeShopeeError(error);
       const preserveKnownGood = Boolean(
         existing?.status === 'CONNECTED' &&
-          existing.publicIdentifier &&
-          existing.encryptedSecret &&
-          existing.iv &&
-          existing.authTag,
+        existing.publicIdentifier &&
+        existing.encryptedSecret &&
+        existing.iv &&
+        existing.authTag,
       );
 
       if (preserveKnownGood) {
@@ -194,23 +197,26 @@ export class IntegrationsService {
       throw new BadRequestException('Shopee is not connected.');
     }
 
-    const safeDays = Math.min(Math.max(Math.floor(days), 1), 30);
     const end = Math.floor(Date.now() / 1000);
-    const start = end - safeDays * 24 * 60 * 60;
-    const syncBucket = Math.floor(Date.now() / (30 * 60 * 1000));
+    const safeDays = Math.min(Math.max(Math.floor(days), 1), 30);
+    const window = getShopeeConversionWindow(
+      integration.lastConversionSyncAt,
+      end,
+      safeDays * 24 * 60 * 60,
+    );
+    const syncBucket = Math.floor(end / (5 * 60));
 
     await this.shopeeConversionsQueue.add(
       'sync',
       {
         tenantId,
-        purchaseTimeStart: start,
-        purchaseTimeEnd: end,
-        syncRunId: `manual-${syncBucket}`,
+        ...window,
+        syncRunId: `manual-${end}`,
       },
       {
         jobId: `shopee-conv-sync-${tenantId}-${syncBucket}`,
         attempts: 3,
-        backoff: { type: 'exponential', delay: 35000 },
+        backoff: { type: 'exponential', delay: 20000 },
         removeOnComplete: { age: 24 * 60 * 60 },
         removeOnFail: { age: 7 * 24 * 60 * 60 },
       },
@@ -326,14 +332,20 @@ export class IntegrationsService {
         } else if (state === 'close' || state === 'DISCONNECTED') {
           const updated = await this.prisma.channelIntegration.update({
             where: { id: integration.id },
-            data: { status: 'NEEDS_REAUTH', lastErrorCode: 'EVOLUTION_DISCONNECTED' },
+            data: {
+              status: 'NEEDS_REAUTH',
+              lastErrorCode: 'EVOLUTION_DISCONNECTED',
+            },
           });
           integration.status = updated.status;
           integration.lastErrorCode = updated.lastErrorCode;
         } else if (state === 'UNAUTHORIZED') {
           const updated = await this.prisma.channelIntegration.update({
             where: { id: integration.id },
-            data: { status: 'NEEDS_REAUTH', lastErrorCode: 'EVOLUTION_UNAUTHORIZED' },
+            data: {
+              status: 'NEEDS_REAUTH',
+              lastErrorCode: 'EVOLUTION_UNAUTHORIZED',
+            },
           });
           integration.status = updated.status;
           integration.lastErrorCode = updated.lastErrorCode;
@@ -342,7 +354,10 @@ export class IntegrationsService {
         console.error('Error reconciling Evolution API status:', e);
         await this.prisma.channelIntegration.update({
           where: { id: integration.id },
-          data: { status: 'ERROR', lastErrorCode: 'EVOLUTION_HEALTH_CHECK_FAILED' },
+          data: {
+            status: 'ERROR',
+            lastErrorCode: 'EVOLUTION_HEALTH_CHECK_FAILED',
+          },
         });
         integration.status = 'ERROR';
         integration.lastErrorCode = 'EVOLUTION_HEALTH_CHECK_FAILED';
@@ -377,7 +392,9 @@ export class IntegrationsService {
         !existing.tokenIv ||
         !existing.tokenAuthTag
       ) {
-        throw new BadRequestException('A sessão Evolution existente precisa ser reautenticada antes de trocar o transporte.');
+        throw new BadRequestException(
+          'A sessão Evolution existente precisa ser reautenticada antes de trocar o transporte.',
+        );
       }
       const oldToken = decryptSecret(
         existing.encryptedAccessToken,
@@ -446,7 +463,9 @@ export class IntegrationsService {
         !integration.tokenIv ||
         !integration.tokenAuthTag
       ) {
-        throw new BadRequestException('Evolution session credentials are incomplete; remote logout was not confirmed.');
+        throw new BadRequestException(
+          'Evolution session credentials are incomplete; remote logout was not confirmed.',
+        );
       }
       const token = decryptSecret(
         integration.encryptedAccessToken,
@@ -454,12 +473,15 @@ export class IntegrationsService {
         integration.tokenAuthTag,
         getEncryptionKey(),
       );
-      const remoteDisconnected = await new WhatsAppEvolutionProvider().disconnectInstance(
-        integration.externalInstanceName,
-        token,
-      );
+      const remoteDisconnected =
+        await new WhatsAppEvolutionProvider().disconnectInstance(
+          integration.externalInstanceName,
+          token,
+        );
       if (!remoteDisconnected) {
-        throw new BadRequestException('Evolution remote session could not be invalidated.');
+        throw new BadRequestException(
+          'Evolution remote session could not be invalidated.',
+        );
       }
     }
 
@@ -535,7 +557,8 @@ export class IntegrationsService {
     const existing = await this.prisma.channelIntegration.findUnique({
       where: { tenantId_provider: { tenantId, provider: 'WHATSAPP' } },
     });
-    const externalInstanceName = existing?.externalInstanceName || `lia-${tenantId.substring(0, 8)}`;
+    const externalInstanceName =
+      existing?.externalInstanceName || `lia-${tenantId.substring(0, 8)}`;
     let knownToken: string | undefined;
     if (
       existing?.encryptedAccessToken &&
@@ -631,18 +654,28 @@ export class IntegrationsService {
         masterKey,
       );
     } catch {
-      await this.markEvolutionGroupsError(integration.id, 'EVOLUTION_CREDENTIALS_INVALID');
-      throw new BadRequestException('As credenciais da Evolution estão inválidas ou indisponíveis.');
+      await this.markEvolutionGroupsError(
+        integration.id,
+        'EVOLUTION_CREDENTIALS_INVALID',
+      );
+      throw new BadRequestException(
+        'As credenciais da Evolution estão inválidas ou indisponíveis.',
+      );
     }
 
-    let state: Awaited<ReturnType<WhatsAppEvolutionProvider['getConnectionState']>>;
+    let state: Awaited<
+      ReturnType<WhatsAppEvolutionProvider['getConnectionState']>
+    >;
     try {
       state = await provider.getConnectionState(
         integration.externalInstanceName,
         instanceToken,
       );
     } catch {
-      await this.markEvolutionGroupsError(integration.id, 'EVOLUTION_UNAVAILABLE');
+      await this.markEvolutionGroupsError(
+        integration.id,
+        'EVOLUTION_UNAVAILABLE',
+      );
       throw new BadRequestException('Falha ao consultar a Evolution.');
     }
 
@@ -650,10 +683,14 @@ export class IntegrationsService {
       await this.prisma.channelIntegration.update({
         where: { id: integration.id },
         data: {
-          status: state === 'UNAUTHORIZED' || state === 'DISCONNECTED' || state === 'close'
-            ? 'NEEDS_REAUTH'
-            : 'CONNECTING',
-          lastErrorCode: state === 'UNAUTHORIZED' ? 'EVOLUTION_UNAUTHORIZED' : null,
+          status:
+            state === 'UNAUTHORIZED' ||
+            state === 'DISCONNECTED' ||
+            state === 'close'
+              ? 'NEEDS_REAUTH'
+              : 'CONNECTING',
+          lastErrorCode:
+            state === 'UNAUTHORIZED' ? 'EVOLUTION_UNAUTHORIZED' : null,
         },
       });
       throw new BadRequestException(
@@ -676,7 +713,10 @@ export class IntegrationsService {
         instanceToken,
       );
     } catch {
-      await this.markEvolutionGroupsError(integration.id, 'EVOLUTION_GROUPS_FETCH_FAILED');
+      await this.markEvolutionGroupsError(
+        integration.id,
+        'EVOLUTION_GROUPS_FETCH_FAILED',
+      );
       throw new BadRequestException('Falha ao consultar grupos na Evolution.');
     }
 
@@ -714,7 +754,9 @@ export class IntegrationsService {
       where: {
         tenantId,
         provider: 'WHATSAPP',
-        ...(groups.length ? { externalChatId: { notIn: groups.map((group) => group.id) } } : {}),
+        ...(groups.length
+          ? { externalChatId: { notIn: groups.map((group) => group.id) } }
+          : {}),
       },
       data: { enabled: false, staleAt: new Date() },
     });
@@ -722,7 +764,10 @@ export class IntegrationsService {
     return { success: true, groups: results };
   }
 
-  private async markEvolutionGroupsError(integrationId: string, errorCode: string) {
+  private async markEvolutionGroupsError(
+    integrationId: string,
+    errorCode: string,
+  ) {
     try {
       await this.prisma.channelIntegration.update({
         where: { id: integrationId },
@@ -759,40 +804,89 @@ export class IntegrationsService {
   }
 
   async updateWhatsAppSafety(tenantId: string, body: Record<string, unknown>) {
-    const intValue = (value: unknown, fallback: number, min: number, max: number) => {
+    const intValue = (
+      value: unknown,
+      fallback: number,
+      min: number,
+      max: number,
+    ) => {
       const parsed = Number(value);
-      return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : fallback;
+      return Number.isFinite(parsed)
+        ? Math.min(max, Math.max(min, Math.round(parsed)))
+        : fallback;
     };
-    const floatValue = (value: unknown, fallback: number, min: number, max: number) => {
+    const floatValue = (
+      value: unknown,
+      fallback: number,
+      min: number,
+      max: number,
+    ) => {
       const parsed = Number(value);
-      return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+      return Number.isFinite(parsed)
+        ? Math.min(max, Math.max(min, parsed))
+        : fallback;
     };
     return this.prisma.whatsAppSafetyConfig.upsert({
       where: { tenantId },
       update: {
         ...(typeof body.enabled === 'boolean' ? { enabled: body.enabled } : {}),
-        ...(typeof body.killSwitch === 'boolean' ? { killSwitch: body.killSwitch } : {}),
+        ...(typeof body.killSwitch === 'boolean'
+          ? { killSwitch: body.killSwitch }
+          : {}),
         minIntervalSeconds: intValue(body.minIntervalSeconds, 60, 1, 86_400),
         maxPerHour: intValue(body.maxPerHour, 20, 1, 1_000),
         maxPerDay: intValue(body.maxPerDay, 100, 1, 10_000),
-        reconnectionCooldownSeconds: intValue(body.reconnectionCooldownSeconds, 90, 0, 86_400),
+        reconnectionCooldownSeconds: intValue(
+          body.reconnectionCooldownSeconds,
+          90,
+          0,
+          86_400,
+        ),
         minQualityScore: floatValue(body.minQualityScore, 0, 0, 1),
-        maxObservationAgeMinutes: intValue(body.maxObservationAgeMinutes, 1440, 1, 30 * 24 * 60),
-        quietStartMinute: body.quietStartMinute == null ? null : intValue(body.quietStartMinute, 0, 0, 1439),
-        quietEndMinute: body.quietEndMinute == null ? null : intValue(body.quietEndMinute, 1439, 0, 1439),
+        maxObservationAgeMinutes: intValue(
+          body.maxObservationAgeMinutes,
+          1440,
+          1,
+          30 * 24 * 60,
+        ),
+        quietStartMinute:
+          body.quietStartMinute == null
+            ? null
+            : intValue(body.quietStartMinute, 0, 0, 1439),
+        quietEndMinute:
+          body.quietEndMinute == null
+            ? null
+            : intValue(body.quietEndMinute, 1439, 0, 1439),
       },
       create: {
         tenantId,
         enabled: typeof body.enabled === 'boolean' ? body.enabled : true,
-        killSwitch: typeof body.killSwitch === 'boolean' ? body.killSwitch : false,
+        killSwitch:
+          typeof body.killSwitch === 'boolean' ? body.killSwitch : false,
         minIntervalSeconds: intValue(body.minIntervalSeconds, 60, 1, 86_400),
         maxPerHour: intValue(body.maxPerHour, 20, 1, 1_000),
         maxPerDay: intValue(body.maxPerDay, 100, 1, 10_000),
-        reconnectionCooldownSeconds: intValue(body.reconnectionCooldownSeconds, 90, 0, 86_400),
+        reconnectionCooldownSeconds: intValue(
+          body.reconnectionCooldownSeconds,
+          90,
+          0,
+          86_400,
+        ),
         minQualityScore: floatValue(body.minQualityScore, 0, 0, 1),
-        maxObservationAgeMinutes: intValue(body.maxObservationAgeMinutes, 1440, 1, 30 * 24 * 60),
-        quietStartMinute: body.quietStartMinute == null ? null : intValue(body.quietStartMinute, 0, 0, 1439),
-        quietEndMinute: body.quietEndMinute == null ? null : intValue(body.quietEndMinute, 1439, 0, 1439),
+        maxObservationAgeMinutes: intValue(
+          body.maxObservationAgeMinutes,
+          1440,
+          1,
+          30 * 24 * 60,
+        ),
+        quietStartMinute:
+          body.quietStartMinute == null
+            ? null
+            : intValue(body.quietStartMinute, 0, 0, 1439),
+        quietEndMinute:
+          body.quietEndMinute == null
+            ? null
+            : intValue(body.quietEndMinute, 1439, 0, 1439),
       },
       select: {
         enabled: true,
@@ -818,14 +912,18 @@ export class IntegrationsService {
   }
 
   private sanitizeShopeeError(error: any): string {
-    const raw = String(error?.message || 'Falha ao validar credenciais Shopee.');
-    return raw.replace(/(secret|token|authorization|credential)\s*[=:]\s*[^\s,;]+/gi, '$1=[redacted]').slice(0, 240);
+    const raw = String(
+      error?.message || 'Falha ao validar credenciais Shopee.',
+    );
+    return raw
+      .replace(
+        /(secret|token|authorization|credential)\s*[=:]\s*[^\s,;]+/gi,
+        '$1=[redacted]',
+      )
+      .slice(0, 240);
   }
 
-  async sendWhatsAppEvolutionTestMessage(
-    tenantId: string,
-    channelId?: string,
-  ) {
+  async sendWhatsAppEvolutionTestMessage(tenantId: string, channelId?: string) {
     if (!channelId) {
       throw new BadRequestException('A WhatsApp channel must be selected.');
     }

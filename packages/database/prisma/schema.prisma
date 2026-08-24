@@ -149,6 +149,8 @@ model MarketplaceIntegration {
   lastSyncCreatedCount  Int?
   lastSyncUpdatedCount  Int?
   lastSyncIgnoredCount  Int?
+  lastConversionSyncAt  DateTime?
+  lastConversionError   String?
   lastDiscoveryAt       DateTime?
   lastDiscoveryCategoryCount Int?
   lastDiscoveryFoundCount Int?

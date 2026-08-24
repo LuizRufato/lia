@@ -2,6 +2,14 @@ const mockGetConversionReport = jest.fn();
 
 jest.mock('@lia/integrations', () => ({
   decryptSecret: jest.fn().mockReturnValue('secret'),
+  isRetryableShopeeConversionError: jest.fn((error: any) => {
+    const message = String(error?.message ?? '').toLowerCase();
+    return (
+      error?.code === 10030 ||
+      message.includes('rate limit') ||
+      message.includes('timeout')
+    );
+  }),
   ShopeeAffiliateClient: jest.fn().mockImplementation(() => ({
     getConversionReport: mockGetConversionReport,
   })),
@@ -71,6 +79,7 @@ describe('ShopeeConversionsProcessor', () => {
           authTag: 'tag',
           status: 'CONNECTED',
         }),
+        update: jest.fn().mockResolvedValue(undefined),
       },
       marketplaceConversion: {
         findUnique: jest.fn().mockResolvedValue(null),
@@ -113,6 +122,14 @@ describe('ShopeeConversionsProcessor', () => {
       prisma.marketplaceConversionOrder.upsert.mock.calls[0][0].create
         .orderStatus,
     ).toBe('CANCELLED');
+    expect(prisma.marketplaceIntegration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionSyncAt: new Date(2 * 1000),
+          lastConversionError: null,
+        }),
+      }),
+    );
   });
 
   it('allows UNATTRIBUTED to become ATTRIBUTED but never regresses it', async () => {
@@ -142,10 +159,58 @@ describe('ShopeeConversionsProcessor', () => {
     await processor.process(job);
     await processor.process(job);
 
-    const secondUpdate = prisma.marketplaceConversion.upsert.mock.calls[1][0]
-      .update;
+    const secondUpdate =
+      prisma.marketplaceConversion.upsert.mock.calls[1][0].update;
     expect(secondUpdate.attributionStatus).toBeUndefined();
     expect(secondUpdate.attributionKey).toBeUndefined();
     expect(secondUpdate.affiliateLinkId).toBeUndefined();
+  });
+
+  it('retries a Shopee rate-limit response and records the safe error', async () => {
+    const error = Object.assign(new Error('Rate limit exceeded'), {
+      code: 10030,
+    });
+    mockGetConversionReport.mockRejectedValueOnce(error);
+
+    await expect(
+      processor.process({
+        id: 'job-rate-limit',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toBe(error);
+
+    expect(prisma.marketplaceIntegration.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { lastConversionError: 'Rate limit exceeded' },
+      }),
+    );
+  });
+
+  it('retries a timeout response without advancing the successful window', async () => {
+    const error = new Error('request timeout');
+    mockGetConversionReport.mockRejectedValueOnce(error);
+
+    await expect(
+      processor.process({
+        id: 'job-timeout',
+        data: {
+          tenantId: 'tenant-1',
+          purchaseTimeStart: 1,
+          purchaseTimeEnd: 2,
+        },
+      } as any),
+    ).rejects.toBe(error);
+
+    expect(prisma.marketplaceIntegration.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lastConversionSyncAt: expect.any(Date),
+        }),
+      }),
+    );
   });
 });

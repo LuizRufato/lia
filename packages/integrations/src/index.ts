@@ -1,6 +1,7 @@
 export * from "./shopee/shopee.types";
 export * from "./shopee/shopee.adapter";
 export * from "./shopee/shopee.client";
+export * from "./shopee/conversion-window";
 export * from "./security/encryption";
 export * from "./security/encryption-config";
 export * from "./whatsapp/WhatsAppCloudProvider";

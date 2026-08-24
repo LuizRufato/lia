@@ -38,6 +38,13 @@
 * O Tracker emite `og:image`/`twitter:image` apenas para URLs HTTPS válidas; preview crawlers continuam sem `ClickEvent`.
 * Nenhum clique artificial, envio WhatsApp ou mudança no Analytics realtime/Autopilot foi feito nesta fase.
 
+## Estado atual — Shopee Conversion Sync incremental (P1.0)
+* Scheduler de conversões reduzido de 30 para 5 minutos.
+* Após a primeira janela de 7 dias, cada execução consulta somente desde o último sucesso com sobreposição de 15 minutos.
+* `conversionId` continua protegido por upsert; estados ESTIMATED/PENDING/CONFIRMED/CANCELLED continuam atualizáveis sem duplicação.
+* Limiter da fila usa 20 segundos para permanecer abaixo do TTL aproximado de 30 segundos do `scrollId`; falhas 10030/429/timeout permanecem retryable.
+* O ponto seguro para futuros eventos `SHOPEE_CONVERSION_CREATED/UPDATED` é imediatamente após o upsert da conversão, antes do processamento de pedidos/itens. Nenhuma mensagem ou alerta é emitido nesta fase.
+
 ## Fases do Projeto
 
 - [x] **Fase 0**: Configuração Inicial (Linter, Prettier, Prisma, Docker)
