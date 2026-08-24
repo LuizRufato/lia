@@ -45,7 +45,22 @@ export const CanonicalOfferSchema = z.object({
     name: z.string().nullable().optional(),
     isOfficial: z.boolean().nullable().optional(),
     rating: z.number().min(0).max(5).nullable().optional(),
+    reputationLevel: z.string().nullable().optional(),
+    completedTransactions: z.number().int().min(0).nullable().optional(),
+    canceledTransactions: z.number().int().min(0).nullable().optional(),
   }),
+
+  discovery: z
+    .object({
+      source: z.string().min(1),
+      sourceCategoryId: z.string().nullable().optional(),
+      rankingPosition: z.number().int().min(1).nullable().optional(),
+      sourceEntityType: z
+        .enum(["ITEM", "PRODUCT", "USER_PRODUCT"])
+        .nullable()
+        .optional(),
+    })
+    .optional(),
 
   rawObservation: z.record(z.any()).optional(),
 

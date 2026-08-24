@@ -1,7 +1,11 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
-import { decryptSecret, encryptSecret, getEncryptionKey } from '@lia/integrations';
+import {
+  decryptSecret,
+  encryptSecret,
+  getEncryptionKey,
+} from '@lia/integrations';
 import { randomBytes, createHash } from 'crypto';
 import Redis from 'ioredis';
 import { getRedisConfig } from '@lia/core';
@@ -44,6 +48,12 @@ export class MercadoLivreService {
       lastSyncUpdatedCount: integration.lastSyncUpdatedCount,
       lastSyncIgnoredCount: integration.lastSyncIgnoredCount,
       lastSyncProcessedCount: integration.lastSyncProcessedCount,
+      lastDiscoveryAt: integration.lastDiscoveryAt,
+      lastDiscoveryCategoryCount: integration.lastDiscoveryCategoryCount,
+      lastDiscoveryFoundCount: integration.lastDiscoveryFoundCount,
+      lastDiscoveryCreatedCount: integration.lastDiscoveryCreatedCount,
+      lastDiscoveryIgnoredCount: integration.lastDiscoveryIgnoredCount,
+      lastDiscoveryError: integration.lastDiscoveryError,
       lastError: integration.lastError,
       expiresAt: integration.expiresAt,
     };
@@ -348,7 +358,10 @@ export class MercadoLivreService {
     }
 
     const refreshWindowMs = 60_000;
-    if (!integration.expiresAt || integration.expiresAt.getTime() <= Date.now() + refreshWindowMs) {
+    if (
+      !integration.expiresAt ||
+      integration.expiresAt.getTime() <= Date.now() + refreshWindowMs
+    ) {
       await this.refreshAccessToken(tenantId);
       integration = await this.prisma.marketplaceIntegration.findUnique({
         where: { tenantId_provider: { tenantId, provider: 'MERCADO_LIVRE' } },
@@ -371,7 +384,9 @@ export class MercadoLivreService {
         getEncryptionKey(),
       );
     } catch {
-      throw new BadRequestException('Não foi possível descriptografar o token do Mercado Livre.');
+      throw new BadRequestException(
+        'Não foi possível descriptografar o token do Mercado Livre.',
+      );
     }
   }
 }

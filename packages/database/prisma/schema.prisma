@@ -149,6 +149,12 @@ model MarketplaceIntegration {
   lastSyncCreatedCount  Int?
   lastSyncUpdatedCount  Int?
   lastSyncIgnoredCount  Int?
+  lastDiscoveryAt       DateTime?
+  lastDiscoveryCategoryCount Int?
+  lastDiscoveryFoundCount Int?
+  lastDiscoveryCreatedCount Int?
+  lastDiscoveryIgnoredCount Int?
+  lastDiscoveryError    String?
   lastError             String?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
@@ -306,6 +312,10 @@ model OfferObservation {
   schemaVersion    String
   canonicalPayload Json
   category         String?
+  discoverySource String?
+  sourceCategoryId String?
+  rankingPosition Int?
+  sourceEntityType String?
 
   evaluations OfferEvaluation[]
   priceHistory PriceHistory?

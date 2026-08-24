@@ -1,7 +1,28 @@
 import { CanonicalOffer } from "@lia/core";
 
+export interface MercadoLivreAdapterOverrides {
+  currentPriceCents?: number;
+  originalPriceCents?: number;
+  rating?: number;
+  reviewsCount?: number;
+  seller?: {
+    reputationLevel?: string;
+    completedTransactions?: number;
+    canceledTransactions?: number;
+  };
+  discovery?: {
+    source: "HIGHLIGHTS" | "TRENDS";
+    sourceCategoryId?: string;
+    rankingPosition?: number;
+    sourceEntityType: "ITEM" | "PRODUCT" | "USER_PRODUCT";
+  };
+}
+
 export class MercadoLivreAdapter {
-  static toCanonicalOffer(item: any): CanonicalOffer {
+  static toCanonicalOffer(
+    item: any,
+    overrides: MercadoLivreAdapterOverrides = {},
+  ): CanonicalOffer {
     if (
       typeof item?.id !== "string" ||
       typeof item?.title !== "string" ||
@@ -14,27 +35,20 @@ export class MercadoLivreAdapter {
       throw new Error("Mercado Livre item lacks required canonical fields.");
     }
 
-    const isFreeShipping = item.shipping?.free_shipping;
-
-    // Meli returns prices in decimal (e.g. 19.99)
     const currentPriceCents =
-      item.price != null ? Math.round(item.price * 100) : undefined;
+      overrides.currentPriceCents ?? Math.round(item.price * 100);
     const originalPriceCents =
-      item.original_price != null
+      overrides.originalPriceCents ??
+      (typeof item.original_price === "number"
         ? Math.round(item.original_price * 100)
-        : undefined;
-
-    let discountBps: number | undefined;
-    if (
+        : undefined);
+    const discountBps =
       currentPriceCents != null &&
       originalPriceCents != null &&
-      originalPriceCents > 0 &&
       originalPriceCents > currentPriceCents
-    ) {
-      discountBps = Math.round(
-        (1 - currentPriceCents / originalPriceCents) * 10000,
-      );
-    }
+        ? Math.round((1 - currentPriceCents / originalPriceCents) * 10000)
+        : undefined;
+    const isFreeShipping = item.shipping?.free_shipping;
 
     return {
       marketplace: "MERCADO_LIVRE",
@@ -48,8 +62,9 @@ export class MercadoLivreAdapter {
           ...(Array.isArray(item.pictures)
             ? item.pictures
                 .map((p: any) => p?.secure_url)
-                .filter((url: unknown): url is string =>
-                  typeof url === "string" && url.startsWith("https://"),
+                .filter(
+                  (url: unknown): url is string =>
+                    typeof url === "string" && url.startsWith("https://"),
                 )
             : []),
           ...(typeof item.secure_thumbnail === "string" &&
@@ -69,22 +84,22 @@ export class MercadoLivreAdapter {
         isFree: isFreeShipping != null ? isFreeShipping : undefined,
       },
       commission: {
-        // Commission is NULL because Meli doesn't expose it on the standard Catalog API
         source: "UNKNOWN",
         estimatedAmountCents: undefined,
         rateBps: undefined,
       },
       metrics: {
-        // To be fetched from /users/{userId} if needed, or /reviews
-        rating: undefined,
-        reviewsCount: undefined,
+        rating: overrides.rating,
+        reviewsCount: overrides.reviewsCount,
         marketplaceSalesCount:
           item.sold_quantity != null ? item.sold_quantity : undefined,
       },
       seller: {
         externalId: item.seller_id ? String(item.seller_id) : undefined,
         isOfficial: item.official_store_id != null ? true : undefined,
+        ...overrides.seller,
       },
+      discovery: overrides.discovery,
       discoveredAt: new Date(),
     };
   }

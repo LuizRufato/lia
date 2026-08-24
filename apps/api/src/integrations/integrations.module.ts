@@ -5,6 +5,7 @@ import { IntegrationsService } from './integrations.service';
 import { MercadoLivreController } from './mercadolivre.controller';
 import { MercadoLivreService } from './mercadolivre.service';
 import { MercadoLivreSyncService } from './mercadolivre-sync.service';
+import { MercadoLivreDiscoveryService } from './mercadolivre-discovery.service';
 import { PrismaService } from '../prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { WhatsAppWebhookController } from '../webhooks/whatsapp.controller';
@@ -33,6 +34,7 @@ import { WhatsAppWebhookController } from '../webhooks/whatsapp.controller';
     IntegrationsService,
     MercadoLivreService,
     MercadoLivreSyncService,
+    MercadoLivreDiscoveryService,
     PrismaService,
     ConfigService,
   ],

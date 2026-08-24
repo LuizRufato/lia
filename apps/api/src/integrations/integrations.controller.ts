@@ -7,9 +7,11 @@ import {
   Body,
   Req,
   UseGuards,
+  Optional,
 } from '@nestjs/common';
 import { IntegrationsService } from './integrations.service';
 import { MercadoLivreSyncService } from './mercadolivre-sync.service';
+import { MercadoLivreDiscoveryService } from './mercadolivre-discovery.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('integrations')
@@ -18,6 +20,8 @@ export class IntegrationsController {
   constructor(
     private readonly integrationsService: IntegrationsService,
     private readonly mercadoLivreSyncService: MercadoLivreSyncService,
+    @Optional()
+    private readonly mercadoLivreDiscoveryService?: MercadoLivreDiscoveryService,
   ) {}
 
   @Get('shopee')
@@ -123,14 +127,33 @@ export class IntegrationsController {
     return this.mercadoLivreSyncService.syncNow(req.user.tenantId);
   }
 
+  @Post('mercadolivre/discover')
+  async discoverMercadoLivre(
+    @Req() req: any,
+    @Body() body?: { categoryIds?: string[] },
+  ) {
+    if (!this.mercadoLivreDiscoveryService)
+      throw new Error('Mercado Livre discovery service unavailable.');
+    return this.mercadoLivreDiscoveryService.discoverNow(
+      req.user.tenantId,
+      body?.categoryIds || [],
+    );
+  }
+
   @Get('whatsapp/safety')
   async getWhatsAppSafety(@Req() req: any) {
     return this.integrationsService.getWhatsAppSafety(req.user.tenantId);
   }
 
   @Patch('whatsapp/safety')
-  async updateWhatsAppSafety(@Req() req: any, @Body() body: Record<string, unknown>) {
-    return this.integrationsService.updateWhatsAppSafety(req.user.tenantId, body);
+  async updateWhatsAppSafety(
+    @Req() req: any,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.integrationsService.updateWhatsAppSafety(
+      req.user.tenantId,
+      body,
+    );
   }
 
   @Get('whatsapp/evolution/groups')

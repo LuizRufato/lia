@@ -11,6 +11,7 @@ function MercadoLivreIntegrationContent() {
   const [integration, setIntegration] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [discoverySubmitting, setDiscoverySubmitting] = useState(false);
 
   useEffect(() => {
     loadIntegration();
@@ -105,6 +106,30 @@ function MercadoLivreIntegrationContent() {
     }
   }
 
+  async function handleDiscovery() {
+    if (submitting || discoverySubmitting) return;
+    setDiscoverySubmitting(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetchAuth("/integrations/mercadolivre/discover", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSyncMessage(data?.message || "Falha segura ao descobrir ofertas.");
+        return;
+      }
+      setSyncMessage(
+        `Descoberta concluída: ${data.foundCount} destaques, ${data.processedCount} processados, ${data.createdCount} criados e ${data.ignoredCount} ignorados.`,
+      );
+      await loadIntegration();
+    } catch {
+      setSyncMessage("Não foi possível concluir a descoberta agora.");
+    } finally {
+      setDiscoverySubmitting(false);
+    }
+  }
+
   if (loading) {
     return <div className="p-8 text-white">Carregando integração...</div>;
   }
@@ -165,7 +190,16 @@ function MercadoLivreIntegrationContent() {
                   onClick={handleSync}
                   disabled={submitting}
                 >
-                  {submitting ? "Sincronizando..." : "Sincronizar Agora"}
+                  {submitting
+                    ? "Sincronizando..."
+                    : "Sincronizar anúncios da conta"}
+                </button>
+                <button
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg text-sm font-medium transition-colors"
+                  onClick={handleDiscovery}
+                  disabled={submitting || discoverySubmitting}
+                >
+                  {discoverySubmitting ? "Descobrindo..." : "Descobrir ofertas"}
                 </button>
                 <button
                   onClick={handleDisconnect}
@@ -217,6 +251,16 @@ function MercadoLivreIntegrationContent() {
                 {integration.lastSyncAt
                   ? new Date(integration.lastSyncAt).toLocaleString("pt-BR")
                   : "Nunca sincronizado"}
+              </span>
+            </div>
+            <div className="col-span-2">
+              <span className="block text-gray-400 mb-1">
+                Última descoberta oficial:
+              </span>
+              <span className="bg-slate-900 p-2 rounded block">
+                {integration.lastDiscoveryAt
+                  ? `${new Date(integration.lastDiscoveryAt).toLocaleString("pt-BR")} — ${integration.lastDiscoveryFoundCount ?? 0} destaques, ${integration.lastDiscoveryCreatedCount ?? 0} novos`
+                  : "Nunca executada (ação manual)"}
               </span>
             </div>
           </div>

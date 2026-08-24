@@ -6,6 +6,7 @@ import {
   FatigueRule,
   firstHttpsImageUrl,
   LiaScoreV1,
+  MercadoLivreScoreProfile,
 } from '@lia/core';
 
 const SCORE_VERSION = 'lia-score-v1';
@@ -15,6 +16,7 @@ const FATIGUE_WINDOW_MS = 12 * 60 * 60 * 1000;
 export class OfferService {
   private readonly logger = new Logger(OfferService.name);
   private readonly scorer = new LiaScoreV1();
+  private readonly mercadoLivreScorer = new MercadoLivreScoreProfile();
   private readonly dedupRule = new DeduplicationRule({
     priceDropBpsThreshold: 500,
   });
@@ -41,7 +43,11 @@ export class OfferService {
 
     const canonicalOffer =
       observation.canonicalPayload as unknown as CanonicalOffer;
-    const breakdown = this.scorer.evaluate(canonicalOffer);
+    const isMercadoLivre = canonicalOffer.marketplace === 'MERCADO_LIVRE';
+    const breakdown = isMercadoLivre
+      ? this.mercadoLivreScorer.evaluate(canonicalOffer)
+      : this.scorer.evaluate(canonicalOffer);
+    const scoreVersion = isMercadoLivre ? 'lia-score-ml-v1' : SCORE_VERSION;
 
     const decision = await this.prisma.$transaction(async (tx) => {
       const previousHistory = await tx.priceHistory.findMany({
@@ -64,7 +70,9 @@ export class OfferService {
 
       if (canonicalOffer.marketplace === 'MERCADO_LIVRE') {
         nextDecision = 'REJECTED_MARKETPLACE_POLICY';
-        reasons = ['Mercado Livre permanece em ingestão somente até a calibração do score e monetização.'];
+        reasons = [
+          'Mercado Livre permanece em ingestão somente até a calibração do score e monetização.',
+        ];
       } else if (this.dedupRule.isDuplicate(canonicalOffer, previousPrice)) {
         nextDecision = 'REJECTED_DUPLICATE';
         reasons = ['No significant price drop'];
@@ -135,7 +143,7 @@ export class OfferService {
         where: {
           observationId_scoreVersion: {
             observationId: observation.id,
-            scoreVersion: SCORE_VERSION,
+            scoreVersion,
           },
         },
         update: {
@@ -147,7 +155,7 @@ export class OfferService {
         },
         create: {
           observationId: observation.id,
-          scoreVersion: SCORE_VERSION,
+          scoreVersion,
           score: breakdown.finalScore,
           decision: nextDecision as any,
           decisionReasons: reasons,
