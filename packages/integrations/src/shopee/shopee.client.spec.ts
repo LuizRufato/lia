@@ -82,7 +82,38 @@ describe("ShopeeAffiliateClient", () => {
     );
   });
 
-  it("should send conversion pagination limit and cursor as request variables", async () => {
+  it("should omit scrollId from the first conversion page request", async () => {
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        data: {
+          conversionReport: {
+            nodes: [],
+            pageInfo: { hasNextPage: false, limit: 500 },
+          },
+        },
+      },
+    });
+
+    await client.getConversionReport(1, 2, 500);
+
+    const [, bodyStr] = mockedAxios.post.mock.calls[0];
+    const body = JSON.parse(bodyStr as string);
+    expect(body.query).toContain(
+      "$purchaseTimeStart: Int64!, $purchaseTimeEnd: Int64!, $limit: Int!",
+    );
+    expect(body.query).not.toContain("$scrollId");
+    expect(body.query).not.toContain("scrollId: $scrollId");
+    expect(body.query).not.toContain("$purchaseTimeStart: Int!");
+    expect(body.query).not.toContain("$purchaseTimeEnd: Int!");
+    expect(body.variables).toEqual({
+      purchaseTimeStart: "1",
+      purchaseTimeEnd: "2",
+      limit: 500,
+    });
+    expect(body.variables).not.toHaveProperty("scrollId");
+  });
+
+  it("should send conversion pagination limit and real cursor as request variables", async () => {
     mockedAxios.post.mockResolvedValueOnce({
       data: {
         data: {
@@ -101,6 +132,8 @@ describe("ShopeeAffiliateClient", () => {
     expect(body.query).toContain(
       "$purchaseTimeStart: Int64!, $purchaseTimeEnd: Int64!",
     );
+    expect(body.query).toContain("$scrollId: String");
+    expect(body.query).toContain("scrollId: $scrollId");
     expect(body.query).not.toContain("$purchaseTimeStart: Int!");
     expect(body.query).not.toContain("$purchaseTimeEnd: Int!");
     expect(body.query).not.toContain("campaignType");

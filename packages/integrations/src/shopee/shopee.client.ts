@@ -176,11 +176,14 @@ export class ShopeeAffiliateClient {
     scrollId?: string,
   ): Promise<ShopeeConversionResponse> {
     const timestamp = Math.floor(Date.now() / 1000);
+    const hasScrollId = typeof scrollId === "string" && scrollId.length > 0;
+    const scrollVariable = hasScrollId ? ", $scrollId: String" : "";
+    const scrollArgument = hasScrollId ? ", scrollId: $scrollId" : "";
 
     const bodyObj = {
       query: `
-        query conversionReport($purchaseTimeStart: Int64!, $purchaseTimeEnd: Int64!, $limit: Int!, $scrollId: String) {
-          conversionReport(purchaseTimeStart: $purchaseTimeStart, purchaseTimeEnd: $purchaseTimeEnd, limit: $limit, scrollId: $scrollId) {
+        query conversionReport($purchaseTimeStart: Int64!, $purchaseTimeEnd: Int64!, $limit: Int!${scrollVariable}) {
+          conversionReport(purchaseTimeStart: $purchaseTimeStart, purchaseTimeEnd: $purchaseTimeEnd, limit: $limit${scrollArgument}) {
             nodes {
               conversionId
               purchaseTime
@@ -229,7 +232,7 @@ export class ShopeeAffiliateClient {
         purchaseTimeStart: String(purchaseTimeStart),
         purchaseTimeEnd: String(purchaseTimeEnd),
         limit,
-        ...(scrollId && { scrollId }),
+        ...(hasScrollId && { scrollId }),
       },
     };
 
