@@ -192,7 +192,6 @@ export class ShopeeAffiliateClient {
               utmContent
               buyerType
               device
-              campaignType
               orders {
                 orderId
                 orderStatus
@@ -227,8 +226,8 @@ export class ShopeeAffiliateClient {
         }
       `,
       variables: {
-        purchaseTimeStart,
-        purchaseTimeEnd,
+        purchaseTimeStart: String(purchaseTimeStart),
+        purchaseTimeEnd: String(purchaseTimeEnd),
         limit,
         ...(scrollId && { scrollId }),
       },

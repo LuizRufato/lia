@@ -103,9 +103,13 @@ describe("ShopeeAffiliateClient", () => {
     );
     expect(body.query).not.toContain("$purchaseTimeStart: Int!");
     expect(body.query).not.toContain("$purchaseTimeEnd: Int!");
+    expect(body.query).not.toContain("campaignType");
+    expect(body.query).toContain("conversionId");
+    expect(body.query).toContain("orders");
+    expect(body.query).toContain("itemId");
     expect(body.variables).toEqual({
-      purchaseTimeStart: 1,
-      purchaseTimeEnd: 2,
+      purchaseTimeStart: "1",
+      purchaseTimeEnd: "2",
       limit: 500,
       scrollId: "cursor-page-2",
     });
