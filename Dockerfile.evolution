@@ -22,6 +22,11 @@ RUN set -eux; \
       --fetch-timeout=300000 \
       baileys@7.0.0-rc13 \
       whatsapp-rust-bridge@0.5.4; \
-    cp -a "$overlay/node_modules/." /evolution/node_modules/; \
+    # Keep Evolution's dependency tree intact. Add only missing transitive
+    # packages, then replace the two explicitly pinned packages.
+    cp -a -n "$overlay/node_modules/." /evolution/node_modules/; \
+    rm -rf /evolution/node_modules/baileys /evolution/node_modules/whatsapp-rust-bridge; \
+    cp -a "$overlay/node_modules/baileys" /evolution/node_modules/; \
+    cp -a "$overlay/node_modules/whatsapp-rust-bridge" /evolution/node_modules/; \
     node -e "const fs=require('fs'); for (const [name,expected] of [['baileys','7.0.0-rc13'],['whatsapp-rust-bridge','0.5.4']]) { const file='/evolution/node_modules/'+name+'/package.json'; if (!fs.existsSync(file)) throw new Error('package metadata not found: '+name); const version=JSON.parse(fs.readFileSync(file,'utf8')).version; if (version!==expected) throw new Error(name+' resolved to '+version); console.log(name+'@'+version); }"; \
     rm -rf "$overlay"
