@@ -18,6 +18,12 @@ import {
   AutopilotConfigSnapshot,
   MonetizationContext,
   AutopilotRuntimeContext,
+  CatalogOfferSignals,
+  CatalogPolicyConfig,
+  CatalogPublicationRecord,
+  countCategoryPublicationsToday,
+  evaluateCatalogPolicy,
+  findProductCooldown,
   Clock,
   MonetizationStatus,
   IntegrationStatus,
@@ -26,6 +32,7 @@ import {
   startOfLocalDay,
   nextLocalDay,
   nextScheduleStart,
+  normalizeCatalogText,
 } from '@lia/core';
 import {
   decryptSecret,
@@ -71,6 +78,7 @@ export class AutopilotSchedulerService
       include: {
         enabledChannels: { include: { channel: true } },
         enabledMarketplaces: true,
+        catalogPolicy: true,
       },
     });
 
@@ -220,6 +228,26 @@ export class AutopilotSchedulerService
       return;
     }
 
+    const catalogPolicy = this.getCatalogPolicy(dbConfig.catalogPolicy);
+    const catalogSignals = this.getCatalogSignals(
+      eligibleEvaluation.observation,
+    );
+    const catalogDecision = evaluateCatalogPolicy(
+      catalogPolicy,
+      catalogSignals,
+    );
+    if (!catalogDecision.allowed) {
+      await this.rejectCatalogCandidate(
+        dbConfig,
+        candidate,
+        eligibleEvaluation.id,
+        eligibleEvaluation.score?.toNumber() ?? 0,
+        catalogDecision.reason,
+        catalogDecision.details,
+      );
+      return;
+    }
+
     // Build context
     // 1. lastPublicationAt. Unknown/in-flight delivery is conservative.
     const lastPub = await this.prisma.publication.findFirst({
@@ -300,10 +328,54 @@ export class AutopilotSchedulerService
     );
 
     if (decision.approved) {
+      if (decision.channelId) {
+        const guard = await this.evaluateCatalogPublicationGuards(
+          tenantId,
+          dbConfig.timezone,
+          decision.channelId,
+          dbOffer.externalId,
+          catalogSignals.category,
+          catalogPolicy,
+          now,
+        );
+        if (!guard.allowed) {
+          if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+            await this.createAudit(
+              tenantId,
+              candidate,
+              eligibleEvaluation.id,
+              guard.reason,
+              offer.score,
+              decision.channelId,
+              guard.details,
+            );
+          } else {
+            await this.deferCandidate(
+              dbConfig,
+              candidate,
+              guard.reason,
+              guard.retryAt,
+              guard.details,
+              eligibleEvaluation.id,
+              offer.score,
+            );
+          }
+          return;
+        }
+      }
+
       // DRY_RUN is intentionally read-only for candidates/publications and
       // never verifies links or enqueues a publisher job.
       if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
-        await this.createAudit(tenantId, candidate, eligibleEvaluation.id, decision.reason, offer.score, decision.channelId, decision.details);
+        await this.createAudit(
+          tenantId,
+          candidate,
+          eligibleEvaluation.id,
+          decision.reason,
+          offer.score,
+          decision.channelId,
+          decision.details,
+        );
         return;
       }
 
@@ -312,7 +384,15 @@ export class AutopilotSchedulerService
         data: { status: 'QUEUED', deferredReason: null, retryAt: null },
       });
       if (!claimed.count) return;
-      await this.createAudit(tenantId, candidate, eligibleEvaluation.id, decision.reason, offer.score, decision.channelId, decision.details);
+      await this.createAudit(
+        tenantId,
+        candidate,
+        eligibleEvaluation.id,
+        decision.reason,
+        offer.score,
+        decision.channelId,
+        decision.details,
+      );
       await this.publisherQueue.add(
         'publish-candidate',
         { candidateId: candidate.id, channelId: decision.channelId! },
@@ -327,35 +407,76 @@ export class AutopilotSchedulerService
         'REJECTED_MONETIZATION',
       ]);
       if (temporary.has(decision.reason)) {
-        const retryAt = decision.reason === 'REJECTED_DAILY_LIMIT'
-          ? nextLocalDay(now, configSnapshot.timezone)
-          : decision.reason === 'REJECTED_INTERVAL' && lastPub
-            ? new Date((lastPub.publishedAt ?? lastPub.createdAt).getTime() + configSnapshot.intervalMinutes * 60_000)
-            : new Date(now.getTime() + 15 * 60_000);
-        const auditReason = decision.reason === 'REJECTED_DAILY_LIMIT'
-          ? 'DEFERRED_DAILY_LIMIT'
-          : decision.reason === 'REJECTED_INTERVAL'
-            ? 'DEFERRED_INTERVAL'
-            : decision.reason === 'REJECTED_OUTSIDE_SCHEDULE'
-              ? 'DEFERRED_OUTSIDE_SCHEDULE'
-              : decision.reason === 'REJECTED_INTEGRATION_UNHEALTHY'
-                ? 'DEFERRED_INTEGRATION_UNHEALTHY'
-                : 'DEFERRED_MONETIZATION';
+        const retryAt =
+          decision.reason === 'REJECTED_DAILY_LIMIT'
+            ? nextLocalDay(now, configSnapshot.timezone)
+            : decision.reason === 'REJECTED_INTERVAL' && lastPub
+              ? new Date(
+                  (lastPub.publishedAt ?? lastPub.createdAt).getTime() +
+                    configSnapshot.intervalMinutes * 60_000,
+                )
+              : new Date(now.getTime() + 15 * 60_000);
+        const auditReason =
+          decision.reason === 'REJECTED_DAILY_LIMIT'
+            ? 'DEFERRED_DAILY_LIMIT'
+            : decision.reason === 'REJECTED_INTERVAL'
+              ? 'DEFERRED_INTERVAL'
+              : decision.reason === 'REJECTED_OUTSIDE_SCHEDULE'
+                ? 'DEFERRED_OUTSIDE_SCHEDULE'
+                : decision.reason === 'REJECTED_INTEGRATION_UNHEALTHY'
+                  ? 'DEFERRED_INTEGRATION_UNHEALTHY'
+                  : 'DEFERRED_MONETIZATION';
         if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
-          await this.createAudit(tenantId, candidate, eligibleEvaluation.id, auditReason, offer.score, decision.channelId, decision.details);
+          await this.createAudit(
+            tenantId,
+            candidate,
+            eligibleEvaluation.id,
+            auditReason,
+            offer.score,
+            decision.channelId,
+            decision.details,
+          );
         } else {
-          await this.deferCandidate(dbConfig, candidate, auditReason, retryAt, decision.details, eligibleEvaluation.id, offer.score);
+          await this.deferCandidate(
+            dbConfig,
+            candidate,
+            auditReason,
+            retryAt,
+            decision.details,
+            eligibleEvaluation.id,
+            offer.score,
+          );
         }
       } else {
         if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
-          await this.createAudit(tenantId, candidate, eligibleEvaluation.id, 'SKIPPED_PERMANENT_POLICY', offer.score, decision.channelId, `${decision.reason}: ${decision.details || ''}`);
+          await this.createAudit(
+            tenantId,
+            candidate,
+            eligibleEvaluation.id,
+            'SKIPPED_PERMANENT_POLICY',
+            offer.score,
+            decision.channelId,
+            `${decision.reason}: ${decision.details || ''}`,
+          );
           return;
         }
         await this.prisma.publicationCandidate.updateMany({
           where: { id: candidate.id, status: { in: ['PENDING', 'DEFERRED'] } },
-          data: { status: 'SKIPPED', deferredReason: decision.reason, retryAt: null },
+          data: {
+            status: 'SKIPPED',
+            deferredReason: decision.reason,
+            retryAt: null,
+          },
         });
-        await this.createAudit(tenantId, candidate, eligibleEvaluation.id, 'SKIPPED_PERMANENT_POLICY', offer.score, decision.channelId, `${decision.reason}: ${decision.details || ''}`);
+        await this.createAudit(
+          tenantId,
+          candidate,
+          eligibleEvaluation.id,
+          'SKIPPED_PERMANENT_POLICY',
+          offer.score,
+          decision.channelId,
+          `${decision.reason}: ${decision.details || ''}`,
+        );
       }
     }
   }
@@ -370,8 +491,219 @@ export class AutopilotSchedulerService
     details?: string,
   ) {
     await this.prisma.autopilotAudit.create({
-      data: { tenantId, candidateId: candidate.id, evaluationId, channelId, decision, liaScore: score, details },
+      data: {
+        tenantId,
+        candidateId: candidate.id,
+        evaluationId,
+        channelId,
+        decision,
+        liaScore: score,
+        details,
+      },
     });
+  }
+
+  private getCatalogPolicy(policy: any): CatalogPolicyConfig & {
+    productCooldownHours: number | null;
+    maxPerCategoryPerDay: number | null;
+  } {
+    return {
+      mode:
+        policy?.mode === 'SELECTED_CATEGORIES' ? 'SELECTED_CATEGORIES' : 'OPEN',
+      allowedCategories: policy?.allowedCategories ?? [],
+      blockedCategories: policy?.blockedCategories ?? [],
+      blockedKeywords: policy?.blockedKeywords ?? [],
+      minSalesCount: policy?.minSalesCount ?? null,
+      minRating: policy?.minRating ?? null,
+      productCooldownHours: policy?.productCooldownHours ?? null,
+      maxPerCategoryPerDay: policy?.maxPerCategoryPerDay ?? null,
+    };
+  }
+
+  private getCatalogSignals(observation: any): CatalogOfferSignals {
+    const canonical = (observation.canonicalPayload || {}) as any;
+    const product = canonical.product || {};
+    const metrics = canonical.metrics || {};
+    const salesCount = metrics.marketplaceSalesCount;
+    const rating = metrics.rating;
+    return {
+      title: product.title || observation.offer?.title || '',
+      category:
+        observation.category ||
+        product.normalizedCategory ||
+        product.sourceCategory ||
+        null,
+      salesCount:
+        Number.isInteger(salesCount) && salesCount >= 0 ? salesCount : null,
+      rating:
+        typeof rating === 'number' &&
+        Number.isFinite(rating) &&
+        rating >= 0 &&
+        rating <= 5
+          ? rating
+          : null,
+    };
+  }
+
+  private async rejectCatalogCandidate(
+    dbConfig: any,
+    candidate: any,
+    evaluationId: string,
+    score: number,
+    reason: string,
+    details: string,
+  ) {
+    if (dbConfig.mode === 'DRY_RUN') {
+      await this.createAudit(
+        dbConfig.tenantId,
+        candidate,
+        evaluationId,
+        reason,
+        score,
+        undefined,
+        details,
+      );
+      return;
+    }
+    const updated = await this.prisma.publicationCandidate.updateMany({
+      where: { id: candidate.id, status: { in: ['PENDING', 'DEFERRED'] } },
+      data: { status: 'SKIPPED', deferredReason: reason, retryAt: null },
+    });
+    if (updated.count) {
+      await this.createAudit(
+        dbConfig.tenantId,
+        candidate,
+        evaluationId,
+        reason,
+        score,
+        undefined,
+        details,
+      );
+    }
+  }
+
+  private async evaluateCatalogPublicationGuards(
+    tenantId: string,
+    timezone: string,
+    channelId: string,
+    externalId: string,
+    category: string | null,
+    policy: CatalogPolicyConfig & {
+      productCooldownHours: number | null;
+      maxPerCategoryPerDay: number | null;
+    },
+    now: Date,
+  ): Promise<
+    | { allowed: true }
+    | {
+        allowed: false;
+        reason: 'REJECTED_PRODUCT_COOLDOWN' | 'REJECTED_CATEGORY_DAILY_LIMIT';
+        details: string;
+        retryAt: Date;
+      }
+  > {
+    if (
+      policy.productCooldownHours == null &&
+      policy.maxPerCategoryPerDay == null
+    ) {
+      return { allowed: true };
+    }
+
+    const cooldownStart =
+      policy.productCooldownHours == null
+        ? now
+        : new Date(
+            now.getTime() - policy.productCooldownHours * 60 * 60 * 1000,
+          );
+    const dayStart = startOfLocalDay(now, timezone);
+    const from = new Date(
+      Math.min(cooldownStart.getTime(), dayStart.getTime()),
+    );
+    const publications = await this.prisma.publication.findMany({
+      where: {
+        channel: { tenantId },
+        status: { in: ['PUBLISHED', 'DELIVERY_UNKNOWN'] },
+        createdAt: { gte: from, lte: now },
+      },
+      select: {
+        channelId: true,
+        status: true,
+        createdAt: true,
+        candidate: {
+          select: {
+            evaluation: {
+              select: {
+                observation: {
+                  select: {
+                    category: true,
+                    offer: { select: { externalId: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const records: CatalogPublicationRecord[] = publications.map(
+      (publication: any) => ({
+        tenantId,
+        channelId: publication.channelId,
+        externalId:
+          publication.candidate?.evaluation?.observation?.offer?.externalId ||
+          '',
+        category: publication.candidate?.evaluation?.observation?.category
+          ? normalizeCatalogText(
+              publication.candidate.evaluation.observation.category,
+            )
+          : null,
+        status: publication.status,
+        createdAt: publication.createdAt,
+      }),
+    );
+
+    if (policy.productCooldownHours != null) {
+      const cooldown = findProductCooldown(records, {
+        tenantId,
+        channelId,
+        externalId,
+        now,
+        cooldownHours: policy.productCooldownHours,
+      });
+      if (cooldown.active) {
+        const retryAt =
+          cooldown.until && cooldown.until > now
+            ? cooldown.until
+            : new Date(now.getTime() + 15 * 60_000);
+        return {
+          allowed: false,
+          reason: 'REJECTED_PRODUCT_COOLDOWN',
+          details: `Produto publicado recentemente neste canal; disponível novamente após ${retryAt.toISOString()}.`,
+          retryAt,
+        };
+      }
+    }
+
+    if (policy.maxPerCategoryPerDay != null && category) {
+      const count = countCategoryPublicationsToday(records, {
+        tenantId,
+        channelId,
+        category: normalizeCatalogText(category),
+        now,
+        timezone,
+      });
+      if (count >= policy.maxPerCategoryPerDay) {
+        const retryAt = nextLocalDay(now, timezone);
+        return {
+          allowed: false,
+          reason: 'REJECTED_CATEGORY_DAILY_LIMIT',
+          details: `Limite diário desta categoria atingido: ${count}/${policy.maxPerCategoryPerDay}.`,
+          retryAt,
+        };
+      }
+    }
+
+    return { allowed: true };
   }
 
   private async deferCandidate(
@@ -388,7 +720,15 @@ export class AutopilotSchedulerService
       data: { status: 'DEFERRED', deferredReason: reason, retryAt },
     });
     if (result.count) {
-      await this.createAudit(dbConfig.tenantId, candidate, evaluationId, reason, score, undefined, details);
+      await this.createAudit(
+        dbConfig.tenantId,
+        candidate,
+        evaluationId,
+        reason,
+        score,
+        undefined,
+        details,
+      );
     }
   }
 
@@ -414,7 +754,10 @@ export class AutopilotSchedulerService
         });
         if (updated.count) {
           await tx.publicationCandidate.updateMany({
-            where: { id: publication.candidateId, status: { in: ['PUBLISHING', 'QUEUED'] } },
+            where: {
+              id: publication.candidateId,
+              status: { in: ['PUBLISHING', 'QUEUED'] },
+            },
             data: { status: 'FAILED', deferredReason: 'DELIVERY_UNKNOWN' },
           });
           await tx.autopilotAudit.create({
@@ -448,13 +791,19 @@ export class AutopilotSchedulerService
     const context = 'AUTOPILOT_VERIFICATION';
     const contextId = 'autopilot';
     let link = await this.prisma.affiliateLink.findUnique({
-      where: { offerId_context_contextId: { offerId: offer.id, context, contextId } },
+      where: {
+        offerId_context_contextId: { offerId: offer.id, context, contextId },
+      },
     });
 
     if (link?.status === 'VERIFIED' && link.affiliateUrl) {
       await this.prisma.monetizationRecord.upsert({
         where: { offerId: offer.id },
-        update: { status: 'VERIFIED', destinationUrl: link.affiliateUrl, verifiedAt: link.verifiedAt ?? new Date() },
+        update: {
+          status: 'VERIFIED',
+          destinationUrl: link.affiliateUrl,
+          verifiedAt: link.verifiedAt ?? new Date(),
+        },
         create: {
           offerId: offer.id,
           provider: 'SHOPEE',
@@ -465,19 +814,32 @@ export class AutopilotSchedulerService
           verifiedAt: link.verifiedAt ?? new Date(),
         },
       });
-      return { ...current, status: MonetizationStatus.VERIFIED, destinationUrl: link.affiliateUrl };
+      return {
+        ...current,
+        status: MonetizationStatus.VERIFIED,
+        destinationUrl: link.affiliateUrl,
+      };
     }
 
     try {
       const integration = await this.prisma.marketplaceIntegration.findUnique({
-        where: { tenantId_provider: { tenantId: offer.tenantId, provider: 'SHOPEE' } },
+        where: {
+          tenantId_provider: { tenantId: offer.tenantId, provider: 'SHOPEE' },
+        },
       });
-      if (!integration?.publicIdentifier || !integration.encryptedSecret || !integration.iv || !integration.authTag) {
+      if (
+        !integration?.publicIdentifier ||
+        !integration.encryptedSecret ||
+        !integration.iv ||
+        !integration.authTag
+      ) {
         return current;
       }
 
       link = await this.prisma.affiliateLink.upsert({
-        where: { offerId_context_contextId: { offerId: offer.id, context, contextId } },
+        where: {
+          offerId_context_contextId: { offerId: offer.id, context, contextId },
+        },
         update: { status: 'VERIFYING' },
         create: {
           tenantId: offer.tenantId,
@@ -496,10 +858,19 @@ export class AutopilotSchedulerService
         integration.authTag,
         getEncryptionKey(),
       );
-      const client = new ShopeeAffiliateClient(integration.publicIdentifier, appSecret);
-      const response = await client.generateShortLink(offer.url, ['lia', link.attributionKey]);
+      const client = new ShopeeAffiliateClient(
+        integration.publicIdentifier,
+        appSecret,
+      );
+      const response = await client.generateShortLink(offer.url, [
+        'lia',
+        link.attributionKey,
+      ]);
       const affiliateUrl = response.data?.generateShortLink?.shortLink;
-      if (!affiliateUrl || !/^https:\/\/(s\.shopee|shope\.ee)/.test(affiliateUrl)) {
+      if (
+        !affiliateUrl ||
+        !/^https:\/\/(s\.shopee|shope\.ee)/.test(affiliateUrl)
+      ) {
         throw new Error('Shopee não retornou shortLink válido.');
       }
 
@@ -512,24 +883,37 @@ export class AutopilotSchedulerService
         this.prisma.monetizationRecord.upsert({
           where: { offerId: offer.id },
           update: {
-            status: 'VERIFIED', destinationUrl: affiliateUrl,
-            commissionAmountCents: offer.commission, verifiedAt,
+            status: 'VERIFIED',
+            destinationUrl: affiliateUrl,
+            commissionAmountCents: offer.commission,
+            verifiedAt,
           },
           create: {
-            offerId: offer.id, provider: 'SHOPEE', source: 'shopee_short_link',
-            status: 'VERIFIED', destinationUrl: affiliateUrl,
-            commissionAmountCents: offer.commission, verifiedAt,
+            offerId: offer.id,
+            provider: 'SHOPEE',
+            source: 'shopee_short_link',
+            status: 'VERIFIED',
+            destinationUrl: affiliateUrl,
+            commissionAmountCents: offer.commission,
+            verifiedAt,
           },
         }),
       ]);
-      return { ...current, status: MonetizationStatus.VERIFIED, destinationUrl: affiliateUrl };
+      return {
+        ...current,
+        status: MonetizationStatus.VERIFIED,
+        destinationUrl: affiliateUrl,
+      };
     } catch (error: any) {
       if (link) {
         await this.prisma.affiliateLink.update({
-          where: { id: link.id }, data: { status: 'FAILED' },
+          where: { id: link.id },
+          data: { status: 'FAILED' },
         });
       }
-      this.logger.warn(`Autopilot monetization failed for ${offer.id}: ${error.message}`);
+      this.logger.warn(
+        `Autopilot monetization failed for ${offer.id}: ${error.message}`,
+      );
       return current;
     }
   }

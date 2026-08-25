@@ -9,8 +9,33 @@ import {
   AlertTriangle,
   Save,
   Loader2,
+  Plus,
+  Tags,
+  X,
 } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
+
+type CatalogPolicy = {
+  mode: "OPEN" | "SELECTED_CATEGORIES";
+  allowedCategories: string[];
+  blockedCategories: string[];
+  blockedKeywords: string[];
+  minSalesCount: number | null;
+  minRating: number | null;
+  productCooldownHours: number | null;
+  maxPerCategoryPerDay: number | null;
+};
+
+const EMPTY_CATALOG_POLICY: CatalogPolicy = {
+  mode: "OPEN",
+  allowedCategories: [],
+  blockedCategories: [],
+  blockedKeywords: [],
+  minSalesCount: null,
+  minRating: null,
+  productCooldownHours: null,
+  maxPerCategoryPerDay: null,
+};
 
 export default function AutopilotDashboard() {
   const [data, setData] = useState<any>(null);
@@ -18,6 +43,8 @@ export default function AutopilotDashboard() {
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState("");
+  const [blockedCategoryInput, setBlockedCategoryInput] = useState("");
+  const [blockedKeywordInput, setBlockedKeywordInput] = useState("");
   const [form, setForm] = useState({
     mode: "OFF",
     minScore: 0,
@@ -29,6 +56,7 @@ export default function AutopilotDashboard() {
     timezone: "America/Campo_Grande",
     enabledChannelIds: [] as string[],
     enabledMarketplaceIds: [] as string[],
+    catalogPolicy: EMPTY_CATALOG_POLICY,
   });
 
   useEffect(() => {
@@ -39,10 +67,16 @@ export default function AutopilotDashboard() {
     setLoading(true);
     setLoadError("");
     try {
-      const res = await fetchAuth("/autopilot/dashboard");
+      const [res, categoriesRes] = await Promise.all([
+        fetchAuth("/autopilot/dashboard"),
+        fetchAuth("/autopilot/catalog/categories"),
+      ]);
       if (!res.ok) throw new Error("Failed to fetch");
       const json = await res.json();
-      setData(json);
+      const categories = categoriesRes.ok
+        ? await categoriesRes.json()
+        : { categories: [] };
+      setData({ ...json, catalogCategories: categories.categories || [] });
 
       if (json.config) {
         setForm({
@@ -54,12 +88,22 @@ export default function AutopilotDashboard() {
           allowedStartMinute: json.config.allowedStartMinute,
           allowedEndMinute: json.config.allowedEndMinute,
           timezone: json.config.timezone || "America/Campo_Grande",
-          enabledChannelIds: json.config.channels.map((channel: any) => channel.id),
-          enabledMarketplaceIds: json.config.marketplaces.map((marketplace: any) => marketplace.id),
+          enabledChannelIds: json.config.channels.map(
+            (channel: any) => channel.id,
+          ),
+          enabledMarketplaceIds: json.config.marketplaces.map(
+            (marketplace: any) => marketplace.id,
+          ),
+          catalogPolicy: {
+            ...EMPTY_CATALOG_POLICY,
+            ...(json.config.catalogPolicy || {}),
+          },
         });
       }
     } catch (err) {
-      setLoadError("Não foi possível carregar as configurações do Piloto Automático.");
+      setLoadError(
+        "Não foi possível carregar as configurações do Piloto Automático.",
+      );
     } finally {
       setLoading(false);
     }
@@ -98,6 +142,7 @@ export default function AutopilotDashboard() {
         intervalMinutes: Number(form.intervalMinutes),
         allowedStartMinute: Number(form.allowedStartMinute),
         allowedEndMinute: Number(form.allowedEndMinute),
+        catalogPolicy: form.catalogPolicy,
       };
       const res = await fetchAuth("/autopilot/config", {
         method: "POST",
@@ -152,6 +197,39 @@ export default function AutopilotDashboard() {
   const parseTime = (timeStr: string) => {
     const [h, m] = timeStr.split(":").map(Number);
     return (h || 0) * 60 + (m || 0);
+  };
+
+  const updateCatalogPolicy = (patch: Partial<CatalogPolicy>) =>
+    setForm((current) => ({
+      ...current,
+      catalogPolicy: { ...current.catalogPolicy, ...patch },
+    }));
+
+  const toggleCatalogCategory = (category: string) => {
+    const selected = form.catalogPolicy.allowedCategories.includes(category);
+    updateCatalogPolicy({
+      allowedCategories: selected
+        ? form.catalogPolicy.allowedCategories.filter(
+            (item) => item !== category,
+          )
+        : [...form.catalogPolicy.allowedCategories, category],
+    });
+  };
+
+  const addCatalogValue = (
+    field: "blockedCategories" | "blockedKeywords",
+    value: string,
+  ) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    const values = form.catalogPolicy[field];
+    if (
+      !values.some(
+        (item) => item.toLocaleLowerCase() === normalized.toLocaleLowerCase(),
+      )
+    ) {
+      updateCatalogPolicy({ [field]: [...values, normalized] });
+    }
   };
 
   const noConnections =
@@ -285,13 +363,16 @@ export default function AutopilotDashboard() {
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        minimumCommissionCents: Math.round(Number(e.target.value || 0) * 100),
+                        minimumCommissionCents: Math.round(
+                          Number(e.target.value || 0) * 100,
+                        ),
                       })
                     }
                     className="w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500"
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Ofertas sem comissão confirmada ou abaixo deste valor são bloqueadas.
+                    Ofertas sem comissão confirmada ou abaixo deste valor são
+                    bloqueadas.
                   </p>
                 </div>
                 <div>
@@ -422,21 +503,32 @@ export default function AutopilotDashboard() {
                   </h4>
                   <div className="space-y-2">
                     {data?.availableChannels?.map((channel: any) => (
-                      <label key={channel.id} className="flex items-center gap-2 text-sm text-gray-700">
+                      <label
+                        key={channel.id}
+                        className="flex items-center gap-2 text-sm text-gray-700"
+                      >
                         <input
                           type="checkbox"
                           checked={form.enabledChannelIds.includes(channel.id)}
-                          onChange={(e) => setForm({
-                            ...form,
-                            enabledChannelIds: e.target.checked
-                              ? [...form.enabledChannelIds, channel.id]
-                              : form.enabledChannelIds.filter((id) => id !== channel.id),
-                          })}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              enabledChannelIds: e.target.checked
+                                ? [...form.enabledChannelIds, channel.id]
+                                : form.enabledChannelIds.filter(
+                                    (id) => id !== channel.id,
+                                  ),
+                            })
+                          }
                         />
                         {channel.displayName} ({channel.provider})
                       </label>
                     ))}
-                    {!data?.availableChannels?.length && <p className="text-sm text-gray-500">Nenhum canal ativo disponível.</p>}
+                    {!data?.availableChannels?.length && (
+                      <p className="text-sm text-gray-500">
+                        Nenhum canal ativo disponível.
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div>
@@ -445,25 +537,352 @@ export default function AutopilotDashboard() {
                   </h4>
                   <div className="space-y-2">
                     {data?.availableMarketplaces?.map((marketplace: any) => (
-                      <label key={marketplace.id} className="flex items-center gap-2 text-sm text-gray-700">
+                      <label
+                        key={marketplace.id}
+                        className="flex items-center gap-2 text-sm text-gray-700"
+                      >
                         <input
                           type="checkbox"
-                          checked={form.enabledMarketplaceIds.includes(marketplace.id)}
-                          onChange={(e) => setForm({
-                            ...form,
-                            enabledMarketplaceIds: e.target.checked
-                              ? [...form.enabledMarketplaceIds, marketplace.id]
-                              : form.enabledMarketplaceIds.filter((id) => id !== marketplace.id),
-                          })}
+                          checked={form.enabledMarketplaceIds.includes(
+                            marketplace.id,
+                          )}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              enabledMarketplaceIds: e.target.checked
+                                ? [
+                                    ...form.enabledMarketplaceIds,
+                                    marketplace.id,
+                                  ]
+                                : form.enabledMarketplaceIds.filter(
+                                    (id) => id !== marketplace.id,
+                                  ),
+                            })
+                          }
                         />
                         {marketplace.name}
                       </label>
                     ))}
-                    {!data?.availableMarketplaces?.length && <p className="text-sm text-gray-500">Nenhum marketplace conectado disponível.</p>}
+                    {!data?.availableMarketplaces?.length && (
+                      <p className="text-sm text-gray-500">
+                        Nenhum marketplace conectado disponível.
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
+
+            <section
+              className="mt-8 border-t pt-8"
+              aria-labelledby="catalog-policy-title"
+            >
+              <div className="flex items-start gap-3">
+                <div className="rounded-lg bg-blue-50 p-2 text-blue-600">
+                  <Tags className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3
+                    id="catalog-policy-title"
+                    className="font-semibold text-gray-900"
+                  >
+                    Catálogo e relevância comercial
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Filtros determinísticos por categoria, sinais reais do
+                    catálogo e diversidade por produto. A estratégia aberta
+                    preserva o comportamento atual.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                {[
+                  [
+                    "OPEN",
+                    "Catálogo aberto",
+                    "Toda categoria observada pode participar.",
+                  ],
+                  [
+                    "SELECTED_CATEGORIES",
+                    "Categorias selecionadas",
+                    "Somente as categorias marcadas podem participar.",
+                  ],
+                ].map(([value, title, description]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={form.catalogPolicy.mode === value}
+                    onClick={() =>
+                      updateCatalogPolicy({
+                        mode: value as CatalogPolicy["mode"],
+                      })
+                    }
+                    className={`rounded-xl border p-4 text-left transition ${form.catalogPolicy.mode === value ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100" : "border-gray-200 hover:border-blue-300"}`}
+                  >
+                    <span className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-gray-900">
+                        {title}
+                      </span>
+                      <span
+                        className={`h-5 w-9 rounded-full p-0.5 ${form.catalogPolicy.mode === value ? "bg-blue-600" : "bg-gray-300"}`}
+                      >
+                        <span
+                          className={`block h-4 w-4 rounded-full bg-white transition ${form.catalogPolicy.mode === value ? "translate-x-4" : ""}`}
+                        />
+                      </span>
+                    </span>
+                    <span className="mt-2 block text-xs leading-relaxed text-gray-500">
+                      {description}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-6 rounded-xl border border-gray-200 bg-gray-50/70 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-800">
+                      Categorias observadas
+                    </h4>
+                    <p className="mt-1 text-xs text-gray-500">
+                      A lista vem do catálogo real deste tenant; não há
+                      categorias pré-cadastradas.
+                    </p>
+                  </div>
+                  <span className="text-xs font-medium text-gray-500">
+                    {form.catalogPolicy.allowedCategories.length} selecionadas
+                  </span>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {(data.catalogCategories || []).map((category: any) => {
+                    const id = category.identifier || category.id;
+                    const selected =
+                      form.catalogPolicy.allowedCategories.includes(id);
+                    const blocked =
+                      form.catalogPolicy.blockedCategories.includes(id);
+                    return (
+                      <button
+                        type="button"
+                        key={id}
+                        onClick={() => toggleCatalogCategory(id)}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
+                        title={category.name || id}
+                      >
+                        {category.name && category.name !== id
+                          ? `${category.name} · `
+                          : ""}
+                        {id}
+                      </button>
+                    );
+                  })}
+                  {!data.catalogCategories?.length && (
+                    <span className="text-sm text-gray-500">
+                      Nenhuma categoria observada.
+                    </span>
+                  )}
+                </div>
+                <div className="mt-4 flex gap-2">
+                  <input
+                    value={blockedCategoryInput}
+                    onChange={(event) =>
+                      setBlockedCategoryInput(event.target.value)
+                    }
+                    placeholder="Bloquear identificador de categoria"
+                    className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white p-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      addCatalogValue(
+                        "blockedCategories",
+                        blockedCategoryInput,
+                      );
+                      setBlockedCategoryInput("");
+                    }}
+                    className="rounded-md border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+                    aria-label="Adicionar categoria bloqueada"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </div>
+                {!!form.catalogPolicy.blockedCategories.length && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {form.catalogPolicy.blockedCategories.map((category) => (
+                      <span
+                        key={category}
+                        className="inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-800"
+                      >
+                        {category}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateCatalogPolicy({
+                              blockedCategories:
+                                form.catalogPolicy.blockedCategories.filter(
+                                  (item) => item !== category,
+                                ),
+                            })
+                          }
+                          aria-label={`Remover ${category}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-6 grid gap-6 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Palavras bloqueadas
+                  </label>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Busca sem diferenciar maiúsculas ou acentos no título e na
+                    categoria. Máximo recomendado: 50.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      value={blockedKeywordInput}
+                      onChange={(event) =>
+                        setBlockedKeywordInput(event.target.value)
+                      }
+                      placeholder="Ex.: suplemento"
+                      className="min-w-0 flex-1 rounded-md border border-gray-300 p-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        addCatalogValue("blockedKeywords", blockedKeywordInput);
+                        setBlockedKeywordInput("");
+                      }}
+                      className="rounded-md border border-gray-300 bg-white px-3 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+                      aria-label="Adicionar palavra bloqueada"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {form.catalogPolicy.blockedKeywords.map((keyword) => (
+                      <span
+                        key={keyword}
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800"
+                      >
+                        {keyword}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateCatalogPolicy({
+                              blockedKeywords:
+                                form.catalogPolicy.blockedKeywords.filter(
+                                  (item) => item !== keyword,
+                                ),
+                            })
+                          }
+                          aria-label={`Remover ${keyword}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="text-sm font-medium text-gray-700">
+                    Vendas mínimas
+                    <input
+                      type="number"
+                      min="0"
+                      value={form.catalogPolicy.minSalesCount ?? ""}
+                      onChange={(event) =>
+                        updateCatalogPolicy({
+                          minSalesCount:
+                            event.target.value === ""
+                              ? null
+                              : Number(event.target.value),
+                        })
+                      }
+                      className="mt-2 w-full rounded-md border border-gray-300 p-2 font-normal"
+                      placeholder="Sem mínimo"
+                    />
+                    <span className="mt-1 block text-xs font-normal text-gray-500">
+                      Só bloqueia quando o dado existe.
+                    </span>
+                  </label>
+                  <label className="text-sm font-medium text-gray-700">
+                    Rating mínimo
+                    <input
+                      type="number"
+                      min="0"
+                      max="5"
+                      step="0.1"
+                      value={form.catalogPolicy.minRating ?? ""}
+                      onChange={(event) =>
+                        updateCatalogPolicy({
+                          minRating:
+                            event.target.value === ""
+                              ? null
+                              : Number(event.target.value),
+                        })
+                      }
+                      className="mt-2 w-full rounded-md border border-gray-300 p-2 font-normal"
+                      placeholder="Sem mínimo"
+                    />
+                    <span className="mt-1 block text-xs font-normal text-gray-500">
+                      Escala de 0 a 5; ausente não vira zero.
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Cooldown por produto (horas)
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.catalogPolicy.productCooldownHours ?? ""}
+                    onChange={(event) =>
+                      updateCatalogPolicy({
+                        productCooldownHours:
+                          event.target.value === ""
+                            ? null
+                            : Number(event.target.value),
+                      })
+                    }
+                    className="mt-2 w-full rounded-md border border-gray-300 p-2 font-normal"
+                    placeholder="Sem cooldown adicional"
+                  />
+                  <span className="mt-1 block text-xs font-normal text-gray-500">
+                    Considera somente publicações PUBLISHED e DELIVERY_UNKNOWN
+                    por canal.
+                  </span>
+                </label>
+                <label className="text-sm font-medium text-gray-700">
+                  Limite por categoria/dia
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.catalogPolicy.maxPerCategoryPerDay ?? ""}
+                    onChange={(event) =>
+                      updateCatalogPolicy({
+                        maxPerCategoryPerDay:
+                          event.target.value === ""
+                            ? null
+                            : Number(event.target.value),
+                      })
+                    }
+                    className="mt-2 w-full rounded-md border border-gray-300 p-2 font-normal"
+                    placeholder="Sem limite adicional"
+                  />
+                  <span className="mt-1 block text-xs font-normal text-gray-500">
+                    O dia é calculado no fuso {form.timezone}.
+                  </span>
+                </label>
+              </div>
+            </section>
 
             <div className="mt-8 flex justify-end">
               <button

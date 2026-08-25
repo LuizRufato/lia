@@ -1,4 +1,11 @@
-import { Controller, Get, Post, UseGuards, Request, Body } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  UseGuards,
+  Request,
+  Body,
+} from '@nestjs/common';
 import { AutopilotService } from './autopilot.service';
 import type { OneShotRequest } from './autopilot.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -12,6 +19,11 @@ export class AutopilotController {
   async getDashboard(@Request() req: any) {
     const tenantId = req.user.tenantId;
     return this.autopilotService.getDashboard(tenantId);
+  }
+
+  @Get('catalog/categories')
+  async getCatalogCategories(@Request() req: any) {
+    return this.autopilotService.getCatalogCategories(req.user.tenantId);
   }
 
   @Post('emergency-pause')

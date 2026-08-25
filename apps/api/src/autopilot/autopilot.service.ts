@@ -13,9 +13,32 @@ import {
   IntegrationStatus,
   MonetizationStatus,
   getMinutesSinceMidnight,
+  normalizeCatalogList,
+  normalizeCatalogText,
 } from '@lia/core';
 
 export const CONTROLLED_ONE_SHOT_CONFIRMATION = 'CONTROLLED_ONE_SHOT_REAL';
+
+const DEFAULT_CATALOG_POLICY = {
+  mode: 'OPEN' as const,
+  allowedCategories: [] as string[],
+  blockedCategories: [] as string[],
+  blockedKeywords: [] as string[],
+  minSalesCount: null as number | null,
+  minRating: null as number | null,
+  productCooldownHours: null as number | null,
+  maxPerCategoryPerDay: null as number | null,
+};
+
+const DECISION_LABELS: Record<string, string> = {
+  REJECTED_CATEGORY: 'Categoria não permitida',
+  REJECTED_BLOCKED_CATEGORY: 'Categoria bloqueada',
+  REJECTED_BLOCKED_KEYWORD: 'Palavra-chave bloqueada',
+  REJECTED_MIN_SALES: 'Vendas abaixo do mínimo',
+  REJECTED_MIN_RATING: 'Avaliação abaixo do mínimo',
+  REJECTED_PRODUCT_COOLDOWN: 'Produto publicado recentemente',
+  REJECTED_CATEGORY_DAILY_LIMIT: 'Limite diário desta categoria atingido',
+};
 
 export interface OneShotRequest {
   candidateId?: string;
@@ -36,6 +59,7 @@ export class AutopilotService {
       include: {
         enabledChannels: { include: { channel: true } },
         enabledMarketplaces: { include: { marketplace: true } },
+        catalogPolicy: true,
       },
     });
 
@@ -54,6 +78,7 @@ export class AutopilotService {
         include: {
           enabledChannels: { include: { channel: true } },
           enabledMarketplaces: { include: { marketplace: true } },
+          catalogPolicy: true,
         },
       });
     }
@@ -101,6 +126,7 @@ export class AutopilotService {
         'Oferta Desconhecida',
       score: f.liaScore.toNumber(),
       details: f.details,
+      label: DECISION_LABELS[f.decision] || f.decision,
       createdAt: f.createdAt,
     }));
 
@@ -130,6 +156,7 @@ export class AutopilotService {
           type: m.marketplace.type,
         })),
         timezone: config.timezone,
+        catalogPolicy: this.serializeCatalogPolicy(config.catalogPolicy),
       },
       availableChannels: await this.prisma.channel.findMany({
         where: { tenantId, enabled: true },
@@ -146,6 +173,40 @@ export class AutopilotService {
         lastPublicationAt: lastPublication?.publishedAt || null,
       },
       feed,
+    };
+  }
+
+  async getCatalogCategories(tenantId: string) {
+    const groups = await this.prisma.offerObservation.groupBy({
+      by: ['category'],
+      where: { offer: { tenantId }, category: { not: null } },
+      _count: { _all: true },
+    });
+
+    const categories = await Promise.all(
+      groups
+        .filter((group) => group.category)
+        .map(async (group) => ({
+          id: normalizeCatalogText(group.category!),
+          name: group.category!,
+          identifier: group.category!,
+          observedCount: group._count._all,
+          publishedCount: await this.prisma.publication.count({
+            where: {
+              status: 'PUBLISHED',
+              channel: { tenantId },
+              candidate: {
+                evaluation: {
+                  observation: { category: group.category },
+                },
+              },
+            },
+          }),
+        })),
+    );
+
+    return {
+      categories: categories.sort((a, b) => b.observedCount - a.observedCount),
     };
   }
 
@@ -178,6 +239,7 @@ export class AutopilotService {
       timezone,
       enabledChannelIds,
       enabledMarketplaceIds,
+      catalogPolicy,
     } = payload;
 
     if (
@@ -188,13 +250,23 @@ export class AutopilotService {
       !Number.isFinite(minScore) ||
       !Number.isInteger(minimumCommissionCents) ||
       !Number.isInteger(maxDailyPosts) ||
-      allowedStartMinute < 0 || allowedStartMinute > 1439 ||
-      allowedEndMinute < 0 || allowedEndMinute > 1439 ||
-      intervalMinutes < 1 || maxDailyPosts < 0 || minScore < 0 || minScore > 100 ||
+      allowedStartMinute < 0 ||
+      allowedStartMinute > 1439 ||
+      allowedEndMinute < 0 ||
+      allowedEndMinute > 1439 ||
+      intervalMinutes < 1 ||
+      maxDailyPosts < 0 ||
+      minScore < 0 ||
+      minScore > 100 ||
       minimumCommissionCents < 0
     ) {
       throw new BadRequestException('Configuração do Autopilot inválida.');
     }
+
+    const normalizedCatalogPolicy =
+      catalogPolicy === undefined
+        ? null
+        : this.validateCatalogPolicy(catalogPolicy);
 
     try {
       new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
@@ -202,7 +274,9 @@ export class AutopilotService {
       throw new BadRequestException('Fuso horário IANA inválido.');
     }
 
-    const channelIds = Array.isArray(enabledChannelIds) ? enabledChannelIds : [];
+    const channelIds = Array.isArray(enabledChannelIds)
+      ? enabledChannelIds
+      : [];
     const marketplaceIds = Array.isArray(enabledMarketplaceIds)
       ? enabledMarketplaceIds
       : [];
@@ -229,38 +303,169 @@ export class AutopilotService {
         select: { id: true },
       }),
     ]);
-    if (channels.length !== new Set(channelIds).size || marketplaces.length !== new Set(marketplaceIds).size) {
-      throw new BadRequestException('Selecione apenas canais ativos e marketplaces conectados.');
+    if (
+      channels.length !== new Set(channelIds).size ||
+      marketplaces.length !== new Set(marketplaceIds).size
+    ) {
+      throw new BadRequestException(
+        'Selecione apenas canais ativos e marketplaces conectados.',
+      );
     }
 
     const config = await this.prisma.$transaction(async (tx) => {
       const saved = await tx.autopilotConfig.upsert({
         where: { tenantId },
         update: {
-          mode, allowedStartMinute, allowedEndMinute, intervalMinutes,
-          minScore, minimumCommissionCents, maxDailyPosts, timezone,
+          mode,
+          allowedStartMinute,
+          allowedEndMinute,
+          intervalMinutes,
+          minScore,
+          minimumCommissionCents,
+          maxDailyPosts,
+          timezone,
         },
         create: {
-          tenantId, mode, allowedStartMinute, allowedEndMinute,
-          intervalMinutes, minScore, minimumCommissionCents, maxDailyPosts, timezone,
+          tenantId,
+          mode,
+          allowedStartMinute,
+          allowedEndMinute,
+          intervalMinutes,
+          minScore,
+          minimumCommissionCents,
+          maxDailyPosts,
+          timezone,
         },
       });
-      await tx.autopilotChannelConfig.deleteMany({ where: { autopilotConfigId: saved.id } });
-      await tx.autopilotMarketplaceConfig.deleteMany({ where: { autopilotConfigId: saved.id } });
+      await tx.autopilotChannelConfig.deleteMany({
+        where: { autopilotConfigId: saved.id },
+      });
+      await tx.autopilotMarketplaceConfig.deleteMany({
+        where: { autopilotConfigId: saved.id },
+      });
       if (channelIds.length) {
         await tx.autopilotChannelConfig.createMany({
-          data: channelIds.map((channelId) => ({ autopilotConfigId: saved.id, channelId })),
+          data: channelIds.map((channelId) => ({
+            autopilotConfigId: saved.id,
+            channelId,
+          })),
         });
       }
       if (marketplaceIds.length) {
         await tx.autopilotMarketplaceConfig.createMany({
-          data: marketplaceIds.map((marketplaceId) => ({ autopilotConfigId: saved.id, marketplaceId })),
+          data: marketplaceIds.map((marketplaceId) => ({
+            autopilotConfigId: saved.id,
+            marketplaceId,
+          })),
+        });
+      }
+      if (normalizedCatalogPolicy) {
+        await tx.autopilotCatalogPolicy.upsert({
+          where: { autopilotConfigId: saved.id },
+          update: normalizedCatalogPolicy,
+          create: { autopilotConfigId: saved.id, ...normalizedCatalogPolicy },
         });
       }
       return saved;
     });
 
-    return { success: true, config };
+    return {
+      success: true,
+      config,
+      catalogPolicy: normalizedCatalogPolicy || DEFAULT_CATALOG_POLICY,
+    };
+  }
+
+  private serializeCatalogPolicy(policy: any) {
+    return {
+      mode: policy?.mode || DEFAULT_CATALOG_POLICY.mode,
+      allowedCategories: policy?.allowedCategories || [],
+      blockedCategories: policy?.blockedCategories || [],
+      blockedKeywords: policy?.blockedKeywords || [],
+      minSalesCount: policy?.minSalesCount ?? null,
+      minRating: policy?.minRating ?? null,
+      productCooldownHours: policy?.productCooldownHours ?? null,
+      maxPerCategoryPerDay: policy?.maxPerCategoryPerDay ?? null,
+    };
+  }
+
+  private validateCatalogPolicy(value: any) {
+    if (!value || typeof value !== 'object') {
+      throw new BadRequestException('Política de catálogo inválida.');
+    }
+    const mode =
+      value.mode === 'SELECTED_CATEGORIES'
+        ? value.mode
+        : value.mode === 'OPEN'
+          ? value.mode
+          : null;
+    if (!mode)
+      throw new BadRequestException('Estratégia de catálogo inválida.');
+
+    const list = (input: unknown, max: number, label: string) => {
+      if (input !== undefined && !Array.isArray(input)) {
+        throw new BadRequestException(`${label} inválido.`);
+      }
+      const normalized = normalizeCatalogList(input || []);
+      if (normalized.length > max) {
+        throw new BadRequestException(`${label} excede o limite permitido.`);
+      }
+      return normalized;
+    };
+    const nullableInteger = (input: unknown, label: string, max: number) => {
+      if (input === null || input === undefined || input === '') return null;
+      if (
+        !Number.isInteger(input) ||
+        Number(input) < 0 ||
+        Number(input) > max
+      ) {
+        throw new BadRequestException(`${label} inválido.`);
+      }
+      return Number(input);
+    };
+    const minRating =
+      value.minRating === null ||
+      value.minRating === undefined ||
+      value.minRating === ''
+        ? null
+        : Number(value.minRating);
+    if (
+      minRating !== null &&
+      (!Number.isFinite(minRating) || minRating < 0 || minRating > 5)
+    ) {
+      throw new BadRequestException('Avaliação mínima inválida.');
+    }
+
+    return {
+      mode,
+      allowedCategories: list(
+        value.allowedCategories,
+        500,
+        'Categorias permitidas',
+      ),
+      blockedCategories: list(
+        value.blockedCategories,
+        500,
+        'Categorias bloqueadas',
+      ),
+      blockedKeywords: list(value.blockedKeywords, 50, 'Palavras bloqueadas'),
+      minSalesCount: nullableInteger(
+        value.minSalesCount,
+        'Vendas mínimas',
+        2_000_000_000,
+      ),
+      minRating,
+      productCooldownHours: nullableInteger(
+        value.productCooldownHours,
+        'Cooldown',
+        8_760,
+      ),
+      maxPerCategoryPerDay: nullableInteger(
+        value.maxPerCategoryPerDay,
+        'Limite diário por categoria',
+        100_000,
+      ),
+    };
   }
 
   /**
@@ -456,7 +661,7 @@ export class AutopilotService {
         {
           postsToday,
           lastPublicationAt: lastPublication
-            ? lastPublication.publishedAt ?? lastPublication.createdAt
+            ? (lastPublication.publishedAt ?? lastPublication.createdAt)
             : undefined,
           channelStatus: {
             [channel.id]: {
@@ -530,7 +735,9 @@ export class AutopilotService {
 
   private assertAdmin(role: string) {
     if (role !== 'OWNER' && role !== 'ADMIN') {
-      throw new ForbiddenException('Apenas administradores podem executar one-shot.');
+      throw new ForbiddenException(
+        'Apenas administradores podem executar one-shot.',
+      );
     }
   }
 }

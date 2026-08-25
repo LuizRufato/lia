@@ -577,9 +577,31 @@ model AutopilotConfig {
 
   enabledChannels     AutopilotChannelConfig[]
   enabledMarketplaces AutopilotMarketplaceConfig[]
+  catalogPolicy       AutopilotCatalogPolicy?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum AutopilotCatalogMode {
+  OPEN
+  SELECTED_CATEGORIES
+}
+
+model AutopilotCatalogPolicy {
+  id                   String               @id @default(uuid())
+  autopilotConfigId    String               @unique
+  autopilotConfig      AutopilotConfig      @relation(fields: [autopilotConfigId], references: [id], onDelete: Cascade)
+  mode                 AutopilotCatalogMode @default(OPEN)
+  allowedCategories    String[]             @default([])
+  blockedCategories    String[]             @default([])
+  blockedKeywords      String[]             @default([])
+  minSalesCount        Int?
+  minRating            Float?
+  productCooldownHours Int?
+  maxPerCategoryPerDay Int?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
 }
 
 model AutopilotChannelConfig {
@@ -615,6 +637,13 @@ enum AutopilotDecisionReason {
   REJECTED_CHANNEL_POLICY
   REJECTED_KILL_SWITCH
   REJECTED_INTEGRATION_UNHEALTHY
+  REJECTED_CATEGORY
+  REJECTED_BLOCKED_CATEGORY
+  REJECTED_BLOCKED_KEYWORD
+  REJECTED_MIN_SALES
+  REJECTED_MIN_RATING
+  REJECTED_PRODUCT_COOLDOWN
+  REJECTED_CATEGORY_DAILY_LIMIT
   DRY_RUN_APPROVED
   DEFERRED_DAILY_LIMIT
   DEFERRED_INTERVAL
