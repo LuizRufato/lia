@@ -1,90 +1,94 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Activity,
-  ArrowUpRight,
   BarChart3,
   Bot,
   DollarSign,
   HelpCircle,
   Loader2,
   MousePointerClick,
+  Receipt,
   Target,
   TrendingUp,
   Users,
 } from "lucide-react";
+import { PeriodKey, PeriodSelector } from "@/components/PeriodSelector";
 import { fetchAuth } from "@/lib/api";
 
-type RecentClick = {
-  at: string;
-  device: string;
-  browser: string;
-  channel: string;
-  marketplace: string;
-  product: string;
-};
-
-type AnalyticsData = {
-  clicksToday: number;
-  clicksNow: number;
+type Report = {
+  clicks: number;
   uniqueClicks: number;
   botsExcluded: number;
   sales: number;
-  topProducts: Array<{ name: string; clicks: number }>;
-  timeline: Array<{ at: string; clicks: number }>;
-  recentClicks: RecentClick[];
-};
-
-type AnalyticsOverview = {
-  today?: {
-    sales?: number;
+  grossSalesCents: number;
+  expectedCommissionCents: number;
+  confirmedCommissionCents: number;
+  conversionRate: number | null;
+  epcExpectedCents: number | null;
+  history: Array<{
+    at: string;
+    clicks: number;
+    sales: number;
+    grossSalesCents: number;
+    expectedCommissionCents: number;
+  }>;
+  topProducts: {
+    clicked: Array<{ name: string; count: number }>;
+    sold: Array<{ name: string; qty: number }>;
+    commission: Array<{ name: string; commissionCents: number }>;
   };
+  period: { timezone: string };
 };
 
-const EMPTY: AnalyticsData = {
-  clicksToday: 0,
-  clicksNow: 0,
+const EMPTY: Report = {
+  clicks: 0,
   uniqueClicks: 0,
   botsExcluded: 0,
   sales: 0,
-  topProducts: [],
-  timeline: [],
-  recentClicks: [],
+  grossSalesCents: 0,
+  expectedCommissionCents: 0,
+  confirmedCommissionCents: 0,
+  conversionRate: null,
+  epcExpectedCents: null,
+  history: [],
+  topProducts: { clicked: [], sold: [], commission: [] },
+  period: { timezone: "America/Campo_Grande" },
 };
 
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
+const currency = (cents: number | null | undefined) =>
+  new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+    (cents || 0) / 100,
+  );
 
 export default function AnalyticsPage() {
-  const [data, setData] = useState<AnalyticsData>(EMPTY);
+  const [period, setPeriod] = useState<PeriodKey>("today");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [data, setData] = useState<Report>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     const load = async () => {
+      if (period === "custom" && (!dateFrom || !dateTo)) return;
       try {
-        const [realtimeResponse, overviewResponse] = await Promise.all([
-          fetchAuth("/analytics/realtime"),
-          fetchAuth("/analytics/overview"),
-        ]);
-        if (!realtimeResponse.ok || !overviewResponse.ok) {
-          throw new Error("analytics unavailable");
+        const params = new URLSearchParams({ period });
+        if (period === "custom") {
+          params.set("dateFrom", dateFrom);
+          params.set("dateTo", dateTo);
         }
-        const next = (await realtimeResponse.json()) as Partial<AnalyticsData>;
-        const overview = (await overviewResponse.json()) as AnalyticsOverview;
+        const response = await fetchAuth(
+          `/analytics/report?${params.toString()}`,
+        );
+        if (!response.ok) throw new Error("analytics unavailable");
+        const next = (await response.json()) as Report;
         if (mounted) {
           setData({
             ...EMPTY,
             ...next,
-            // Sales are confirmed MarketplaceConversion records only.
-            sales: overview.today?.sales ?? 0,
+            topProducts: next.topProducts || EMPTY.topProducts,
           });
           setError(false);
         }
@@ -94,162 +98,183 @@ export default function AnalyticsPage() {
         if (mounted) setLoading(false);
       }
     };
-
     void load();
-    const interval = window.setInterval(load, 3000);
+    const interval = window.setInterval(
+      load,
+      period === "today" ? 5000 : 45000,
+    );
     return () => {
       mounted = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [period, dateFrom, dateTo]);
 
-  const maxTimeline = useMemo(
-    () => Math.max(1, ...data.timeline.map((item) => item.clicks)),
-    [data.timeline],
-  );
-
+  const maxChart = Math.max(1, ...data.history.map((item) => item.clicks));
   const kpis = [
-    { name: "Cliques", value: data.clicksToday, icon: MousePointerClick },
-    { name: "Cliques Únicos", value: data.uniqueClicks, icon: Users },
+    ["Cliques válidos", data.clicks, MousePointerClick],
+    ["Cliques únicos", data.uniqueClicks, Users],
+    ["Vendas", data.sales, TrendingUp],
+    ["Valor vendido", currency(data.grossSalesCents), Receipt],
+    ["Comissão prevista", currency(data.expectedCommissionCents), DollarSign],
+    ["Comissão confirmada", currency(data.confirmedCommissionCents), Target],
+    [
+      "Conversão",
+      data.conversionRate == null
+        ? "—"
+        : `${(data.conversionRate * 100).toFixed(2)}%`,
+      TrendingUp,
+    ],
+    [
+      "EPC previsto",
+      data.epcExpectedCents == null ? "—" : currency(data.epcExpectedCents),
+      BarChart3,
+    ],
+  ] as const;
+  const topSections: Array<{ title: string; items: string[] }> = [
     {
-      name: "Cliques Válidos",
-      value: data.clicksToday,
-      icon: Target,
-      tooltip: "Cliques humanos válidos; crawlers ficam fora desta métrica.",
+      title: "Produtos mais clicados",
+      items: data.topProducts.clicked.map(
+        (item) => `${item.name} · ${item.count}`,
+      ),
     },
-    { name: "Vendas", value: data.sales, icon: TrendingUp },
+    {
+      title: "Produtos mais vendidos",
+      items: data.topProducts.sold.map((item) => `${item.name} · ${item.qty}`),
+    },
+    {
+      title: "Maior comissão",
+      items: data.topProducts.commission.map(
+        (item) => `${item.name} · ${currency(item.commissionCents)}`,
+      ),
+    },
   ];
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Analytics</h1>
-          <p className="text-gray-500 mt-1">Métricas de conversão, cliques e performance da LIA.</p>
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900">
+            Analytics
+          </h1>
+          <p className="mt-1 text-gray-500">
+            Desempenho de cliques, vendas e comissões reais.
+          </p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          Atualização automática a cada 3s
-        </div>
+        <PeriodSelector
+          value={period}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onChange={setPeriod}
+          onDateChange={(name, value) =>
+            name === "dateFrom" ? setDateFrom(value) : setDateTo(value)
+          }
+        />
       </div>
-
+      <div className="text-xs text-gray-500">
+        Timezone: {data.period.timezone} · EPC usa comissão prevista.
+      </div>
       {error && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Não foi possível atualizar agora. Tentaremos novamente automaticamente.
+          Não foi possível atualizar agora.
         </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {kpis.map((kpi) => (
-          <div key={kpi.name} className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
-            <div className="flex items-center justify-between text-gray-500 mb-2">
-              <div className="flex items-center">
-                <kpi.icon className="w-4 h-4 mr-2" />
-                <span className="text-xs font-medium uppercase tracking-wider">{kpi.name}</span>
-              </div>
-              {kpi.tooltip && <span title={kpi.tooltip}><HelpCircle className="w-3 h-3 text-gray-300" /></span>}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {kpis.map(([name, value, Icon]) => (
+          <div
+            key={name}
+            className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"
+          >
+            <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-gray-500">
+              <Icon className="h-4 w-4" />
+              {name}
             </div>
             <div className="text-2xl font-bold text-gray-900">
-              {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : kpi.value}
+              {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : value}
             </div>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <section className="lg:col-span-2 bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-          <div className="flex items-center gap-2 mb-6">
-            <BarChart3 className="w-5 h-5 text-blue-600" />
-            <div>
-              <h2 className="font-semibold text-gray-900">Cliques em Tempo Real</h2>
-              <p className="text-xs text-gray-500">Janelas de cinco minutos, somente cliques válidos.</p>
-            </div>
-          </div>
-          {data.timeline.length === 0 ? (
-            <p className="text-sm text-gray-400 py-16 text-center">Aguardando cliques válidos.</p>
-          ) : (
-            <div className="flex items-end gap-2 h-48">
-              {data.timeline.map((item) => (
-                <div key={item.at} className="flex-1 h-full flex flex-col items-center justify-end gap-2">
-                  <span className="text-[10px] text-gray-500">{item.clicks || ""}</span>
-                  <div
-                    className="w-full rounded-t bg-blue-500 min-h-1 transition-all"
-                    style={{ height: `${Math.max(4, (item.clicks / maxTimeline) * 100)}%` }}
-                    title={`${item.clicks} clique(s)`}
-                  />
-                  <span className="text-[10px] text-gray-400">{formatTime(item.at).slice(0, 5)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-          <div className="flex items-center gap-2 mb-5">
-            <Activity className="w-5 h-5 text-blue-600" />
-            <h2 className="font-semibold text-gray-900">Produtos mais clicados</h2>
-          </div>
-          {data.topProducts.length === 0 ? (
-            <p className="text-sm text-gray-400 py-12 text-center">Aguardando engajamento.</p>
-          ) : (
-            <div className="space-y-4">
-              {data.topProducts.map((item) => (
-                <div key={item.name} className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-gray-700 truncate">{item.name}</span>
-                  <span className="text-sm font-semibold text-gray-900">{item.clicks}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="mt-6 pt-4 border-t text-xs text-gray-500 flex items-center gap-2">
-            <Bot className="w-4 h-4" /> {data.botsExcluded} preview/bot(s) excluído(s)
-          </div>
-        </section>
-      </div>
-
-      <section className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+      <section className="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
+        <div className="mb-6 flex items-center gap-2">
+          <BarChart3 className="h-5 w-5 text-blue-600" />
           <div>
-            <h2 className="font-semibold text-gray-900">Atividade recente</h2>
-            <p className="text-xs text-gray-500">Dados agregados, sem IP bruto.</p>
+            <h2 className="font-semibold text-gray-900">
+              Histórico do período
+            </h2>
+            <p className="text-xs text-gray-500">
+              Cliques válidos, vendas, valor vendido e comissão prevista.
+            </p>
           </div>
-          <span className="text-xs text-gray-500">{data.clicksNow} nos últimos 5 minutos</span>
         </div>
-        {data.recentClicks.length === 0 ? (
-          <p className="text-sm text-gray-400 py-12 text-center">Nenhum clique válido recente.</p>
+        {data.history.length === 0 ? (
+          <p className="py-12 text-center text-sm text-gray-400">
+            Sem dados no período.
+          </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                <tr>
-                  <th className="px-6 py-3">Hora</th>
-                  <th className="px-6 py-3">Produto</th>
-                  <th className="px-6 py-3">Dispositivo</th>
-                  <th className="px-6 py-3">Canal</th>
-                  <th className="px-6 py-3">Marketplace</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.recentClicks.map((click) => (
-                  <tr key={`${click.at}-${click.product}`} className="border-t">
-                    <td className="px-6 py-3 text-gray-500 whitespace-nowrap">{formatTime(click.at)}</td>
-                    <td className="px-6 py-3 text-gray-900 max-w-xs truncate">{click.product}</td>
-                    <td className="px-6 py-3 text-gray-600">{click.device}</td>
-                    <td className="px-6 py-3 text-gray-600">{click.channel}</td>
-                    <td className="px-6 py-3 text-gray-600">{click.marketplace}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex h-56 items-end gap-2">
+            {data.history.map((item) => (
+              <div
+                key={item.at}
+                className="flex h-full flex-1 flex-col items-center justify-end gap-1"
+              >
+                <span className="text-[10px] text-gray-500">
+                  {item.clicks || ""}
+                </span>
+                <div
+                  className="w-full rounded-t bg-blue-500"
+                  style={{
+                    height: `${Math.max(4, (item.clicks / maxChart) * 100)}%`,
+                  }}
+                  title={`${item.clicks} clique(s), ${item.sales} venda(s)`}
+                />
+                <span className="text-[10px] text-gray-400">
+                  {new Date(item.at).toLocaleDateString("pt-BR", {
+                    day: "2-digit",
+                    month: "2-digit",
+                  })}
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </section>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm"><div className="flex items-center gap-2 text-gray-500 mb-2"><DollarSign className="w-4 h-4" /><span className="text-xs uppercase">Comissão aprovada</span></div><div className="text-2xl font-bold text-gray-900">—</div></div>
-        <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm"><div className="flex items-center gap-2 text-gray-500 mb-2"><ArrowUpRight className="w-4 h-4" /><span className="text-xs uppercase">EPC</span></div><div className="text-2xl font-bold text-gray-900">—</div></div>
-        <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm"><div className="flex items-center gap-2 text-gray-500 mb-2"><TrendingUp className="w-4 h-4" /><span className="text-xs uppercase">Conversão</span></div><div className="text-2xl font-bold text-gray-900">—</div></div>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {topSections.map(({ title, items }) => (
+          <section
+            key={title}
+            className="rounded-xl border border-gray-100 bg-white p-6 shadow-sm"
+          >
+            <div className="mb-4 flex items-center gap-2">
+              <Bot className="h-5 w-5 text-blue-600" />
+              <h2 className="font-semibold text-gray-900">{title}</h2>
+            </div>
+            {items.length ? (
+              <ul className="space-y-3 text-sm text-gray-700">
+                {items.map((item) => (
+                  <li
+                    key={item}
+                    className="border-b border-gray-50 pb-2 last:border-0"
+                  >
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-400">
+                Sem dados reais no período.
+              </p>
+            )}
+          </section>
+        ))}
       </div>
+      <p className="flex items-center gap-2 text-xs text-gray-500">
+        <HelpCircle className="h-4 w-4" />
+        Conversão = vendas atribuídas / cliques válidos. Vendas sem atribuição
+        não entram no resumo.
+      </p>
     </div>
   );
 }

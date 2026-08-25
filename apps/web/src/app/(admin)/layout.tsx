@@ -20,6 +20,7 @@ import {
   BarChart3,
   Store,
   MessagesSquare,
+  Receipt,
 } from "lucide-react";
 
 const MENU_ITEMS = [
@@ -27,6 +28,7 @@ const MENU_ITEMS = [
   { name: "Ofertas", href: "/offers", icon: Tag },
   { name: "Publicações", href: "/publications", icon: Send },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
+  { name: "Vendas", href: "/sales", icon: Receipt },
   { name: "Piloto Automático", href: "/autopilot", icon: Bot },
   { name: "Templates", href: "/templates", icon: FileText },
   { name: "Integrações", href: "/integrations", icon: Store },

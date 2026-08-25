@@ -23,6 +23,10 @@ describe('AnalyticsService sales KPI', () => {
           .fn()
           .mockResolvedValue({ timezone: 'America/Campo_Grande' }),
       },
+      clickEvent: { count: jest.fn().mockResolvedValue(0) },
+      offerObservation: { count: jest.fn().mockResolvedValue(0) },
+      offerEvaluation: { count: jest.fn().mockResolvedValue(0) },
+      publication: { count: jest.fn().mockResolvedValue(0) },
     } as unknown as PrismaService;
 
     return new AnalyticsService({} as ConfigService, prisma);
@@ -65,6 +69,8 @@ describe('AnalyticsService sales KPI', () => {
         confirmedSales: 0,
         pendingSales: 1,
         pendingCommissionCents: 450,
+        expectedCommissionCents: 450,
+        confirmedCommissionCents: 0,
       },
     });
   });
@@ -79,7 +85,55 @@ describe('AnalyticsService sales KPI', () => {
     ]);
 
     await expect(service.getOverview('tenant-1')).resolves.toMatchObject({
-      today: { sales: 0, cancelledSales: 1 },
+      today: {
+        sales: 0,
+        cancelledSales: 1,
+        expectedCommissionCents: 0,
+        cancelledCommissionCents: 0,
+      },
+    });
+  });
+
+  it('adds confirmed and pending commission to expected commission', async () => {
+    const service = makeService([
+      {
+        attributionStatus: 'ATTRIBUTED',
+        commissionStatus: 'CONFIRMED',
+        totalCommissionCents: 700,
+      },
+      {
+        attributionStatus: 'ATTRIBUTED',
+        commissionStatus: 'ESTIMATED',
+        totalCommissionCents: 300,
+      },
+    ]);
+
+    await expect(service.getOverview('tenant-1')).resolves.toMatchObject({
+      today: {
+        sales: 2,
+        confirmedCommissionCents: 700,
+        pendingCommissionCents: 300,
+        expectedCommissionCents: 1000,
+      },
+    });
+  });
+
+  it('uses Shopee actualAmount as line value without multiplying by quantity', async () => {
+    const service = makeService([
+      {
+        attributionStatus: 'ATTRIBUTED',
+        commissionStatus: 'PENDING',
+        totalCommissionCents: 450,
+        orders: [
+          {
+            items: [{ actualAmountCents: 350, itemPriceCents: 400, qty: 2 }],
+          },
+        ],
+      },
+    ]);
+
+    await expect(service.getOverview('tenant-1')).resolves.toMatchObject({
+      today: { grossSalesCents: 350 },
     });
   });
 
@@ -101,5 +155,93 @@ describe('AnalyticsService sales KPI', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it.each(['today', 'yesterday', '7d', '30d', 'this_month', 'last_month'])(
+    'resolves the %s period in the tenant timezone',
+    async (period) => {
+      const prisma = {
+        autopilotConfig: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ timezone: 'America/Campo_Grande' }),
+        },
+        marketplaceConversion: {
+          count: jest.fn().mockResolvedValue(0),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      } as unknown as PrismaService;
+      const service = new AnalyticsService({} as ConfigService, prisma);
+
+      const result = await service.getSales('tenant-1', { period });
+
+      expect(result.period.key).toBe(period);
+      expect(result.period.timezone).toBe('America/Campo_Grande');
+      expect(result.period.from.getUTCHours()).toBe(4);
+    },
+  );
+
+  it('supports custom period, filters and real pagination without accepting tenantId', async () => {
+    const prisma = {
+      autopilotConfig: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ timezone: 'America/Campo_Grande' }),
+      },
+      marketplaceConversion: {
+        count: jest.fn().mockResolvedValue(2),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    } as unknown as PrismaService;
+    const service = new AnalyticsService({} as ConfigService, prisma);
+
+    const result = await service.getSales('tenant-1', {
+      period: 'custom',
+      dateFrom: '2026-08-01',
+      dateTo: '2026-08-07',
+      commissionStatus: 'PENDING',
+      orderStatus: 'COMPLETED',
+      search: 'pote',
+      page: '2',
+      limit: '500',
+      tenantId: 'other-tenant',
+    } as any);
+
+    const where = (prisma.marketplaceConversion.count as jest.Mock).mock
+      .calls[0][0].where;
+    expect(where.tenantId).toBe('tenant-1');
+    expect(where.commissionStatus).toBe('PENDING');
+    expect(where.orders).toEqual({ some: { orderStatus: 'COMPLETED' } });
+    expect(where.OR).toHaveLength(2);
+    expect(result.pagination).toMatchObject({ page: 2, limit: 100, total: 2 });
+    expect(result.period.from.toISOString()).toBe('2026-08-01T04:00:00.000Z');
+    expect(result.period.to.toISOString()).toBe('2026-08-08T04:00:00.000Z');
+  });
+
+  it('does not divide conversion or EPC by zero clicks', async () => {
+    const prisma = {
+      autopilotConfig: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ timezone: 'America/Campo_Grande' }),
+      },
+      clickEvent: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      marketplaceConversion: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    } as unknown as PrismaService;
+    const service = new AnalyticsService({} as ConfigService, prisma);
+
+    await expect(
+      service.getReport('tenant-1', { period: 'today' }),
+    ).resolves.toMatchObject({
+      conversionRate: null,
+      epcExpectedCents: null,
+      clicks: 0,
+      sales: 0,
+    });
   });
 });

@@ -93,9 +93,11 @@ export default function OverviewPage() {
       icon: TrendingUp,
     },
     {
-      name: "Comissão Estimada (Hoje)",
-      value: formatCurrency(analytics?.today?.commissionCents || 0),
+      name: "Comissão Prevista (Hoje)",
+      value: formatCurrency(analytics?.today?.expectedCommissionCents || 0),
       icon: DollarSign,
+      tooltip:
+        "Inclui comissões pendentes/estimadas e confirmadas. Canceladas são excluídas.",
     },
     {
       name: "Vendas Ontem",
@@ -103,21 +105,39 @@ export default function OverviewPage() {
       icon: ArrowUpRight,
     },
     {
-      name: "Comissão Estimada (Ontem)",
-      value: formatCurrency(analytics?.yesterday?.commissionCents || 0),
+      name: "Comissão Prevista (Ontem)",
+      value: formatCurrency(analytics?.yesterday?.expectedCommissionCents || 0),
       icon: Target,
+      tooltip:
+        "Inclui comissões pendentes/estimadas e confirmadas. Canceladas são excluídas.",
     },
   ];
 
   const kpisBottom: Kpi[] = [
-    { name: "Ofertas Analisadas", value: "0", icon: Eye },
-    { name: "Ofertas Aprovadas", value: "0", icon: CheckCircle2 },
-    { name: "Publicações Hoje", value: "0", icon: Send },
+    {
+      name: "Ofertas Analisadas",
+      value: analytics?.today?.offersAnalyzed?.toString() || "0",
+      icon: Eye,
+    },
+    {
+      name: "Ofertas Aprovadas",
+      value: analytics?.today?.offersApproved?.toString() || "0",
+      icon: CheckCircle2,
+    },
+    {
+      name: "Publicações Hoje",
+      value: analytics?.today?.publicationsToday?.toString() || "0",
+      icon: Send,
+    },
     {
       name: "Conversão",
-      value: "—",
+      value:
+        analytics?.today?.conversionRate == null
+          ? "—"
+          : `${(analytics.today.conversionRate * 100).toFixed(2)}%`,
       icon: Activity,
-      tooltip: "Aguardando integração de vendas",
+      tooltip:
+        "Vendas atribuídas divididas por cliques válidos. Sem cliques, não há cálculo.",
     },
   ];
 

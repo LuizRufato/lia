@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Request } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -20,8 +20,12 @@ export class AnalyticsController {
   }
 
   @Get('conversions')
-  async getConversions(@Request() req: any) {
-    const tenantId = req.user.tenantId;
-    return this.analyticsService.getConversions(tenantId);
+  async getConversions(@Request() req: any, @Query() query: any) {
+    return this.analyticsService.getSales(req.user.tenantId, query);
+  }
+
+  @Get('report')
+  async getReport(@Request() req: any, @Query() query: any) {
+    return this.analyticsService.getReport(req.user.tenantId, query);
   }
 }
