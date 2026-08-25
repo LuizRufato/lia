@@ -12,7 +12,9 @@ describe("Shopee conversion window", () => {
     });
   });
 
-  it("uses a small overlap after a successful sync", () => {
+  it("keeps a full-day reconciliation overlap after a successful sync", () => {
+    expect(SHOPEE_CONVERSION_OVERLAP_SECONDS).toBe(24 * 60 * 60);
+
     const last = new Date(1_700_000_000 * 1000);
     const window = getShopeeConversionWindow(last, 1_700_000_300);
 
