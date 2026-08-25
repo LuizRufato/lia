@@ -195,7 +195,11 @@ export class AnalyticsService {
       );
 
       return {
-        sales: confirmed.length,
+        // A real attributed order is a sale as soon as Shopee reports it. The
+        // commission can still be pending/estimated and remains separated
+        // below. Cancelled conversions never count as sales.
+        sales: confirmed.length + pending.length,
+        confirmedSales: confirmed.length,
         commissionCents: confirmed.reduce(
           (sum, conversion) => sum + (conversion.totalCommissionCents || 0),
           0,
