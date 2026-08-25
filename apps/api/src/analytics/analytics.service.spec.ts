@@ -28,7 +28,7 @@ describe('AnalyticsService sales KPI', () => {
     return new AnalyticsService({} as ConfigService, prisma);
   };
 
-  it('reports zero sales when there is a publication/click but no confirmed conversion', async () => {
+  it('reports zero sales when there is a publication/click but no attributed conversion', async () => {
     const service = makeService([]);
 
     await expect(service.getOverview('tenant-1')).resolves.toMatchObject({
@@ -36,7 +36,7 @@ describe('AnalyticsService sales KPI', () => {
     });
   });
 
-  it('reports one sale only for an attributed confirmed conversion', async () => {
+  it('reports one sale for an attributed confirmed conversion', async () => {
     const service = makeService([
       {
         attributionStatus: 'ATTRIBUTED',
@@ -46,7 +46,40 @@ describe('AnalyticsService sales KPI', () => {
     ]);
 
     await expect(service.getOverview('tenant-1')).resolves.toMatchObject({
-      today: { sales: 1 },
+      today: { sales: 1, confirmedSales: 1, pendingSales: 0 },
+    });
+  });
+
+  it('counts an attributed pending conversion as a sale before commission confirmation', async () => {
+    const service = makeService([
+      {
+        attributionStatus: 'ATTRIBUTED',
+        commissionStatus: 'PENDING',
+        totalCommissionCents: 450,
+      },
+    ]);
+
+    await expect(service.getOverview('tenant-1')).resolves.toMatchObject({
+      today: {
+        sales: 1,
+        confirmedSales: 0,
+        pendingSales: 1,
+        pendingCommissionCents: 450,
+      },
+    });
+  });
+
+  it('does not count a cancelled attributed conversion as a sale', async () => {
+    const service = makeService([
+      {
+        attributionStatus: 'ATTRIBUTED',
+        commissionStatus: 'CANCELLED',
+        totalCommissionCents: 0,
+      },
+    ]);
+
+    await expect(service.getOverview('tenant-1')).resolves.toMatchObject({
+      today: { sales: 0, cancelledSales: 1 },
     });
   });
 
