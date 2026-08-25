@@ -4,7 +4,24 @@ USER root
 WORKDIR /evolution
 
 # Keep Evolution pinned at 2.3.7 while replacing only the known delivery fix.
-RUN npm install --no-save --package-lock=false --legacy-peer-deps \
+RUN set -eux; \
+    overlay=/tmp/lia-evolution-overlay; \
+    rm -rf "$overlay"; \
+    mkdir -p "$overlay"; \
+    printf '%s\n' '{"name":"lia-evolution-overlay","private":true,"version":"0.0.0"}' > "$overlay/package.json"; \
+    cd "$overlay"; \
+    npm install \
+      --omit=dev \
+      --no-audit \
+      --no-fund \
+      --legacy-peer-deps \
+      --package-lock=false \
+      --fetch-retries=5 \
+      --fetch-retry-mintimeout=20000 \
+      --fetch-retry-maxtimeout=120000 \
+      --fetch-timeout=300000 \
       baileys@7.0.0-rc13 \
-      whatsapp-rust-bridge@0.5.4 \
-    && node -e "const fs=require('fs'); for (const [name,expected] of [['baileys','7.0.0-rc13'],['whatsapp-rust-bridge','0.5.4']]) { const file='/evolution/node_modules/'+name+'/package.json'; if (!fs.existsSync(file)) throw new Error('package metadata not found: '+name); const version=JSON.parse(fs.readFileSync(file,'utf8')).version; if (version!==expected) throw new Error(name+' resolved to '+version); console.log(name+'@'+version); }"
+      whatsapp-rust-bridge@0.5.4; \
+    cp -a "$overlay/node_modules/." /evolution/node_modules/; \
+    node -e "const fs=require('fs'); for (const [name,expected] of [['baileys','7.0.0-rc13'],['whatsapp-rust-bridge','0.5.4']]) { const file='/evolution/node_modules/'+name+'/package.json'; if (!fs.existsSync(file)) throw new Error('package metadata not found: '+name); const version=JSON.parse(fs.readFileSync(file,'utf8')).version; if (version!==expected) throw new Error(name+' resolved to '+version); console.log(name+'@'+version); }"; \
+    rm -rf "$overlay"
