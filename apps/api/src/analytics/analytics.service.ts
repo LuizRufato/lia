@@ -246,7 +246,7 @@ export class AnalyticsService {
       },
       orders: {
         select: {
-          orderId: true,
+          externalOrderId: true,
           orderStatus: true,
           items: {
             select: {
@@ -349,7 +349,7 @@ export class AnalyticsService {
         ),
       commissionCents: conversion.totalCommissionCents || 0,
       orders: conversion.orders.map((order: any) => ({
-        orderId: order.orderId,
+        orderId: order.externalOrderId,
         status: order.orderStatus,
         items: order.items.map((item: any) => ({
           name: item.itemName,
