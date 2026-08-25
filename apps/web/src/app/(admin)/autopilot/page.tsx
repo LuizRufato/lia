@@ -37,6 +37,12 @@ const EMPTY_CATALOG_POLICY: CatalogPolicy = {
   maxPerCategoryPerDay: null,
 };
 
+function displayCatalogCategory(value: string) {
+  return /^\d+(\s*,\s*\d+)*$/.test(value)
+    ? "Categoria Shopee não classificada"
+    : value;
+}
+
 export default function AutopilotDashboard() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -643,52 +649,99 @@ export default function AutopilotDashboard() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h4 className="text-sm font-semibold text-gray-800">
-                      Categorias observadas
+                      Categorias comerciais
                     </h4>
                     <p className="mt-1 text-xs text-gray-500">
-                      A lista vem do catálogo real deste tenant; não há
-                      categorias pré-cadastradas.
+                      Os produtos são agrupados em categorias comerciais; os
+                      identificadores técnicos da Shopee não são exibidos.
                     </p>
                   </div>
                   <span className="text-xs font-medium text-gray-500">
                     {form.catalogPolicy.allowedCategories.length} selecionadas
                   </span>
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {(data.catalogCategories || []).map((category: any) => {
-                    const id = category.identifier || category.id;
-                    const selected =
-                      form.catalogPolicy.allowedCategories.includes(id);
-                    const blocked =
-                      form.catalogPolicy.blockedCategories.includes(id);
-                    return (
-                      <button
-                        type="button"
-                        key={id}
-                        onClick={() => toggleCatalogCategory(id)}
-                        className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
-                        title={category.name || id}
-                      >
-                        {category.name && category.name !== id
-                          ? `${category.name} · `
-                          : ""}
-                        {id}
-                      </button>
-                    );
-                  })}
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <h5 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Categorias principais
+                    </h5>
+                    <div className="flex flex-wrap gap-2">
+                      {(data.catalogCategories || [])
+                        .slice(0, 9)
+                        .map((category: any) => {
+                          const id = category.slug;
+                          const label = category.label;
+                          const selected =
+                            form.catalogPolicy.allowedCategories.includes(id);
+                          const blocked =
+                            form.catalogPolicy.blockedCategories.includes(id);
+                          return (
+                            <button
+                              type="button"
+                              key={id}
+                              onClick={() => toggleCatalogCategory(id)}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
+                              title={`${label} · observadas: ${category.observedCount} · publicadas: ${category.publishedCount}`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
+                  <div>
+                    <h5 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Outras categorias
+                    </h5>
+                    <div className="flex flex-wrap gap-2">
+                      {(data.catalogCategories || [])
+                        .slice(9)
+                        .map((category: any) => {
+                          const id = category.slug;
+                          const label = category.label;
+                          const selected =
+                            form.catalogPolicy.allowedCategories.includes(id);
+                          const blocked =
+                            form.catalogPolicy.blockedCategories.includes(id);
+                          return (
+                            <button
+                              type="button"
+                              key={id}
+                              onClick={() => toggleCatalogCategory(id)}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
+                              title={`${label} · observadas: ${category.observedCount} · publicadas: ${category.publishedCount}`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
                   {!data.catalogCategories?.length && (
                     <span className="text-sm text-gray-500">
-                      Nenhuma categoria observada.
+                      Nenhuma categoria comercial observada.
                     </span>
                   )}
                 </div>
+                {/* Keep legacy values removable without exposing raw Shopee IDs. */}
+                {!!form.catalogPolicy.blockedCategories.filter(
+                  (category) =>
+                    !data.catalogCategories?.some(
+                      (item: any) => item.slug === category,
+                    ),
+                ).length && (
+                  <p className="mt-3 text-xs text-gray-500">
+                    Há categorias bloqueadas antigas que não estão no catálogo
+                    comercial atual.
+                  </p>
+                )}
                 <div className="mt-4 flex gap-2">
                   <input
                     value={blockedCategoryInput}
                     onChange={(event) =>
                       setBlockedCategoryInput(event.target.value)
                     }
-                    placeholder="Bloquear identificador de categoria"
+                    placeholder="Bloquear slug de categoria comercial"
                     className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white p-2 text-sm"
                   />
                   <button
@@ -713,7 +766,7 @@ export default function AutopilotDashboard() {
                         key={category}
                         className="inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-800"
                       >
-                        {category}
+                        {displayCatalogCategory(category)}
                         <button
                           type="button"
                           onClick={() =>

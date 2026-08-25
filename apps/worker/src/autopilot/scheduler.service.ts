@@ -21,6 +21,7 @@ import {
   CatalogOfferSignals,
   CatalogPolicyConfig,
   CatalogPublicationRecord,
+  classifyCommercialCategory,
   countCategoryPublicationsToday,
   evaluateCatalogPolicy,
   findProductCooldown,
@@ -528,11 +529,14 @@ export class AutopilotSchedulerService
     const rating = metrics.rating;
     return {
       title: product.title || observation.offer?.title || '',
-      category:
-        observation.category ||
-        product.normalizedCategory ||
-        product.sourceCategory ||
-        null,
+      category: classifyCommercialCategory({
+        title: product.title || observation.offer?.title,
+        rawCategory:
+          observation.category ||
+          product.normalizedCategory ||
+          product.sourceCategory ||
+          null,
+      }),
       salesCount:
         Number.isInteger(salesCount) && salesCount >= 0 ? salesCount : null,
       rating:
@@ -623,12 +627,14 @@ export class AutopilotSchedulerService
       where: {
         channel: { tenantId },
         status: { in: ['PUBLISHED', 'DELIVERY_UNKNOWN'] },
-        createdAt: { gte: from, lte: now },
+        createdAt: { lte: now },
+        OR: [{ createdAt: { gte: from } }, { publishedAt: { gte: from } }],
       },
       select: {
         channelId: true,
         status: true,
         createdAt: true,
+        publishedAt: true,
         candidate: {
           select: {
             evaluation: {
@@ -636,7 +642,7 @@ export class AutopilotSchedulerService
                 observation: {
                   select: {
                     category: true,
-                    offer: { select: { externalId: true } },
+                    offer: { select: { externalId: true, title: true } },
                   },
                 },
               },
@@ -652,13 +658,13 @@ export class AutopilotSchedulerService
         externalId:
           publication.candidate?.evaluation?.observation?.offer?.externalId ||
           '',
-        category: publication.candidate?.evaluation?.observation?.category
-          ? normalizeCatalogText(
-              publication.candidate.evaluation.observation.category,
-            )
-          : null,
+        category: classifyCommercialCategory({
+          title: publication.candidate?.evaluation?.observation?.offer?.title,
+          rawCategory: publication.candidate?.evaluation?.observation?.category,
+        }),
         status: publication.status,
         createdAt: publication.createdAt,
+        publishedAt: publication.publishedAt,
       }),
     );
 

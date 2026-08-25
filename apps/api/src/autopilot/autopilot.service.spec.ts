@@ -57,7 +57,9 @@ describe('AutopilotService controlled one-shot', () => {
         }),
       },
       whatsAppSafetyConfig: {
-        findUnique: jest.fn().mockResolvedValue({ maxObservationAgeMinutes: 1440 }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ maxObservationAgeMinutes: 1440 }),
       },
       marketplaceIntegration: {
         findUnique: jest.fn().mockResolvedValue({ status: 'CONNECTED' }),
@@ -140,5 +142,48 @@ describe('AutopilotService controlled one-shot', () => {
       }),
       expect.objectContaining({ attempts: 1 }),
     );
+  });
+
+  it('returns the ordered commercial catalog shape without raw category IDs', async () => {
+    const prisma = {
+      offerObservation: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            category: '100630,100662,100881',
+            offer: { title: 'Paleta Trio de Blush' },
+          },
+          {
+            category: '100636,100716,101201',
+            offer: { title: 'Produto sem descrição' },
+          },
+        ]),
+      },
+      publication: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    } as any;
+    const service = new AutopilotService(prisma, queue);
+
+    const result = await service.getCatalogCategories('tenant-1');
+
+    expect(result.categories).toHaveLength(17);
+    expect(result.categories[0]).toEqual({
+      slug: 'eletronicos',
+      label: 'Eletrônicos',
+      observedCount: 0,
+      publishedCount: 0,
+    });
+    expect(result.categories[7]).toMatchObject({
+      slug: 'maquiagem-skincare',
+      label: 'Maquiagem / Skincare',
+      observedCount: 1,
+    });
+    expect(result.categories[16].label).toBe('Outros / Não classificados');
+    expect(Object.keys(result.categories[0])).toEqual([
+      'slug',
+      'label',
+      'observedCount',
+      'publishedCount',
+    ]);
   });
 });

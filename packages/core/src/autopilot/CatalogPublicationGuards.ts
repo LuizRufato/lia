@@ -7,6 +7,7 @@ export interface CatalogPublicationRecord {
   category: string | null;
   status: "PUBLISHED" | "DELIVERY_UNKNOWN" | string;
   createdAt: Date;
+  publishedAt: Date | null;
 }
 
 export function findProductCooldown(
@@ -59,7 +60,7 @@ export function countCategoryPublicationsToday(
       record.channelId === input.channelId &&
       record.category === input.category &&
       ["PUBLISHED", "DELIVERY_UNKNOWN"].includes(record.status) &&
-      record.createdAt >= dayStart &&
-      record.createdAt <= input.now,
+      (record.publishedAt ?? record.createdAt) >= dayStart &&
+      (record.publishedAt ?? record.createdAt) <= input.now,
   ).length;
 }

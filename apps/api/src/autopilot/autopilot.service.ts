@@ -12,6 +12,8 @@ import {
   AutopilotMode,
   IntegrationStatus,
   MonetizationStatus,
+  COMMERCIAL_CATEGORIES,
+  classifyCommercialCategory,
   getMinutesSinceMidnight,
   normalizeCatalogList,
   normalizeCatalogText,
@@ -177,36 +179,61 @@ export class AutopilotService {
   }
 
   async getCatalogCategories(tenantId: string) {
-    const groups = await this.prisma.offerObservation.groupBy({
-      by: ['category'],
-      where: { offer: { tenantId }, category: { not: null } },
-      _count: { _all: true },
+    const observations = await this.prisma.offerObservation.findMany({
+      where: { offer: { tenantId } },
+      select: {
+        category: true,
+        offer: { select: { title: true } },
+      },
     });
 
-    const categories = await Promise.all(
-      groups
-        .filter((group) => group.category)
-        .map(async (group) => ({
-          id: normalizeCatalogText(group.category!),
-          name: group.category!,
-          identifier: group.category!,
-          observedCount: group._count._all,
-          publishedCount: await this.prisma.publication.count({
-            where: {
-              status: 'PUBLISHED',
-              channel: { tenantId },
-              candidate: {
-                evaluation: {
-                  observation: { category: group.category },
+    const observedCounts = new Map<string, number>();
+    for (const observation of observations) {
+      const slug = classifyCommercialCategory({
+        title: observation.offer.title,
+        rawCategory: observation.category,
+      });
+      observedCounts.set(slug, (observedCounts.get(slug) || 0) + 1);
+    }
+
+    const publications = await this.prisma.publication.findMany({
+      where: { status: 'PUBLISHED', channel: { tenantId } },
+      select: {
+        candidate: {
+          select: {
+            evaluation: {
+              select: {
+                observation: {
+                  select: {
+                    category: true,
+                    offer: { select: { title: true } },
+                  },
                 },
               },
             },
-          }),
-        })),
-    );
+          },
+        },
+      },
+    });
+
+    const publishedCounts = new Map<string, number>();
+    for (const publication of publications) {
+      const observation = publication.candidate?.evaluation?.observation;
+      if (!observation) continue;
+      const slug = classifyCommercialCategory({
+        title: observation.offer.title,
+        rawCategory: observation.category,
+      });
+      publishedCounts.set(slug, (publishedCounts.get(slug) || 0) + 1);
+    }
 
     return {
-      categories: categories.sort((a, b) => b.observedCount - a.observedCount),
+      categories: COMMERCIAL_CATEGORIES.map(({ slug, label }) => ({
+        slug,
+        label,
+        observedCount: observedCounts.get(slug) || 0,
+        publishedCount: publishedCounts.get(slug) || 0,
+      })),
     };
   }
 

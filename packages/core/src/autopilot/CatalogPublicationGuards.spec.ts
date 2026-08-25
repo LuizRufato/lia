@@ -10,6 +10,7 @@ const record = (overrides: any = {}) => ({
   category: "casa",
   status: "PUBLISHED",
   createdAt: new Date("2026-08-25T12:00:00Z"),
+  publishedAt: null,
   ...overrides,
 });
 
@@ -82,6 +83,26 @@ describe("CatalogPublicationGuards", () => {
         cooldownHours: 24,
       }).active,
     ).toBe(false);
+  });
+
+  it("uses publishedAt instead of createdAt for the daily category cap", () => {
+    expect(
+      countCategoryPublicationsToday(
+        [
+          record({
+            createdAt: new Date("2026-08-24T23:00:00Z"),
+            publishedAt: new Date("2026-08-25T10:00:00Z"),
+          }),
+        ],
+        {
+          tenantId: "tenant-1",
+          channelId: "channel-a",
+          category: "casa",
+          now,
+          timezone: "America/Campo_Grande",
+        },
+      ),
+    ).toBe(1);
   });
 
   it("counts DELIVERY_UNKNOWN but not FAILED, PENDING or DRY_RUN records", () => {
