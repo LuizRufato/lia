@@ -13,6 +13,17 @@ import {
 const TYPES = ['ACHADINHO', 'OFERTA', 'PRECO_CAIU', 'MAIS_VENDIDO', 'GENERIC'];
 const CTA_MODES = ['AUTO', 'CUSTOM'];
 
+type TemplateRow = {
+  id: string;
+  tenantId: string;
+  name: string;
+  type: string;
+  body: string;
+  enabled: boolean;
+  isDefault: boolean;
+  createdAt: Date;
+};
+
 @Injectable()
 export class TemplatesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -57,17 +68,59 @@ export class TemplatesService {
     };
   }
 
-  private async ensureDefaults(tenantId: string) {
-    const client = (this.prisma as any).publicationTemplate;
-    const count = await client.count({ where: { tenantId } });
-    if (count === 0) {
-      await client.createMany({
-        data: DEFAULT_PUBLICATION_TEMPLATES.map((template) => ({
-          ...template,
-          tenantId,
-        })),
+  private templateKey(template: { type: string; name: string; body: string }) {
+    return `${template.type}\u0000${template.name}\u0000${template.body}`;
+  }
+
+  private async dedupeDefaultTemplates(client: any, tenantId: string) {
+    const defaultKeys = new Set(
+      DEFAULT_PUBLICATION_TEMPLATES.map((template) =>
+        this.templateKey(template),
+      ),
+    );
+    const templates = (await client.findMany({
+      where: { tenantId },
+      orderBy: [
+        { isDefault: 'desc' },
+        { enabled: 'desc' },
+        { createdAt: 'asc' },
+        { id: 'asc' },
+      ],
+    })) as TemplateRow[];
+    const seen = new Set<string>();
+    const duplicateIds: string[] = [];
+
+    for (const template of templates) {
+      const key = this.templateKey(template);
+      if (!defaultKeys.has(key)) continue;
+      if (seen.has(key)) duplicateIds.push(template.id);
+      else seen.add(key);
+    }
+
+    if (duplicateIds.length > 0) {
+      await client.deleteMany({
+        where: { tenantId, id: { in: duplicateIds } },
       });
     }
+
+    return duplicateIds.length;
+  }
+
+  private async ensureDefaults(tenantId: string) {
+    await this.prisma.$transaction(async (tx: any) => {
+      const client = tx.publicationTemplate;
+      await this.dedupeDefaultTemplates(client, tenantId);
+      const count = await client.count({ where: { tenantId } });
+      if (count === 0) {
+        await client.createMany({
+          data: DEFAULT_PUBLICATION_TEMPLATES.map((template) => ({
+            ...template,
+            tenantId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+    });
   }
 
   async list(tenantId: string) {
@@ -80,7 +133,6 @@ export class TemplatesService {
 
   async create(tenantId: string, payload: any) {
     const data = this.validate(payload);
-    const client = (this.prisma as any).publicationTemplate;
     return this.prisma.$transaction(async (tx: any) => {
       if (data.isDefault) {
         await tx.publicationTemplate.updateMany({
@@ -93,8 +145,9 @@ export class TemplatesService {
   }
 
   async update(tenantId: string, id: string, payload: any) {
-    const client = (this.prisma as any).publicationTemplate;
-    const existing = await client.findFirst({ where: { id, tenantId } });
+    const existing = await (this.prisma as any).publicationTemplate.findFirst({
+      where: { id, tenantId },
+    });
     if (!existing) throw new NotFoundException('Template não encontrado.');
     const data = this.validate({ ...existing, ...payload });
     return this.prisma.$transaction(async (tx: any) => {

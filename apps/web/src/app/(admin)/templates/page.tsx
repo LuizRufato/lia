@@ -17,6 +17,64 @@ const VARIABLES = [
   "{rating}",
 ];
 
+function StatusBadge({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone: "green" | "blue" | "gray";
+}) {
+  const tones = {
+    green: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+    blue: "bg-blue-50 text-blue-700 ring-blue-600/20",
+    gray: "bg-gray-100 text-gray-600 ring-gray-500/20",
+  };
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${tones[tone]}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function TemplateToggle({
+  checked,
+  onChange,
+  label,
+  description,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  description: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 bg-gray-50/70 px-4 py-3">
+      <div>
+        <p className="text-sm font-medium text-gray-900">{label}</p>
+        <p className="mt-0.5 text-xs text-gray-500">{description}</p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+          checked ? "bg-blue-600" : "bg-gray-300"
+        }`}
+      >
+        <span
+          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
+            checked ? "translate-x-5" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+    </div>
+  );
+}
+
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<any[]>([]);
   const [preview, setPreview] = useState<any>(null);
@@ -65,19 +123,19 @@ export default function TemplatesPage() {
   };
 
   if (loading)
-    return <Loader2 className="w-8 h-8 animate-spin text-blue-500" />;
+    return <Loader2 className="h-8 w-8 animate-spin text-blue-500" />;
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-7xl space-y-6">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Templates de publicação</h1>
-          <p className="text-gray-500 mt-1">
+          <p className="mt-1 text-gray-500">
             Copy segura e configurável por tenant.
           </p>
         </div>
         <button
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white"
+          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white shadow-sm transition hover:bg-blue-700"
           onClick={() =>
             setSelected({
               id: "new",
@@ -92,7 +150,7 @@ export default function TemplatesPage() {
             })
           }
         >
-          <Plus className="w-4 h-4" /> Novo
+          <Plus className="h-4 w-4" /> Novo
         </button>
       </div>
       {message && (
@@ -101,53 +159,77 @@ export default function TemplatesPage() {
         </div>
       )}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="space-y-3">
+        <div className="space-y-3 lg:sticky lg:top-6 lg:self-start">
           {templates.map((template) => (
             <button
               key={template.id}
               onClick={() => setSelected(template)}
               className={
-                "w-full rounded-xl border bg-white p-4 text-left shadow-sm " +
+                "w-full rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md " +
                 (selected?.id === template.id
                   ? "border-blue-500 ring-2 ring-blue-100"
-                  : "")
+                  : "border-gray-200")
               }
             >
-              <div className="flex items-center justify-between">
-                <span className="font-semibold">{template.name}</span>
-                <span className="text-xs text-gray-500">{template.type}</span>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="block truncate font-semibold text-gray-900">
+                    {template.name}
+                  </span>
+                  <span className="mt-1 block text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                    {template.type}
+                  </span>
+                </div>
+                <FileText className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
               </div>
-              <div className="mt-2 text-xs text-gray-500">
-                {template.enabled ? "Ativo" : "Desativado"}{" "}
-                {template.isDefault ? "• padrão" : ""}
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <StatusBadge tone={template.enabled ? "green" : "gray"}>
+                  {template.enabled ? "Ativo" : "Desativado"}
+                </StatusBadge>
+                {template.isDefault && (
+                  <StatusBadge tone="blue">Padrão</StatusBadge>
+                )}
               </div>
+              <p className="mt-3 line-clamp-2 text-xs leading-5 text-gray-500">
+                {template.body}
+              </p>
             </button>
           ))}
         </div>
         <form
           onSubmit={save}
-          className="rounded-xl border bg-white p-6 shadow-sm lg:col-span-2"
+          className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm lg:col-span-2"
         >
           {selected ? (
             <>
-              <div className="mb-4 flex items-center gap-2 text-lg font-semibold">
-                <FileText className="w-5 h-5 text-blue-600" /> Editar template
+              <div className="mb-6 flex items-start justify-between gap-4">
+                <div className="flex items-center gap-2 text-lg font-semibold">
+                  <FileText className="h-5 w-5 text-blue-600" /> Editar template
+                </div>
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <StatusBadge tone={selected.enabled ? "green" : "gray"}>
+                    {selected.enabled ? "Ativo" : "Desativado"}
+                  </StatusBadge>
+                  {selected.isDefault && (
+                    <StatusBadge tone="blue">Padrão</StatusBadge>
+                  )}
+                </div>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
-                <label className="text-sm">
-                  Nome
+                <label className="text-sm font-medium text-gray-700">
+                  <span>Nome</span>
                   <input
-                    className="mt-1 w-full rounded border p-2"
+                    className="mt-2 w-full rounded-lg border border-gray-300 bg-white p-2.5 font-normal text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                     value={selected.name}
                     onChange={(e) =>
                       setSelected({ ...selected, name: e.target.value })
                     }
                   />
                 </label>
-                <label className="text-sm">
-                  Tipo
+                <label className="text-sm font-medium text-gray-700">
+                  <span>Tipo</span>
                   <select
-                    className="mt-1 w-full rounded border p-2"
+                    className="mt-2 w-full rounded-lg border border-gray-300 bg-white p-2.5 font-normal text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                     value={selected.type}
                     onChange={(e) =>
                       setSelected({ ...selected, type: e.target.value })
@@ -159,10 +241,10 @@ export default function TemplatesPage() {
                   </select>
                 </label>
               </div>
-              <label className="mt-4 block text-sm">
-                Corpo
+              <label className="mt-5 block text-sm font-medium text-gray-700">
+                <span>Corpo da mensagem</span>
                 <textarea
-                  className="mt-1 min-h-48 w-full rounded border p-2 font-mono text-sm"
+                  className="mt-2 min-h-48 w-full rounded-lg border border-gray-300 bg-white p-3 font-mono text-sm font-normal leading-6 text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                   value={selected.body}
                   onChange={(e) =>
                     setSelected({ ...selected, body: e.target.value })
@@ -170,10 +252,10 @@ export default function TemplatesPage() {
                 />
               </label>
               <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <label className="text-sm">
-                  CTA
+                <label className="text-sm font-medium text-gray-700">
+                  <span>CTA</span>
                   <select
-                    className="mt-1 w-full rounded border p-2"
+                    className="mt-2 w-full rounded-lg border border-gray-300 bg-white p-2.5 font-normal text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                     value={selected.ctaMode}
                     onChange={(e) =>
                       setSelected({ ...selected, ctaMode: e.target.value })
@@ -183,10 +265,10 @@ export default function TemplatesPage() {
                     <option value="CUSTOM">Personalizado</option>
                   </select>
                 </label>
-                <label className="text-sm">
-                  CTA personalizado
+                <label className="text-sm font-medium text-gray-700">
+                  <span>CTA personalizado</span>
                   <input
-                    className="mt-1 w-full rounded border p-2"
+                    className="mt-2 w-full rounded-lg border border-gray-300 bg-white p-2.5 font-normal text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-100"
                     value={selected.customCta || ""}
                     onChange={(e) =>
                       setSelected({ ...selected, customCta: e.target.value })
@@ -195,34 +277,31 @@ export default function TemplatesPage() {
                   />
                 </label>
               </div>
-              <div className="mt-4 flex flex-wrap gap-5 text-sm">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={selected.enabled}
-                    onChange={(e) =>
-                      setSelected({ ...selected, enabled: e.target.checked })
-                    }
-                  />{" "}
-                  Ativo
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={selected.isDefault}
-                    onChange={(e) =>
-                      setSelected({ ...selected, isDefault: e.target.checked })
-                    }
-                  />{" "}
-                  Padrão
-                </label>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <TemplateToggle
+                  checked={selected.enabled}
+                  onChange={(enabled) => setSelected({ ...selected, enabled })}
+                  label="Ativo"
+                  description="Pode ser escolhido pela publicação."
+                />
+                <TemplateToggle
+                  checked={selected.isDefault}
+                  onChange={(isDefault) =>
+                    setSelected({ ...selected, isDefault })
+                  }
+                  label="Padrão"
+                  description="Só um template pode ser padrão."
+                />
               </div>
-              <div className="mt-5 flex justify-end">
+              <div className="mt-6 flex items-center justify-between gap-4 border-t border-gray-100 pt-5">
+                <p className="text-xs text-gray-500">
+                  As alterações só entram em vigor depois de salvar.
+                </p>
                 <button
                   disabled={saving}
-                  className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white"
+                  className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Save className="w-4 h-4" />{" "}
+                  <Save className="h-4 w-4" />{" "}
                   {saving ? "Salvando..." : "Salvar"}
                 </button>
               </div>
@@ -233,29 +312,32 @@ export default function TemplatesPage() {
         </form>
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl border bg-white p-6 shadow-sm">
-          <h2 className="font-semibold">Variáveis disponíveis</h2>
-          <div className="mt-3 flex flex-wrap gap-2">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="font-semibold text-gray-900">Variáveis disponíveis</h2>
+          <p className="mt-1 text-xs text-gray-500">
+            Use estas variáveis no corpo para preencher os dados da oferta.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
             {VARIABLES.map((variable) => (
               <code
                 key={variable}
-                className="rounded bg-gray-100 px-2 py-1 text-xs"
+                className="rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-700"
               >
                 {variable}
               </code>
             ))}
           </div>
         </div>
-        <div className="rounded-xl border bg-white p-6 shadow-sm">
-          <h2 className="font-semibold">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="font-semibold text-gray-900">
             Pré-visualização{" "}
             {preview?.isDemo ? "(demonstração)" : "(oferta real recente)"}
           </h2>
-          <div className="mt-3 space-y-3">
+          <div className="mt-4 space-y-3">
             {preview?.previews?.map((item: any) => (
               <div
                 key={item.id || item.name}
-                className="rounded bg-gray-50 p-3 whitespace-pre-wrap text-sm"
+                className="rounded-xl border border-gray-100 bg-gray-50 p-4 whitespace-pre-wrap text-sm leading-6 text-gray-700"
               >
                 {item.rendered}
               </div>
