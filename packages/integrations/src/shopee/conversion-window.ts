@@ -1,7 +1,11 @@
 export const SHOPEE_CONVERSION_INTERVAL_MS = 5 * 60 * 1000;
 export const SHOPEE_CONVERSION_CURSOR_DELAY_MS = 20 * 1000;
 export const SHOPEE_CONVERSION_MAX_PAGES = 50;
-export const SHOPEE_CONVERSION_OVERLAP_SECONDS = 15 * 60;
+// Shopee can surface affiliate conversions after the purchase time. Keep a
+// full-day reconciliation overlap so delayed rows are still discovered by the
+// 5-minute poller. Persistence is idempotent by conversionId, so re-reading
+// the same window does not duplicate MarketplaceConversion records.
+export const SHOPEE_CONVERSION_OVERLAP_SECONDS = 24 * 60 * 60;
 export const SHOPEE_CONVERSION_INITIAL_LOOKBACK_SECONDS = 7 * 24 * 60 * 60;
 
 export interface ShopeeConversionWindow {
