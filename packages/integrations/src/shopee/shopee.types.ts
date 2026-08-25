@@ -91,7 +91,7 @@ export interface ShopeeConversionNode {
   sellerCommission: string;
   totalCommission: string;
   netCommission: string;
-  utmContent: string[];
+  utmContent: string[] | string;
   buyerType?: number;
   device?: string;
   campaignType?: string;

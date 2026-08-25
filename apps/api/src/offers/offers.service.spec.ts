@@ -5,6 +5,8 @@ import { ConfigService } from '@nestjs/config';
 import { BadRequestException } from '@nestjs/common';
 import * as crypto from 'crypto';
 
+const mockGenerateShortLink = jest.fn();
+
 jest.mock('@lia/integrations', () => {
   return {
     getEncryptionKey: jest
@@ -15,27 +17,25 @@ jest.mock('@lia/integrations', () => {
     decryptSecret: jest.fn().mockReturnValue('mock-secret'),
     ShopeeAffiliateClient: jest.fn().mockImplementation(() => {
       return {
-        generateShortLink: jest
-          .fn()
-          .mockImplementation(async (originUrl, subIds) => {
-            if (originUrl.includes('error')) {
-              const err = new Error(
-                'Shopee GraphQL Error: Invalid affiliate id',
-              );
-              (err as any).code = 10032;
-              throw err;
-            }
-            if (originUrl.includes('null-link')) {
-              return { data: { generateShortLink: { shortLink: null } } };
-            }
-            return {
-              data: {
-                generateShortLink: { shortLink: 'https://shope.ee/mock' },
-              },
-            };
-          }),
+        generateShortLink: mockGenerateShortLink,
       };
     }),
+  };
+});
+
+mockGenerateShortLink.mockImplementation(async (originUrl: string) => {
+  if (originUrl.includes('error')) {
+    const err = new Error('Shopee GraphQL Error: Invalid affiliate id');
+    (err as any).code = 10032;
+    throw err;
+  }
+  if (originUrl.includes('null-link')) {
+    return { data: { generateShortLink: { shortLink: null } } };
+  }
+  return {
+    data: {
+      generateShortLink: { shortLink: 'https://shope.ee/mock' },
+    },
   };
 });
 
@@ -44,6 +44,7 @@ describe('OffersService', () => {
   let prisma: PrismaService;
 
   beforeEach(async () => {
+    mockGenerateShortLink.mockClear();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OffersService,
@@ -128,6 +129,38 @@ describe('OffersService', () => {
       service.verifyMonetization('tenant-A', 'offer-123'),
     ).rejects.toThrow('Verificação já está em andamento para esta oferta.');
     expect(prisma.affiliateLink.create).not.toHaveBeenCalled();
+  });
+
+  it('passes the attribution key as a Shopee short-link subId', async () => {
+    (prisma.offer.findUnique as jest.Mock).mockResolvedValue({
+      tenantId: 'tenant-A',
+      url: 'https://shopee.com.br/product-attribution',
+      observations: [
+        {
+          canonicalPayload: {
+            canonicalUrl: 'https://shopee.com.br/product-attribution',
+          },
+        },
+      ],
+    });
+    (prisma.affiliateLink.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.affiliateLink.create as jest.Mock).mockResolvedValue({
+      id: 'link-123',
+      attributionKey: 'key-123',
+    });
+    (prisma.marketplaceIntegration.findUnique as jest.Mock).mockResolvedValue({
+      publicIdentifier: 'app-id',
+      encryptedSecret: 'enc',
+      iv: 'iv',
+      authTag: 'tag',
+    });
+
+    await service.verifyMonetization('tenant-A', 'offer-123');
+
+    expect(mockGenerateShortLink).toHaveBeenCalledWith(
+      'https://shopee.com.br/product-attribution',
+      ['lia', 'key-123'],
+    );
   });
 
   it('should throw if GraphQL returns error and rollback state to FAILED', async () => {

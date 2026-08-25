@@ -22,10 +22,41 @@ import {
   normalizeOrderStatus,
 } from './conversion-state';
 import { generateAdminAlertRecipientHash } from '@lia/core';
+import { buildAdminAlertJobId } from '../admin-alerts/admin-alert-job-id';
 
 type ShopeeConversionPage = NonNullable<
   ShopeeConversionResponse['data']['conversionReport']
 >;
+
+function extractAttributionKey(
+  utmContent: ShopeeConversionNode['utmContent'],
+): string | null {
+  const values = Array.isArray(utmContent)
+    ? utmContent
+    : typeof utmContent === 'string'
+      ? (() => {
+          try {
+            const parsed = JSON.parse(utmContent);
+            return Array.isArray(parsed) ? parsed : [parsed];
+          } catch {
+            return [utmContent];
+          }
+        })()
+      : [];
+
+  for (const rawValue of values) {
+    if (typeof rawValue !== 'string') continue;
+    const value = rawValue.trim();
+    if (!value || value === 'lia') continue;
+
+    const encodedSubIds = /^lia-([a-f0-9]{32})---$/i.exec(value);
+    if (encodedSubIds) return encodedSubIds[1];
+
+    if (value.length > 5) return value;
+  }
+
+  return null;
+}
 
 export interface ShopeeConversionsSyncJobData {
   tenantId: string;
@@ -293,16 +324,9 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       let affiliateLinkId: string | null = null;
       let offerId: string | null = null;
 
-      // Try to find attribution key from subIds in utmContent
-      // In Shopee, utmContent is an array of strings, usually subIds
-      let foundAttributionKey: string | null = null;
-      for (const utm of node.utmContent || []) {
-        if (utm && utm.length > 5) {
-          foundAttributionKey = utm;
-          // We can stop at the first non-empty string assuming it's our attributionKey
-          break;
-        }
-      }
+      // Shopee may return the subIds as an array or as a serialized string.
+      // The observed short-link format is "lia-<attributionKey>---".
+      let foundAttributionKey = extractAttributionKey(node.utmContent);
 
       if (foundAttributionKey) {
         const affiliateLink = await this.prisma.affiliateLink.findFirst({
@@ -633,7 +657,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         'deliver-admin-alert',
         { alertId: alert.id },
         {
-          jobId: `admin-alert:${alert.id}`,
+          jobId: buildAdminAlertJobId(alert.id),
           attempts: 5,
           backoff: { type: 'exponential', delay: 20000 },
           removeOnComplete: true,
@@ -714,7 +738,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         'deliver-admin-alert',
         { deliveryId: delivery.id },
         {
-          jobId: `admin-alert:${alert.id}:delivery:${delivery.id}`,
+          jobId: buildAdminAlertJobId(alert.id, delivery.id),
           attempts: 5,
           backoff: { type: 'exponential', delay: 20000 },
           removeOnComplete: true,

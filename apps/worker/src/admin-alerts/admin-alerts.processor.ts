@@ -11,6 +11,7 @@ import {
   WhatsAppEvolutionProvider,
 } from '@lia/integrations';
 import { PrismaService } from '../prisma.service';
+import { buildAdminAlertJobId } from './admin-alert-job-id';
 
 type AdminAlertJobData = { deliveryId?: string; alertId?: string };
 
@@ -268,7 +269,7 @@ export class AdminAlertsProcessor extends WorkerHost {
         'deliver-admin-alert',
         { deliveryId: delivery.id },
         {
-          jobId: `admin-alert:${alert.id}:delivery:${delivery.id}`,
+          jobId: buildAdminAlertJobId(alert.id, delivery.id),
           attempts: 5,
           backoff: { type: 'exponential', delay: 20000 },
           removeOnComplete: true,

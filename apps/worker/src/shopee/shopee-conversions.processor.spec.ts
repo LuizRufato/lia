@@ -348,8 +348,123 @@ describe('ShopeeConversionsProcessor', () => {
     expect(prisma.adminAlert.upsert).toHaveBeenCalledTimes(2);
     expect(adminAlertsQueue.add).toHaveBeenCalledTimes(2);
     expect(jobs.size).toBe(1);
-    expect([...jobs.keys()][0]).toBe('admin-alert:alert-db-1');
+    expect([...jobs.keys()][0]).toBe('admin-alert-alert-db-1');
     expect([...jobs.values()][0]).toEqual({ alertId: 'alert-db-1' });
+  });
+
+  it('re-enqueues pending and failed deliveries with one safe job per delivery', async () => {
+    const adminAlertsQueue = { add: jest.fn().mockResolvedValue({}) };
+    prisma.adminAlert.upsert.mockResolvedValue({
+      id: 'alert-db-1',
+      createdAt: new Date('2026-08-24T20:01:00.000Z'),
+      deliveryStatus: 'PENDING',
+    });
+    prisma.adminAlertConfig = {
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'config-1',
+        enabled: true,
+        newShopeeSaleEnabled: true,
+        adminWhatsappIntegrationId: 'sender-a',
+        enabledAt: new Date('2026-08-24T20:00:00.000Z'),
+      }),
+    };
+    prisma.channelIntegration = {
+      findFirst: jest.fn().mockResolvedValue({ id: 'sender-a' }),
+    };
+    prisma.adminAlertRecipient = {
+      upsert: jest.fn(),
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ id: 'recipient-1' }, { id: 'recipient-2' }]),
+    };
+    prisma.adminAlertDelivery = {
+      createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ id: 'delivery-1' }, { id: 'delivery-2' }]),
+    };
+    prisma.adminAlert.update = jest.fn().mockResolvedValue(undefined);
+
+    const queuedProcessor = new ShopeeConversionsProcessor(
+      prisma,
+      { get: jest.fn().mockReturnValue('encryption-key') } as any,
+      adminAlertsQueue as any,
+    );
+
+    await queuedProcessor.process({
+      id: 'job-deliveries',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any);
+
+    expect(adminAlertsQueue.add).toHaveBeenCalledTimes(2);
+    expect(
+      adminAlertsQueue.add.mock.calls.map((call: any[]) => call[2].jobId),
+    ).toEqual([
+      'admin-alert-alert-db-1-delivery-delivery-1',
+      'admin-alert-alert-db-1-delivery-delivery-2',
+    ]);
+    expect(
+      prisma.adminAlertDelivery.findMany.mock.calls[0][0].where.status,
+    ).toEqual({ in: ['PENDING', 'FAILED'] });
+    expect(
+      adminAlertsQueue.add.mock.calls.every((call: any[]) =>
+        call[2].jobId.includes(':'),
+      ),
+    ).toBe(false);
+  });
+
+  it('does not enqueue a delivery when the alert is already SENT', async () => {
+    const adminAlertsQueue = { add: jest.fn() };
+    prisma.adminAlert.upsert.mockResolvedValue({
+      id: 'alert-db-1',
+      createdAt: new Date('2026-08-24T20:01:00.000Z'),
+      deliveryStatus: 'SENT',
+    });
+
+    const queuedProcessor = new ShopeeConversionsProcessor(
+      prisma,
+      { get: jest.fn().mockReturnValue('encryption-key') } as any,
+      adminAlertsQueue as any,
+    );
+
+    await queuedProcessor.process({
+      id: 'job-sent-alert',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any);
+
+    expect(adminAlertsQueue.add).not.toHaveBeenCalled();
+  });
+
+  it('extracts the attribution key from the real Shopee utmContent string format', async () => {
+    const attributionKey = '0123456789abcdef0123456789abcdef';
+    mockGetConversionReport.mockResolvedValueOnce({
+      data: {
+        conversionReport: {
+          nodes: [
+            {
+              ...conversionNode,
+              utmContent: `lia-${attributionKey}---`,
+            },
+          ],
+          pageInfo: { hasNextPage: false, scrollId: undefined, limit: 500 },
+        },
+      },
+    });
+
+    await processor.process({
+      id: 'job-real-utm-format',
+      data: { tenantId: 'tenant-1', purchaseTimeStart: 1, purchaseTimeEnd: 2 },
+    } as any);
+
+    expect(prisma.affiliateLink.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 'tenant-1', attributionKey },
+    });
+    expect(prisma.marketplaceConversion.upsert.mock.calls[0][0].create).toEqual(
+      expect.objectContaining({
+        attributionKey,
+        attributionStatus: 'ATTRIBUTED',
+      }),
+    );
   });
 
   it('allows UNATTRIBUTED to become ATTRIBUTED but never regresses it', async () => {
