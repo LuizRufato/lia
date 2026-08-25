@@ -4,8 +4,19 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { ValidationPipe } from '@nestjs/common';
 import { getEncryptionKey } from '@lia/integrations';
+import { assertProductionAuthCookieDomain } from './auth/auth-cookie';
 
 async function bootstrap() {
+  try {
+    assertProductionAuthCookieDomain();
+  } catch (error: any) {
+    console.error(
+      'FATAL ERROR: Invalid production auth cookie configuration:',
+      error.message,
+    );
+    process.exit(1);
+  }
+
   // Validate integration encryption key before starting
   try {
     getEncryptionKey();
