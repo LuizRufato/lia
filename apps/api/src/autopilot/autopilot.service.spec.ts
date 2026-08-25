@@ -154,14 +154,17 @@ describe('AutopilotService controlled one-shot', () => {
   it('returns the ordered commercial catalog shape without raw category IDs', async () => {
     const prisma = {
       offerObservation: {
+        findMany: jest.fn(),
+      },
+      offer: {
         findMany: jest.fn().mockResolvedValue([
           {
-            category: '100630,100662,100881',
-            offer: { title: 'Paleta Trio de Blush' },
+            title: 'Paleta Trio de Blush',
+            observations: [{ category: '100630,100662,100881' }],
           },
           {
-            category: '100636,100716,101201',
-            offer: { title: 'Produto sem descrição' },
+            title: 'Produto sem descrição',
+            observations: [{ category: '100636,100716,101201' }],
           },
         ]),
       },
@@ -192,6 +195,22 @@ describe('AutopilotService controlled one-shot', () => {
       'observedCount',
       'publishedCount',
     ]);
+  });
+
+  it('returns the lightweight mode status without loading the dashboard', async () => {
+    const findUnique = jest.fn().mockResolvedValue({ mode: 'AUTO' });
+    const service = new AutopilotService(
+      { autopilotConfig: { findUnique } } as any,
+      queue,
+    );
+
+    await expect(service.getStatus('tenant-1')).resolves.toEqual({
+      mode: 'AUTO',
+    });
+    expect(findUnique).toHaveBeenCalledWith({
+      where: { tenantId: 'tenant-1' },
+      select: { mode: true },
+    });
   });
 
   it('returns operational status from existing heartbeat and database data', async () => {
@@ -243,6 +262,9 @@ describe('AutopilotService controlled one-shot', () => {
       },
       offerEvaluation: {
         count: jest.fn().mockResolvedValue(2),
+        findFirst: jest.fn().mockResolvedValue({
+          evaluatedAt: new Date('2026-08-25T11:58:00.000Z'),
+        }),
       },
       channel: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -259,6 +281,7 @@ describe('AutopilotService controlled one-shot', () => {
       worker: { active: true, ageSeconds: 3 },
       lastShopeeDiscoveryAt,
       eligibleCandidates: 2,
+      lastEvaluationAt: new Date('2026-08-25T11:58:00.000Z'),
       lastDecisionAt,
       nextOpportunity: 'Oferta elegível disponível',
     });

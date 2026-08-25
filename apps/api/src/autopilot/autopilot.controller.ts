@@ -21,6 +21,11 @@ export class AutopilotController {
     return this.autopilotService.getDashboard(tenantId);
   }
 
+  @Get('status')
+  async getStatus(@Request() req: any) {
+    return this.autopilotService.getStatus(req.user.tenantId);
+  }
+
   @Get('catalog/categories')
   async getCatalogCategories(@Request() req: any) {
     return this.autopilotService.getCatalogCategories(req.user.tenantId);

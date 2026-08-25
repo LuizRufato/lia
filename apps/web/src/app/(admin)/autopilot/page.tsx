@@ -88,6 +88,7 @@ export default function AutopilotDashboard() {
 
   useEffect(() => {
     fetchData(true, true);
+    void fetchCategories();
     const refreshTimer = window.setInterval(() => {
       fetchData(false, false);
     }, 30_000);
@@ -99,16 +100,13 @@ export default function AutopilotDashboard() {
     if (showLoading) setLoading(true);
     setLoadError("");
     try {
-      const [res, categoriesRes] = await Promise.all([
-        fetchAuth("/autopilot/dashboard"),
-        fetchAuth("/autopilot/catalog/categories"),
-      ]);
+      const res = await fetchAuth("/autopilot/dashboard");
       if (!res.ok) throw new Error("Failed to fetch");
       const json = await res.json();
-      const categories = categoriesRes.ok
-        ? await categoriesRes.json()
-        : { categories: [] };
-      setData({ ...json, catalogCategories: categories.categories || [] });
+      setData((current: any) => ({
+        ...json,
+        catalogCategories: current?.catalogCategories || [],
+      }));
 
       if (syncForm && json.config) {
         setForm({
@@ -138,6 +136,20 @@ export default function AutopilotDashboard() {
       );
     } finally {
       if (showLoading) setLoading(false);
+    }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const response = await fetchAuth("/autopilot/catalog/categories");
+      if (!response.ok) return;
+      const json = await response.json();
+      setData((current: any) => ({
+        ...(current || {}),
+        catalogCategories: json.categories || [],
+      }));
+    } catch {
+      // Categories are secondary data and must not block the dashboard.
     }
   };
 
@@ -184,6 +196,7 @@ export default function AutopilotDashboard() {
       setToast("Configurações salvas.");
       setTimeout(() => setToast(""), 3000);
       fetchData();
+      void fetchCategories();
     } catch (err) {
       alert("Erro ao salvar configuração.");
     } finally {
@@ -351,7 +364,7 @@ export default function AutopilotDashboard() {
           </span>
         </div>
 
-        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
               Worker
@@ -392,6 +405,18 @@ export default function AutopilotDashboard() {
 
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Última análise
+            </p>
+            <p className="mt-1 font-semibold text-gray-900">
+              {formatRelativeTime(data.operationalStatus?.lastEvaluationAt)}
+            </p>
+            <p className="text-xs text-gray-500">
+              {formatDateTime(data.operationalStatus?.lastEvaluationAt)}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
               Última decisão
             </p>
             <p className="mt-1 font-semibold text-gray-900">
@@ -412,6 +437,10 @@ export default function AutopilotDashboard() {
             </p>
           </div>
         </div>
+        <p className="mt-4 text-xs text-gray-500">
+          Uma análise é registrada quando a LIA avalia uma oferta. Uma decisão
+          aparece quando uma oferta chega à etapa do Autopilot.
+        </p>
       </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

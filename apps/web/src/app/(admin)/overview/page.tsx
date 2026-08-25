@@ -47,18 +47,27 @@ export default function OverviewPage() {
 
     const fetchAll = async () => {
       try {
-        const healthRes = await fetchAuth("/health/system");
-        if (healthRes.ok) setHealth(await healthRes.json());
+        const [healthResult, statusResult, analyticsResult] =
+          await Promise.allSettled([
+            fetchAuth("/health/system").then((response) =>
+              response.ok ? response.json() : null,
+            ),
+            fetchAuth("/autopilot/status").then((response) =>
+              response.ok ? response.json() : null,
+            ),
+            fetchAuth("/analytics/overview").then((response) =>
+              response.ok ? response.json() : null,
+            ),
+          ]);
 
-        const apRes = await fetchAuth("/autopilot/dashboard");
-        if (apRes.ok) {
-          const apData = await apRes.json();
-          setAutopilotMode(apData.mode || "OFF");
+        if (healthResult.status === "fulfilled" && healthResult.value) {
+          setHealth(healthResult.value);
         }
-
-        const analyticsRes = await fetchAuth("/analytics/overview");
-        if (analyticsRes.ok) {
-          setAnalytics(await analyticsRes.json());
+        if (statusResult.status === "fulfilled" && statusResult.value) {
+          setAutopilotMode(statusResult.value.mode || "OFF");
+        }
+        if (analyticsResult.status === "fulfilled" && analyticsResult.value) {
+          setAnalytics(analyticsResult.value);
         }
       } catch (err: any) {
         console.error("Failed to fetch", err);

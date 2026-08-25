@@ -77,6 +77,15 @@ export class AutopilotService {
     }
   }
 
+  async getStatus(tenantId: string) {
+    const config = await this.prisma.autopilotConfig.findUnique({
+      where: { tenantId },
+      select: { mode: true },
+    });
+
+    return { mode: config?.mode || 'OFF' };
+  }
+
   async getDashboard(tenantId: string) {
     let config = await this.prisma.autopilotConfig.findUnique({
       where: { tenantId },
@@ -165,32 +174,48 @@ export class AutopilotService {
       (marketplace) => marketplace.marketplaceId,
     );
     const minScore = config.minScore.toNumber();
-    const [shopeeIntegration, eligibleCandidates, workerHeartbeat] =
-      await Promise.all([
-        this.prisma.marketplaceIntegration.findFirst({
-          where: { tenantId, provider: 'SHOPEE' },
-          select: { lastSyncAt: true },
-        }),
-        this.prisma.offerEvaluation.count({
-          where: {
-            observation: {
-              offer: {
-                tenantId,
-                marketplaceId: { in: enabledMarketplaceIds },
-              },
-            },
-            score: { gte: minScore },
-            decision: 'ELIGIBLE',
-            candidate: {
-              is: {
-                status: { in: ['PENDING', 'DEFERRED'] },
-                OR: [{ retryAt: null }, { retryAt: { lte: new Date() } }],
-              },
+    const [
+      shopeeIntegration,
+      eligibleCandidates,
+      workerHeartbeat,
+      lastEvaluation,
+    ] = await Promise.all([
+      this.prisma.marketplaceIntegration.findFirst({
+        where: { tenantId, provider: 'SHOPEE' },
+        select: { lastSyncAt: true },
+      }),
+      this.prisma.offerEvaluation.count({
+        where: {
+          observation: {
+            offer: {
+              tenantId,
+              marketplaceId: { in: enabledMarketplaceIds },
             },
           },
-        }),
-        this.getWorkerHeartbeat(),
-      ]);
+          score: { gte: minScore },
+          decision: 'ELIGIBLE',
+          candidate: {
+            is: {
+              status: { in: ['PENDING', 'DEFERRED'] },
+              OR: [{ retryAt: null }, { retryAt: { lte: new Date() } }],
+            },
+          },
+        },
+      }),
+      this.getWorkerHeartbeat(),
+      this.prisma.offerEvaluation.findFirst({
+        where: {
+          observation: {
+            offer: {
+              tenantId,
+              marketplace: { type: 'SHOPEE' },
+            },
+          },
+        },
+        orderBy: { evaluatedAt: 'desc' },
+        select: { evaluatedAt: true },
+      }),
+    ]);
 
     return {
       mode: config.mode,
@@ -231,6 +256,7 @@ export class AutopilotService {
         worker: workerHeartbeat,
         lastShopeeDiscoveryAt: shopeeIntegration?.lastSyncAt || null,
         eligibleCandidates,
+        lastEvaluationAt: lastEvaluation?.evaluatedAt || null,
         lastDecisionAt: feedRaw[0]?.createdAt || null,
         nextOpportunity:
           eligibleCandidates > 0
@@ -242,19 +268,23 @@ export class AutopilotService {
   }
 
   async getCatalogCategories(tenantId: string) {
-    const observations = await this.prisma.offerObservation.findMany({
-      where: { offer: { tenantId } },
+    const offers = await this.prisma.offer.findMany({
+      where: { tenantId },
       select: {
-        category: true,
-        offer: { select: { title: true } },
+        title: true,
+        observations: {
+          orderBy: { observedAt: 'desc' },
+          take: 1,
+          select: { category: true },
+        },
       },
     });
 
     const observedCounts = new Map<string, number>();
-    for (const observation of observations) {
+    for (const offer of offers) {
       const slug = classifyCommercialCategory({
-        title: observation.offer.title,
-        rawCategory: observation.category,
+        title: offer.title,
+        rawCategory: offer.observations[0]?.category || null,
       });
       observedCounts.set(slug, (observedCounts.get(slug) || 0) + 1);
     }
