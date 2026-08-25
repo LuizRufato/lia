@@ -43,6 +43,27 @@ function displayCatalogCategory(value: string) {
     : value;
 }
 
+function formatRelativeTime(value: string | null | undefined) {
+  if (!value) return "Não registrado";
+
+  const elapsedSeconds = Math.max(
+    0,
+    Math.round((Date.now() - new Date(value).getTime()) / 1000),
+  );
+  if (elapsedSeconds < 60) return `há ${elapsedSeconds} segundos`;
+
+  const elapsedMinutes = Math.round(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `há ${elapsedMinutes} min`;
+
+  const elapsedHours = Math.round(elapsedMinutes / 60);
+  return `há ${elapsedHours} h`;
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "Não registrado";
+  return new Date(value).toLocaleString("pt-BR");
+}
+
 export default function AutopilotDashboard() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -66,11 +87,16 @@ export default function AutopilotDashboard() {
   });
 
   useEffect(() => {
-    fetchData();
+    fetchData(true, true);
+    const refreshTimer = window.setInterval(() => {
+      fetchData(false, false);
+    }, 30_000);
+
+    return () => window.clearInterval(refreshTimer);
   }, []);
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (showLoading = true, syncForm = true) => {
+    if (showLoading) setLoading(true);
     setLoadError("");
     try {
       const [res, categoriesRes] = await Promise.all([
@@ -84,7 +110,7 @@ export default function AutopilotDashboard() {
         : { categories: [] };
       setData({ ...json, catalogCategories: categories.categories || [] });
 
-      if (json.config) {
+      if (syncForm && json.config) {
         setForm({
           mode: json.mode,
           minScore: json.config.minScore,
@@ -111,7 +137,7 @@ export default function AutopilotDashboard() {
         "Não foi possível carregar as configurações do Piloto Automático.",
       );
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -183,7 +209,7 @@ export default function AutopilotDashboard() {
             {loadError || "Não foi possível carregar os dados agora."}
           </p>
           <button
-            onClick={fetchData}
+            onClick={() => fetchData()}
             className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700"
           >
             Tentar novamente
@@ -299,6 +325,94 @@ export default function AutopilotDashboard() {
             "A LIA não escolhe sozinha, mas aceita envios manuais enfileirados."}
         </p>
       </div>
+
+      <section
+        className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+        aria-labelledby="lia-operational-status"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2
+              id="lia-operational-status"
+              className="text-lg font-bold text-gray-900"
+            >
+              Status da LIA
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Saúde operacional baseada no heartbeat e nos dados já processados.
+            </p>
+          </div>
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${data.operationalStatus?.worker?.active ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600"}`}
+          >
+            {data.operationalStatus?.worker?.active
+              ? "● Operacional"
+              : "● Indisponível"}
+          </span>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Worker
+            </p>
+            <p className="mt-1 font-semibold text-gray-900">
+              {data.operationalStatus?.worker?.active ? "Ativo" : "Inativo"}
+            </p>
+            <p className="text-xs text-gray-500">
+              {data.operationalStatus?.worker?.ageSeconds == null
+                ? "Heartbeat expirado"
+                : `há ${data.operationalStatus.worker.ageSeconds} segundos`}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Último Discovery Shopee
+            </p>
+            <p className="mt-1 font-semibold text-gray-900">
+              {formatRelativeTime(
+                data.operationalStatus?.lastShopeeDiscoveryAt,
+              )}
+            </p>
+            <p className="text-xs text-gray-500">
+              {formatDateTime(data.operationalStatus?.lastShopeeDiscoveryAt)}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Candidatos elegíveis
+            </p>
+            <p className="mt-1 text-2xl font-bold text-gray-900">
+              {data.operationalStatus?.eligibleCandidates ?? 0}
+            </p>
+            <p className="text-xs text-gray-500">agora</p>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Última decisão
+            </p>
+            <p className="mt-1 font-semibold text-gray-900">
+              {formatRelativeTime(data.operationalStatus?.lastDecisionAt)}
+            </p>
+            <p className="text-xs text-gray-500">
+              {formatDateTime(data.operationalStatus?.lastDecisionAt)}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Próxima oportunidade
+            </p>
+            <p className="mt-1 text-sm font-semibold text-gray-900">
+              {data.operationalStatus?.nextOpportunity ||
+                "Aguardando nova oferta com score mínimo"}
+            </p>
+          </div>
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-8">
@@ -954,9 +1068,15 @@ export default function AutopilotDashboard() {
           </form>
 
           <div>
-            <h2 className="text-xl font-bold mb-4">
-              Feed de Decisões (Últimos 10)
-            </h2>
+            <div className="mb-4">
+              <h2 className="text-xl font-bold">
+                Feed de Decisões (Últimos 10)
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                O feed registra decisões geradas pela LIA. Ausência de novas
+                linhas não significa que o Worker está parado.
+              </p>
+            </div>
             <div className="bg-white border rounded-lg overflow-hidden shadow-sm">
               <table className="w-full text-left text-sm">
                 <thead className="bg-gray-50 border-b">

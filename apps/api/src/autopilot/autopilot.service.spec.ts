@@ -1,5 +1,12 @@
 import { AutopilotService } from './autopilot.service';
 
+jest.mock('ioredis', () =>
+  jest.fn().mockImplementation(() => ({
+    pttl: jest.fn().mockResolvedValue(12_000),
+    disconnect: jest.fn(),
+  })),
+);
+
 describe('AutopilotService controlled one-shot', () => {
   const queue = { add: jest.fn() } as any;
 
@@ -185,5 +192,90 @@ describe('AutopilotService controlled one-shot', () => {
       'observedCount',
       'publishedCount',
     ]);
+  });
+
+  it('returns operational status from existing heartbeat and database data', async () => {
+    const lastDecisionAt = new Date('2026-08-25T12:00:00.000Z');
+    const lastShopeeDiscoveryAt = new Date('2026-08-25T11:59:00.000Z');
+    const prisma = {
+      autopilotConfig: {
+        findUnique: jest.fn().mockResolvedValue({
+          mode: 'AUTO',
+          allowedStartMinute: 540,
+          allowedEndMinute: 1320,
+          intervalMinutes: 12,
+          minScore: { toNumber: () => 65 },
+          minimumCommissionCents: 500,
+          maxDailyPosts: 5,
+          timezone: 'America/Campo_Grande',
+          enabledChannels: [],
+          enabledMarketplaces: [
+            {
+              marketplaceId: 'marketplace-1',
+              marketplace: { name: 'Shopee', type: 'SHOPEE' },
+            },
+          ],
+          catalogPolicy: null,
+        }),
+      },
+      publication: {
+        count: jest.fn().mockResolvedValue(0),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      autopilotAudit: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'audit-1',
+            decision: 'DRY_RUN_APPROVED',
+            liaScore: { toNumber: () => 80 },
+            details: null,
+            createdAt: lastDecisionAt,
+            candidate: null,
+          },
+        ]),
+        create: jest.fn(),
+      },
+      marketplaceIntegration: {
+        findMany: jest.fn().mockResolvedValue([{ provider: 'SHOPEE' }]),
+        findFirst: jest.fn().mockResolvedValue({
+          lastSyncAt: lastShopeeDiscoveryAt,
+        }),
+      },
+      offerEvaluation: {
+        count: jest.fn().mockResolvedValue(2),
+      },
+      channel: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      marketplace: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    } as any;
+    const service = new AutopilotService(prisma, queue);
+
+    const result = await service.getDashboard('tenant-1');
+
+    expect(result.operationalStatus).toEqual({
+      worker: { active: true, ageSeconds: 3 },
+      lastShopeeDiscoveryAt,
+      eligibleCandidates: 2,
+      lastDecisionAt,
+      nextOpportunity: 'Oferta elegível disponível',
+    });
+    expect(prisma.autopilotAudit.create).not.toHaveBeenCalled();
+    expect(prisma.offerEvaluation.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          decision: 'ELIGIBLE',
+          score: { gte: 65 },
+        }),
+      }),
+    );
+
+    prisma.offerEvaluation.count.mockResolvedValue(0);
+    const emptyResult = await service.getDashboard('tenant-1');
+    expect(emptyResult.operationalStatus.nextOpportunity).toBe(
+      'Aguardando nova oferta com score mínimo',
+    );
   });
 });

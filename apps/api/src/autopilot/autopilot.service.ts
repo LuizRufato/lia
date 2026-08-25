@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import Redis from 'ioredis';
 import { PrismaService } from '../prisma.service';
 import {
   AutopilotBrain,
@@ -17,6 +18,7 @@ import {
   getMinutesSinceMidnight,
   normalizeCatalogList,
   normalizeCatalogText,
+  getRedisConfig,
 } from '@lia/core';
 
 export const CONTROLLED_ONE_SHOT_CONFIRMATION = 'CONTROLLED_ONE_SHOT_REAL';
@@ -54,6 +56,26 @@ export class AutopilotService {
     private prisma: PrismaService,
     @InjectQueue('publisher') private readonly publisherQueue: Queue,
   ) {}
+
+  private async getWorkerHeartbeat() {
+    const redis = new Redis(getRedisConfig().url);
+    try {
+      const ttlMilliseconds = await redis.pttl('worker:heartbeat');
+      if (ttlMilliseconds <= 0) {
+        return { active: false, ageSeconds: null };
+      }
+
+      const ageSeconds = Math.max(
+        0,
+        Math.min(15, Math.round((15_000 - ttlMilliseconds) / 1_000)),
+      );
+      return { active: true, ageSeconds };
+    } catch {
+      return { active: false, ageSeconds: null };
+    } finally {
+      redis.disconnect();
+    }
+  }
 
   async getDashboard(tenantId: string) {
     let config = await this.prisma.autopilotConfig.findUnique({
@@ -139,6 +161,37 @@ export class AutopilotService {
       })
     ).map((integration) => integration.provider);
 
+    const enabledMarketplaceIds = config.enabledMarketplaces.map(
+      (marketplace) => marketplace.marketplaceId,
+    );
+    const minScore = config.minScore.toNumber();
+    const [shopeeIntegration, eligibleCandidates, workerHeartbeat] =
+      await Promise.all([
+        this.prisma.marketplaceIntegration.findFirst({
+          where: { tenantId, provider: 'SHOPEE' },
+          select: { lastSyncAt: true },
+        }),
+        this.prisma.offerEvaluation.count({
+          where: {
+            observation: {
+              offer: {
+                tenantId,
+                marketplaceId: { in: enabledMarketplaceIds },
+              },
+            },
+            score: { gte: minScore },
+            decision: 'ELIGIBLE',
+            candidate: {
+              is: {
+                status: { in: ['PENDING', 'DEFERRED'] },
+                OR: [{ retryAt: null }, { retryAt: { lte: new Date() } }],
+              },
+            },
+          },
+        }),
+        this.getWorkerHeartbeat(),
+      ]);
+
     return {
       mode: config.mode,
       config: {
@@ -173,6 +226,16 @@ export class AutopilotService {
       stats: {
         postsToday,
         lastPublicationAt: lastPublication?.publishedAt || null,
+      },
+      operationalStatus: {
+        worker: workerHeartbeat,
+        lastShopeeDiscoveryAt: shopeeIntegration?.lastSyncAt || null,
+        eligibleCandidates,
+        lastDecisionAt: feedRaw[0]?.createdAt || null,
+        nextOpportunity:
+          eligibleCandidates > 0
+            ? 'Oferta elegível disponível'
+            : 'Aguardando nova oferta com score mínimo',
       },
       feed,
     };
