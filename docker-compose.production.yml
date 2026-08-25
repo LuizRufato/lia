@@ -75,7 +75,10 @@ services:
     mem_limit: 128m
 
   evolution-api:
-    image: evoapicloud/evolution-api:v2.3.7
+    build:
+      context: .
+      dockerfile: Dockerfile.evolution
+    image: lia-evolution:v2.3.7-baileys-rc13
     restart: unless-stopped
     depends_on:
       evolution-postgres:
