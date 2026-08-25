@@ -45,6 +45,25 @@ type RecipientRecord = {
   enabled: boolean;
 };
 
+type ManualDeliveryResult = {
+  recipientId: string;
+  maskedRecipient: string;
+  providerAccepted: boolean;
+  messageId: string | null;
+  error: string | null;
+};
+
+function sanitizeManualDeliveryError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(
+      /((?:api[-_]?key|token|authorization|secret|password)\s*[:=]\s*)[^\s,;]+/gi,
+      '$1[redacted]',
+    )
+    .replace(/\b\d{10,15}\b/g, '[destinatário mascarado]')
+    .slice(0, 240);
+}
+
 @Injectable()
 export class AdminAlertsService {
   private readonly testSentAt = new Map<string, number>();
@@ -284,40 +303,139 @@ export class AdminAlertsService {
         sender.tokenAuthTag!,
         getEncryptionKey(),
       );
+      const provider = new WhatsAppEvolutionProvider();
+      const preparedRecipients = recipients.map((recipient) => {
+        try {
+          const destination = decryptSecret(
+            recipient.encryptedRecipient,
+            recipient.recipientIv,
+            recipient.recipientAuthTag,
+            getEncryptionKey(),
+          );
+          return {
+            recipient,
+            destination,
+            maskedRecipient: this.maskRecipient(destination),
+            error: null,
+          };
+        } catch (error) {
+          return {
+            recipient,
+            destination: null,
+            maskedRecipient: 'indisponível',
+            error: sanitizeManualDeliveryError(error),
+          };
+        }
+      });
+      let connectionState: Awaited<
+        ReturnType<WhatsAppEvolutionProvider['getConnectionState']>
+      >;
+      try {
+        connectionState = await provider.getConnectionState(
+          sender.externalInstanceName!,
+          token,
+        );
+      } catch (error) {
+        const errorMessage = sanitizeManualDeliveryError(error);
+        const results = preparedRecipients.map(
+          ({ recipient, maskedRecipient }) => ({
+            recipientId: recipient.id,
+            maskedRecipient,
+            providerAccepted: false,
+            messageId: null,
+            error: `Não foi possível verificar a instância WhatsApp: ${errorMessage}`,
+          }),
+        );
+        return this.buildManualDeliverySummary(tenantId, results);
+      }
+
+      if (connectionState !== 'open') {
+        const results = preparedRecipients.map(
+          ({ recipient, maskedRecipient }) => ({
+            recipientId: recipient.id,
+            maskedRecipient,
+            providerAccepted: false,
+            messageId: null,
+            error: 'Instância WhatsApp não está conectada.',
+          }),
+        );
+        return this.buildManualDeliverySummary(tenantId, results);
+      }
+
       const results = await Promise.all(
-        recipients.map(async (recipient) => {
-          try {
-            const destination = decryptSecret(
-              recipient.encryptedRecipient,
-              recipient.recipientIv,
-              recipient.recipientAuthTag,
-              getEncryptionKey(),
-            );
-            const messageId =
-              await new WhatsAppEvolutionProvider().sendPrivateMessage(
+        preparedRecipients.map(
+          async ({
+            recipient,
+            destination,
+            maskedRecipient,
+            error,
+          }): Promise<ManualDeliveryResult> => {
+            if (!destination) {
+              return {
+                recipientId: recipient.id,
+                maskedRecipient,
+                providerAccepted: false,
+                messageId: null,
+                error,
+              };
+            }
+
+            try {
+              const messageId = await provider.sendPrivateMessage(
                 sender.externalInstanceName!,
                 token,
                 destination,
                 text,
               );
-            return { sent: Boolean(messageId), messageId };
-          } catch {
-            return { sent: false, messageId: null };
-          }
-        }),
+              if (!messageId) {
+                return {
+                  recipientId: recipient.id,
+                  maskedRecipient,
+                  providerAccepted: false,
+                  messageId: null,
+                  error: 'Evolution não retornou messageId.',
+                };
+              }
+              return {
+                recipientId: recipient.id,
+                maskedRecipient,
+                providerAccepted: true,
+                messageId,
+                error: null,
+              };
+            } catch (error) {
+              return {
+                recipientId: recipient.id,
+                maskedRecipient,
+                providerAccepted: false,
+                messageId: null,
+                error: sanitizeManualDeliveryError(error),
+              };
+            }
+          },
+        ),
       );
-      const sent = results.filter((result) => result.sent).length;
-      const failed = results.length - sent;
-      if (sent > 0) this.testSentAt.set(tenantId, Date.now());
-      return {
-        success: sent > 0,
-        status: failed === 0 ? 'SENT' : sent > 0 ? 'PARTIAL' : 'FAILED',
-        sent,
-        failed,
-      };
+      return this.buildManualDeliverySummary(tenantId, results);
     } finally {
       this.testInFlight.delete(tenantId);
     }
+  }
+
+  private buildManualDeliverySummary(
+    tenantId: string,
+    results: ManualDeliveryResult[],
+  ) {
+    const sent = results.filter((result) => result.providerAccepted).length;
+    const failed = results.length - sent;
+    if (sent > 0) this.testSentAt.set(tenantId, Date.now());
+    return {
+      success: sent > 0,
+      status:
+        failed === 0 ? 'PROVIDER_ACCEPTED' : sent > 0 ? 'PARTIAL' : 'FAILED',
+      sent,
+      failed,
+      results,
+    };
   }
 
   private async requireSendConfig(tenantId: string) {

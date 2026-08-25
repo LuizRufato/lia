@@ -48,6 +48,13 @@ describe('AdminAlertsService', () => {
       adminAlertDelivery: { count: jest.fn().mockResolvedValue(0) },
     };
     service = new AdminAlertsService(prisma as any);
+    jest
+      .spyOn(WhatsAppEvolutionProvider.prototype, 'getConnectionState')
+      .mockResolvedValue('open');
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it('returns safe defaults when no configuration exists', async () => {
@@ -243,7 +250,21 @@ describe('AdminAlertsService', () => {
       .mockResolvedValue('test-message-id');
 
     await expect(service.sendTestMessage('tenant-a', 'ADMIN')).resolves.toEqual(
-      expect.objectContaining({ success: true, status: 'SENT' }),
+      expect.objectContaining({
+        success: true,
+        status: 'PROVIDER_ACCEPTED',
+        sent: 1,
+        failed: 0,
+        results: [
+          {
+            recipientId: 'legacy:tenant-a',
+            maskedRecipient: '*********1234',
+            providerAccepted: true,
+            messageId: 'test-message-id',
+            error: null,
+          },
+        ],
+      }),
     );
     expect(sendPrivateMessage).toHaveBeenCalledWith(
       'lia-tenant-a',
@@ -399,12 +420,28 @@ describe('AdminAlertsService', () => {
     const sendPrivateMessage = jest
       .spyOn(WhatsAppEvolutionProvider.prototype, 'sendPrivateMessage')
       .mockRejectedValue(new Error('timeout'));
-    await expect(
-      service.sendTestMessage('tenant-a', 'ADMIN'),
-    ).resolves.toMatchObject({
+    const firstResult = await service.sendTestMessage('tenant-a', 'ADMIN');
+    expect(firstResult).toMatchObject({
       success: false,
+      status: 'FAILED',
       sent: 0,
       failed: 2,
+      results: [
+        {
+          recipientId: 'r1',
+          maskedRecipient: '*********1234',
+          providerAccepted: false,
+          messageId: null,
+          error: 'timeout',
+        },
+        {
+          recipientId: 'r2',
+          maskedRecipient: '*********5678',
+          providerAccepted: false,
+          messageId: null,
+          error: 'timeout',
+        },
+      ],
     });
     await expect(
       service.sendTestMessage('tenant-a', 'ADMIN'),
@@ -415,5 +452,192 @@ describe('AdminAlertsService', () => {
     });
     expect(sendPrivateMessage).toHaveBeenCalledTimes(4);
     sendPrivateMessage.mockRestore();
+  });
+
+  it('exposes sanitized Evolution 4xx and 5xx errors per recipient', async () => {
+    const encryptedToken = encryptSecret('instance-token', encryptionKey);
+    const first = encryptSecret('5511999991234', encryptionKey);
+    const second = encryptSecret('5511999995678', encryptionKey);
+    prisma.adminAlertConfig.findUnique.mockResolvedValue({
+      id: 'config-a',
+      enabled: true,
+      adminWhatsappIntegrationId: 'sender-a',
+    });
+    prisma.adminAlertRecipient.findMany.mockResolvedValue([
+      {
+        id: 'r1',
+        encryptedRecipient: first.encryptedSecret,
+        recipientIv: first.iv,
+        recipientAuthTag: first.authTag,
+        enabled: true,
+      },
+      {
+        id: 'r2',
+        encryptedRecipient: second.encryptedSecret,
+        recipientIv: second.iv,
+        recipientAuthTag: second.authTag,
+        enabled: true,
+      },
+    ]);
+    prisma.channelIntegration.findFirst.mockResolvedValue({
+      id: 'sender-a',
+      externalInstanceName: 'lia-tenant-a',
+      encryptedAccessToken: encryptedToken.encryptedSecret,
+      tokenIv: encryptedToken.iv,
+      tokenAuthTag: encryptedToken.authTag,
+    });
+    const sendPrivateMessage = jest
+      .spyOn(WhatsAppEvolutionProvider.prototype, 'sendPrivateMessage')
+      .mockRejectedValueOnce(
+        new Error(
+          'Evolution sendText rejected request (HTTP 400): invalid number',
+        ),
+      )
+      .mockRejectedValueOnce(new Error('WhatsApp provider response ambiguous'));
+
+    const result = await service.sendTestMessage('tenant-a', 'ADMIN');
+
+    expect(result.status).toBe('FAILED');
+    expect(result.results[0].error).toContain('HTTP 400');
+    expect(result.results[1].error).toBe(
+      'WhatsApp provider response ambiguous',
+    );
+    expect(JSON.stringify(result)).not.toContain('5511999991234');
+    expect(JSON.stringify(result)).not.toContain('5511999995678');
+    sendPrivateMessage.mockRestore();
+  });
+
+  it('does not send while the real Evolution instance is disconnected', async () => {
+    const encrypted = encryptSecret('5511999991234', encryptionKey);
+    const encryptedToken = encryptSecret('instance-token', encryptionKey);
+    prisma.adminAlertConfig.findUnique.mockResolvedValue({
+      enabled: true,
+      adminWhatsappIntegrationId: 'sender-a',
+    });
+    prisma.adminAlertConfig.findUnique.mockResolvedValue({
+      id: 'config-a',
+      enabled: true,
+      adminWhatsappIntegrationId: 'sender-a',
+    });
+    prisma.adminAlertRecipient.findMany.mockResolvedValue([
+      {
+        id: 'r1',
+        encryptedRecipient: encrypted.encryptedSecret,
+        recipientIv: encrypted.iv,
+        recipientAuthTag: encrypted.authTag,
+        enabled: true,
+      },
+    ]);
+    prisma.channelIntegration.findFirst.mockResolvedValue({
+      id: 'sender-a',
+      externalInstanceName: 'lia-tenant-a',
+      encryptedAccessToken: encryptedToken.encryptedSecret,
+      tokenIv: encryptedToken.iv,
+      tokenAuthTag: encryptedToken.authTag,
+    });
+    jest
+      .spyOn(WhatsAppEvolutionProvider.prototype, 'getConnectionState')
+      .mockResolvedValue('DISCONNECTED');
+    const sendPrivateMessage = jest.spyOn(
+      WhatsAppEvolutionProvider.prototype,
+      'sendPrivateMessage',
+    );
+
+    const result = await service.sendTestMessage('tenant-a', 'ADMIN');
+
+    expect(result).toMatchObject({
+      success: false,
+      status: 'FAILED',
+      sent: 0,
+      failed: 1,
+    });
+    expect(result.results[0].error).toBe(
+      'Instância WhatsApp não está conectada.',
+    );
+    expect(sendPrivateMessage).not.toHaveBeenCalled();
+  });
+
+  it('processes only active recipients and reports each active result', async () => {
+    const encryptedToken = encryptSecret('instance-token', encryptionKey);
+    const active = encryptSecret('5511999991234', encryptionKey);
+    const inactive = encryptSecret('5511999995678', encryptionKey);
+    prisma.adminAlertConfig.findUnique.mockResolvedValue({
+      id: 'config-a',
+      enabled: true,
+      adminWhatsappIntegrationId: 'sender-a',
+    });
+    prisma.adminAlertRecipient.findMany.mockResolvedValue([
+      {
+        id: 'active',
+        encryptedRecipient: active.encryptedSecret,
+        recipientIv: active.iv,
+        recipientAuthTag: active.authTag,
+        enabled: true,
+      },
+      {
+        id: 'inactive',
+        encryptedRecipient: inactive.encryptedSecret,
+        recipientIv: inactive.iv,
+        recipientAuthTag: inactive.authTag,
+        enabled: false,
+      },
+    ]);
+    prisma.channelIntegration.findFirst.mockResolvedValue({
+      id: 'sender-a',
+      externalInstanceName: 'lia-tenant-a',
+      encryptedAccessToken: encryptedToken.encryptedSecret,
+      tokenIv: encryptedToken.iv,
+      tokenAuthTag: encryptedToken.authTag,
+    });
+    const sendPrivateMessage = jest
+      .spyOn(WhatsAppEvolutionProvider.prototype, 'sendPrivateMessage')
+      .mockResolvedValue('message-active');
+
+    const result = await service.sendTestMessage('tenant-a', 'ADMIN');
+
+    expect(sendPrivateMessage).toHaveBeenCalledTimes(1);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].recipientId).toBe('active');
+    expect(result.results[0].maskedRecipient).toBe('*********1234');
+    expect(JSON.stringify(result)).not.toContain('5511999991234');
+    expect(JSON.stringify(result)).not.toContain('5511999995678');
+  });
+
+  it('treats a missing messageId as a failed provider result', async () => {
+    const encrypted = encryptSecret('5511999991234', encryptionKey);
+    const encryptedToken = encryptSecret('instance-token', encryptionKey);
+    prisma.adminAlertConfig.findUnique.mockResolvedValue({
+      id: 'config-a',
+      enabled: true,
+      adminWhatsappIntegrationId: 'sender-a',
+    });
+    prisma.adminAlertRecipient.findMany.mockResolvedValue([
+      {
+        id: 'r1',
+        encryptedRecipient: encrypted.encryptedSecret,
+        recipientIv: encrypted.iv,
+        recipientAuthTag: encrypted.authTag,
+        enabled: true,
+      },
+    ]);
+    prisma.channelIntegration.findFirst.mockResolvedValue({
+      id: 'sender-a',
+      externalInstanceName: 'lia-tenant-a',
+      encryptedAccessToken: encryptedToken.encryptedSecret,
+      tokenIv: encryptedToken.iv,
+      tokenAuthTag: encryptedToken.authTag,
+    });
+    jest
+      .spyOn(WhatsAppEvolutionProvider.prototype, 'sendPrivateMessage')
+      .mockResolvedValue(null);
+
+    const result = await service.sendTestMessage('tenant-a', 'ADMIN');
+
+    expect(result).toMatchObject({
+      status: 'FAILED',
+      sent: 0,
+      failed: 1,
+    });
+    expect(result.results[0].error).toBe('Evolution não retornou messageId.');
   });
 });

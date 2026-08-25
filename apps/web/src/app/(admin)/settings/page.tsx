@@ -30,6 +30,20 @@ type AdminAlertConfig = {
   enabledAt: string | null;
 };
 
+type AdminAlertTestResult = {
+  success: boolean;
+  status: "PROVIDER_ACCEPTED" | "PARTIAL" | "FAILED";
+  sent: number;
+  failed: number;
+  results: Array<{
+    recipientId: string;
+    maskedRecipient: string;
+    providerAccepted: boolean;
+    messageId: string | null;
+    error: string | null;
+  }>;
+};
+
 const ALERT_TYPES = [
   { key: "newShopeeSaleEnabled", label: "Nova venda Shopee", active: true },
   {
@@ -57,6 +71,8 @@ export default function SettingsPage() {
   const [alertSimulating, setAlertSimulating] = useState(false);
   const [alertError, setAlertError] = useState<string | null>(null);
   const [alertSaved, setAlertSaved] = useState(false);
+  const [alertTestResult, setAlertTestResult] =
+    useState<AdminAlertTestResult | null>(null);
   const [recipient, setRecipient] = useState("");
   const [removeRecipient, setRemoveRecipient] = useState(false);
 
@@ -198,16 +214,19 @@ export default function SettingsPage() {
     if (!alertConfig || alertTesting) return;
     setAlertError(null);
     setAlertSaved(false);
+    setAlertTestResult(null);
     setAlertTesting(true);
     try {
       const res = await fetchAuth("/admin-alerts/config/test", {
         method: "POST",
       });
       const data = await res.json().catch(() => null);
+      if (data?.results) setAlertTestResult(data);
       if (!res.ok || !data?.success) {
-        throw new Error(data?.message || "Não foi possível enviar o teste.");
+        if (!data?.results)
+          throw new Error(data?.message || "Não foi possível enviar o teste.");
+        return;
       }
-      setAlertSaved(true);
     } catch (err: any) {
       setAlertError(err?.message || "Não foi possível enviar o teste.");
     } finally {
@@ -219,17 +238,21 @@ export default function SettingsPage() {
     if (!alertConfig || alertSimulating) return;
     setAlertError(null);
     setAlertSaved(false);
+    setAlertTestResult(null);
     setAlertSimulating(true);
     try {
       const res = await fetchAuth("/admin-alerts/config/simulate", {
         method: "POST",
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.success)
-        throw new Error(
-          data?.message || "Não foi possível enviar a simulação.",
-        );
-      setAlertSaved(true);
+      if (data?.results) setAlertTestResult(data);
+      if (!res.ok || !data?.success) {
+        if (!data?.results)
+          throw new Error(
+            data?.message || "Não foi possível enviar a simulação.",
+          );
+        return;
+      }
     } catch (err: any) {
       setAlertError(err?.message || "Não foi possível enviar a simulação.");
     } finally {
@@ -448,7 +471,13 @@ export default function SettingsPage() {
                           }}
                           className="mr-1 rounded border-gray-300 text-blue-600"
                         />
-                        ativo
+                        <span
+                          className={
+                            item.enabled ? "text-green-700" : "text-gray-500"
+                          }
+                        >
+                          {item.enabled ? "Ativo" : "Desativado"}
+                        </span>
                       </label>
                       <button
                         type="button"
@@ -547,6 +576,37 @@ export default function SettingsPage() {
             {alertSaved && (
               <div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
                 <Check className="w-4 h-4" /> Configurações salvas.
+              </div>
+            )}
+            {alertTestResult && (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                <p className="font-semibold">
+                  {alertTestResult.status === "PROVIDER_ACCEPTED"
+                    ? `Evolution aceitou a mensagem para ${alertTestResult.sent} destinatário${alertTestResult.sent === 1 ? "" : "s"}.`
+                    : alertTestResult.status === "PARTIAL"
+                      ? `Evolution aceitou a mensagem para ${alertTestResult.sent} destinatário${alertTestResult.sent === 1 ? "" : "s"}; ${alertTestResult.failed} falhou${alertTestResult.failed === 1 ? "" : "ram"}.`
+                      : "Falha ao enviar a mensagem de teste."}
+                </p>
+                <p className="mt-1 text-xs text-blue-800">
+                  PROVIDER_ACCEPTED confirma o aceite da Evolution e um
+                  messageId; a entrega no aparelho permanece indeterminada.
+                </p>
+                <div className="mt-2 space-y-1 text-xs">
+                  {alertTestResult.results.map((result) => (
+                    <div key={result.recipientId}>
+                      <span className="font-medium">
+                        {result.maskedRecipient} —{" "}
+                        {result.providerAccepted
+                          ? "PROVIDER_ACCEPTED"
+                          : "FAILED"}
+                      </span>
+                      {result.providerAccepted && result.messageId && (
+                        <span> · messageId: {result.messageId}</span>
+                      )}
+                      {result.error && <span> · {result.error}</span>}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
