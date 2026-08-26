@@ -87,6 +87,7 @@ fastify.get("/:slug", async (request, reply) => {
     active: boolean;
     expiresAt: string | null;
     tenantId: string;
+    kind: "LEGACY" | "PUBLIC";
   } | null = null;
 
   if (linkDataStr) {
@@ -94,6 +95,7 @@ fastify.get("/:slug", async (request, reply) => {
       return reply.status(404).send("Not Found");
     }
     linkData = JSON.parse(linkDataStr);
+    linkData!.kind = linkData!.kind || "LEGACY";
   } else {
     // 2. PostgreSQL Lookup
     const dbLink = await prisma.trackedLink.findUnique({
@@ -107,22 +109,47 @@ fastify.get("/:slug", async (request, reply) => {
       },
     });
 
-    if (!dbLink) {
-      await redis
-        .setex(cacheKey, 60, "NOT_FOUND")
-        .catch((error: any) =>
-          fastify.log.warn(`Tracker negative cache failed: ${error.message}`),
-        ); // Anti-hammering cache for non-existent links
-      return reply.status(404).send("Not Found");
-    }
+    if (dbLink) {
+      linkData = {
+        id: dbLink.id,
+        destinationUrl: dbLink.destinationUrl,
+        active: dbLink.active,
+        expiresAt: dbLink.expiresAt ? dbLink.expiresAt.toISOString() : null,
+        tenantId: dbLink.offer.tenantId,
+        kind: "LEGACY",
+      };
+    } else {
+      const publicLink = await prisma.publicTrackedLink.findUnique({
+        where: { token: slug },
+        select: {
+          id: true,
+          destinationUrl: true,
+          active: true,
+          expiresAt: true,
+          offer: { select: { tenantId: true } },
+        },
+      });
 
-    linkData = {
-      id: dbLink.id,
-      destinationUrl: dbLink.destinationUrl,
-      active: dbLink.active,
-      expiresAt: dbLink.expiresAt ? dbLink.expiresAt.toISOString() : null,
-      tenantId: dbLink.offer.tenantId,
-    };
+      if (!publicLink) {
+        await redis
+          .setex(cacheKey, 60, "NOT_FOUND")
+          .catch((error: any) =>
+            fastify.log.warn(`Tracker negative cache failed: ${error.message}`),
+          ); // Anti-hammering cache for non-existent links
+        return reply.status(404).send("Not Found");
+      }
+
+      linkData = {
+        id: publicLink.id,
+        destinationUrl: publicLink.destinationUrl,
+        active: publicLink.active,
+        expiresAt: publicLink.expiresAt
+          ? publicLink.expiresAt.toISOString()
+          : null,
+        tenantId: publicLink.offer.tenantId,
+        kind: "PUBLIC",
+      };
+    }
 
     await redis
       .setex(cacheKey, CACHE_TTL_SECONDS, JSON.stringify(linkData))
@@ -144,45 +171,70 @@ fastify.get("/:slug", async (request, reply) => {
   // ClickEvent. Human browsers retain the fast 302 path below.
   const userAgent = request.headers["user-agent"] as string | undefined;
   if (isPreviewCrawler(userAgent)) {
-    const preview = await prisma.trackedLink.findUnique({
-      where: { slug },
-      select: {
-        destinationUrl: true,
-        offer: {
-          select: {
-            title: true,
-            imageUrl: true,
-            price: true,
-            product: { select: { name: true, description: true } },
-            observations: {
-              orderBy: { observedAt: "desc" },
-              take: 1,
-              select: { canonicalPayload: true },
+    const preview =
+      linkData.kind === "LEGACY"
+        ? await prisma.trackedLink.findUnique({
+            where: { slug },
+            select: {
+              destinationUrl: true,
+              offer: {
+                select: {
+                  title: true,
+                  imageUrl: true,
+                  price: true,
+                  product: { select: { name: true, description: true } },
+                  observations: {
+                    orderBy: { observedAt: "desc" },
+                    take: 1,
+                    select: { canonicalPayload: true },
+                  },
+                  priceHistories: {
+                    orderBy: { observedAt: "desc" },
+                    take: 1,
+                    select: { originalPriceCents: true },
+                  },
+                },
+              },
             },
-            priceHistories: {
-              orderBy: { observedAt: "desc" },
-              take: 1,
-              select: { originalPriceCents: true },
+          })
+        : await prisma.publicTrackedLink.findUnique({
+            where: { token: slug },
+            select: {
+              destinationUrl: true,
+              offer: {
+                select: {
+                  title: true,
+                  imageUrl: true,
+                  price: true,
+                  product: { select: { name: true, description: true } },
+                  observations: {
+                    orderBy: { observedAt: "desc" },
+                    take: 1,
+                    select: { canonicalPayload: true },
+                  },
+                  priceHistories: {
+                    orderBy: { observedAt: "desc" },
+                    take: 1,
+                    select: { originalPriceCents: true },
+                  },
+                },
+              },
             },
-          },
-        },
-      },
-    });
+          });
     const offer = preview?.offer;
-    const canonicalImage = (offer?.observations[0]?.canonicalPayload as any)?.product?.images;
+    const canonicalImage = (offer?.observations[0]?.canonicalPayload as any)
+      ?.product?.images;
     const imageUrl = offer?.imageUrl || firstHttpsImageUrl(canonicalImage);
-    return reply
-      .type("text/html; charset=utf-8")
-      .send(
-        buildSmartPreviewHtml(slug, {
-          title: offer?.title || offer?.product?.name || "Oferta LIA",
-          description: offer?.product?.description,
-          destinationUrl: preview?.destinationUrl || linkData.destinationUrl,
-          priceCents: offer?.price,
-          originalPriceCents: offer?.priceHistories[0]?.originalPriceCents,
-          imageUrl,
-        }),
-      );
+    return reply.type("text/html; charset=utf-8").send(
+      buildSmartPreviewHtml(slug, {
+        title: offer?.title || offer?.product?.name || "Oferta LIA",
+        description: offer?.product?.description,
+        destinationUrl: preview?.destinationUrl || linkData.destinationUrl,
+        priceCents: offer?.price,
+        originalPriceCents: offer?.priceHistories[0]?.originalPriceCents,
+        imageUrl,
+      }),
+    );
   }
 
   // 4. Analytics Data Prep
@@ -232,7 +284,29 @@ fastify.get("/:slug", async (request, reply) => {
     intelligenceClass,
   };
 
-  void enqueueClickWithRetry(eventId, clickJobData);
+  if (linkData.kind === "LEGACY") {
+    void enqueueClickWithRetry(eventId, clickJobData);
+  } else {
+    void prisma.publicClickEvent
+      .create({
+        data: {
+          eventId,
+          linkId: linkData.id,
+          clickedAt: new Date(clickedAt),
+          classification,
+          classificationReason: reason,
+          intelligenceClass,
+          visitorHash,
+          userAgentFamily,
+          operatingSystem,
+          deviceType,
+          referrer,
+        },
+      })
+      .catch((error: any) =>
+        fastify.log.error(`Public click persistence failed: ${error.message}`),
+      );
+  }
 
   // 6. Redirect 302
   reply.header(

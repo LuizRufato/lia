@@ -4,7 +4,12 @@ import type { NextRequest } from "next/server";
 export function proxy(request: NextRequest) {
   const token = request.cookies.get("Authentication")?.value;
 
-  if (!token && !request.nextUrl.pathname.startsWith("/login")) {
+  const isPublicLanding = request.nextUrl.pathname === "/";
+  if (
+    !token &&
+    !isPublicLanding &&
+    !request.nextUrl.pathname.startsWith("/login")
+  ) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 

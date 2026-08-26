@@ -39,6 +39,7 @@ model Tenant {
   marketplaceConversions     MarketplaceConversion[]
   marketplaceBrowserSessions MarketplaceBrowserSession[]
   publicationTemplates       PublicationTemplate[]
+  publicTrackedLinks         PublicTrackedLink[]
 }
 
 enum TenantRole {
@@ -277,6 +278,7 @@ model Offer {
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
   marketplaceConversions MarketplaceConversion[]
+  publicTrackedLinks     PublicTrackedLink[]
 
   @@unique([tenantId, marketplaceId, externalId])
 }
@@ -338,6 +340,7 @@ model AffiliateLink {
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
   marketplaceConversions MarketplaceConversion[]
+  publicTrackedLinks     PublicTrackedLink[]
 
   @@unique([offerId, context, contextId]) // Idempotency
   @@index([offerId, status])
@@ -516,6 +519,47 @@ model TrackedLink {
   updatedAt      DateTime    @updatedAt
 
   clicks ClickEvent[]
+}
+
+model PublicTrackedLink {
+  id             String        @id @default(uuid())
+  tenantId       String
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  offerId        String
+  offer          Offer         @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  affiliateLinkId String?
+  affiliateLink  AffiliateLink? @relation(fields: [affiliateLinkId], references: [id], onDelete: SetNull)
+  token          String        @unique
+  source         String        @default("PUBLIC_SEARCH")
+  destinationUrl String
+  active         Boolean       @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  clicks PublicClickEvent[]
+
+  @@index([tenantId, offerId])
+  @@index([affiliateLinkId])
+}
+
+model PublicClickEvent {
+  id                   String                  @id @default(uuid())
+  eventId              String                  @unique
+  linkId               String
+  link                 PublicTrackedLink       @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  clickedAt            DateTime                @default(now())
+  classification       ClickClassification     @default(VALID)
+  classificationReason String?
+  intelligenceClass    ClickIntelligenceClass?
+  visitorHash          String?
+  userAgentFamily      String?
+  operatingSystem      String?
+  deviceType           String?
+  referrer             String?
+
+  @@index([linkId, clickedAt])
+  @@index([classification, clickedAt])
 }
 
 enum ClickClassification {

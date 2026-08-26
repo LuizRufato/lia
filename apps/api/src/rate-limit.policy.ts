@@ -5,6 +5,7 @@ export const RATE_LIMIT_POLICIES = {
   admin: { limit: 120, ttl: 60_000, blockDuration: 10_000 },
   polling: { limit: 300, ttl: 60_000, blockDuration: 5_000 },
   webhook: { limit: 600, ttl: 60_000, blockDuration: 5_000 },
+  publicSearch: { limit: 20, ttl: 60_000, blockDuration: 60_000 },
 } as const;
 
 export type RateLimitCategory = keyof typeof RATE_LIMIT_POLICIES;
@@ -31,6 +32,7 @@ export function getRateLimitCategory(request: RequestLike): RateLimitCategory {
     typeof request.method === 'string' ? request.method.toUpperCase() : 'GET';
 
   if (method === 'POST' && path === '/auth/login') return 'login';
+  if (method === 'POST' && path === '/public/search') return 'publicSearch';
   if (path.startsWith('/webhooks/')) return 'webhook';
   if (
     path === '/health' ||

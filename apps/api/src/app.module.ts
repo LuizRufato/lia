@@ -21,6 +21,7 @@ import { getRateLimitPolicy } from './rate-limit.policy';
 import { AdminAlertsModule } from './admin-alerts/admin-alerts.module';
 import { TemplatesModule } from './templates/templates.module';
 import { PublicationsModule } from './publications/publications.module';
+import { PublicSearchModule } from './public-search/public-search.module';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { PublicationsModule } from './publications/publications.module';
     AdminAlertsModule,
     TemplatesModule,
     PublicationsModule,
+    PublicSearchModule,
   ],
   controllers: [AppController],
   providers: [

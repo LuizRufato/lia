@@ -34,4 +34,12 @@ describe('rate-limit policy', () => {
       RATE_LIMIT_POLICIES.polling.limit,
     );
   });
+
+  it('limits public search to 20 requests per minute', () => {
+    expect(
+      getRateLimitCategory({ method: 'POST', path: '/public/search' }),
+    ).toBe('publicSearch');
+    expect(RATE_LIMIT_POLICIES.publicSearch.limit).toBe(20);
+    expect(RATE_LIMIT_POLICIES.publicSearch.ttl).toBe(60_000);
+  });
 });
