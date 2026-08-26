@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { fetchAuth } from "@/lib/api";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Tag,
@@ -42,14 +41,17 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const handleLogout = async () => {
     try {
-      await fetchAuth("/auth/logout", { method: "POST" });
-      router.push("/login");
-      router.refresh();
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Falha ao fazer logout");
+      window.location.assign("/login");
     } catch (error) {
       console.error("Erro ao fazer logout", error);
     }

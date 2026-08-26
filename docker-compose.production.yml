@@ -182,6 +182,8 @@ services:
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required}
+      API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:3000}
+      AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:?AUTH_COOKIE_DOMAIN is required}
     ports:
       - "3001:3001"
     mem_limit: 512m
