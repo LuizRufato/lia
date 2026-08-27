@@ -642,7 +642,7 @@ export default function LandingClient() {
           </a>
           <Link href="/login">Entrar</Link>
         </div>
-        <p>Inteligência que encontra. Você aproveita.</p>
+        <p>Você procura. A LIA acha.</p>
       </footer>
     </main>
   );
