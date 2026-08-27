@@ -134,7 +134,11 @@ describe('PublicSearchService', () => {
 
   it('does not return a bermuda when searching for celular', async () => {
     const { service, offersService } = makeService([
-      { ...exactOffer, title: 'Bermuda masculina com bolso para celular' },
+      {
+        ...exactOffer,
+        title:
+          'Kit 3 Shorts 2 em 1 Compressão Bermuda Masculina Academia Treino Bolso Celular',
+      },
     ]);
 
     const result = await service.search('celular');
@@ -152,6 +156,33 @@ describe('PublicSearchService', () => {
 
     expect(result.status).toBe('FOUND');
   });
+
+  it.each([
+    [
+      'notebook',
+      'Mesa Dobrável Notebook Retrátil Home Office Apoio Cama Sofá Trabalho Café',
+    ],
+    [
+      'armário para lavanderia',
+      'Prateleira Modular Lavanderia Desmontável Multiuso Estante Organizadora de Plástico Com Pezinhos 6 Andares',
+    ],
+    [
+      'armário para lavanderia',
+      'Cesto de Bambu Organizador de Roupa Suja Lavanderia',
+    ],
+  ])(
+    'rejects the real smoke-test false positive for %s: %s',
+    async (query, title) => {
+      const { service, offersService } = makeService([
+        { ...exactOffer, title },
+      ]);
+
+      const result = await service.search(query);
+
+      expect(result.status).toBe('NO_EXACT_MATCH');
+      expect(offersService.verifyMonetization).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ['Copo térmico Stanley Quencher', 'FOUND'],
@@ -180,6 +211,21 @@ describe('PublicSearchService', () => {
     const result = await service.search('armário para lavanderia');
 
     expect(result.status).toBe('FOUND');
+  });
+
+  it('accepts real primary products for notebook and TV searches', async () => {
+    const notebook = makeService([
+      {
+        ...exactOffer,
+        title: 'Notebook Lenovo IdeaPad 3i Intel Core i5 8GB 256GB SSD',
+      },
+    ]);
+    const television = makeService([
+      { ...exactOffer, title: 'Smart TV Samsung 55 polegadas 4K UHD' },
+    ]);
+
+    expect((await notebook.service.search('notebook')).status).toBe('FOUND');
+    expect((await television.service.search('TV')).status).toBe('FOUND');
   });
 
   it('keeps a laundry basket out of an armário para lavanderia search', async () => {

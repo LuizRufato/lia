@@ -78,6 +78,15 @@ const ACCESSORY_TERMS = new Set([
   'protecao',
   'protecoes',
   'holder',
+  'tampa',
+  'tampas',
+  'canudo',
+  'canudos',
+  'alca',
+  'alcas',
+  'reposicao',
+  'acessorio',
+  'acessorios',
 ]);
 
 const MODEL_VARIANT_WORDS = new Set([
@@ -118,6 +127,12 @@ export type ProductType =
   | 'AIR_FRYER'
   | 'DRINKWARE'
   | 'CABINET_STORAGE'
+  | 'APPAREL'
+  | 'TABLE_DESK'
+  | 'SHELVING'
+  | 'LAUNDRY_BASKET'
+  | 'SUPPORT'
+  | 'ACCESSORY'
   | 'UNKNOWN';
 
 export interface ProductIdentity {
@@ -234,6 +249,12 @@ const PRODUCT_TYPE_ANCHORS: Record<
   AIR_FRYER: ['air', 'fryer', 'fritadeira'],
   DRINKWARE: ['copo', 'tumbler', 'caneca', 'garrafa'],
   CABINET_STORAGE: ['armario', 'gabinete', 'multiuso', 'servico'],
+  APPAREL: ['shorts', 'bermuda', 'roupa', 'vestuario'],
+  TABLE_DESK: ['mesa', 'escrivaninha', 'bancada'],
+  SHELVING: ['prateleira', 'estante'],
+  LAUNDRY_BASKET: ['cesto'],
+  SUPPORT: ['suporte', 'base'],
+  ACCESSORY: [...ACCESSORY_TERMS],
 };
 
 const GENERIC_TYPE_TOKENS: Record<
@@ -246,7 +267,13 @@ const GENERIC_TYPE_TOKENS: Record<
   SHOES: new Set(['tenis', 'calcado', 'sapato', 'sapatilha']),
   AIR_FRYER: new Set(['air', 'fryer', 'fritadeira']),
   DRINKWARE: new Set(['copo', 'tumbler', 'caneca', 'garrafa']),
-  CABINET_STORAGE: new Set(['armario', 'gabinete', 'multiuso']),
+  CABINET_STORAGE: new Set(['armario', 'gabinete']),
+  APPAREL: new Set(['shorts', 'bermuda', 'roupa', 'vestuario']),
+  TABLE_DESK: new Set(['mesa', 'escrivaninha', 'bancada']),
+  SHELVING: new Set(['prateleira', 'estante']),
+  LAUNDRY_BASKET: new Set(['cesto']),
+  SUPPORT: new Set(['suporte', 'base']),
+  ACCESSORY: new Set([...ACCESSORY_TERMS]),
 };
 
 const CONTROLLED_SYNONYMS: Record<string, string[][]> = {
@@ -264,15 +291,36 @@ function productTypeText(value: string): string {
   return normalizeSearchText(value).replace(REFERENCED_PRODUCT_PATTERN, ' ');
 }
 
-export function inferProductType(
-  value: string,
-  category?: string | null,
-): ProductType {
-  const tokens = new Set(
-    tokenizeSearchText(
-      [productTypeText(value), category].filter(Boolean).join(' '),
-    ),
+function hasPrimaryAccessorySignal(value: string): boolean {
+  const normalized = normalizeSearchText(value);
+  return /^(?:capa|pelicula|suporte|base|cabo|carregador|microfone|adaptador|bolsa|mochila|case|protecao|holder|tampa|canudo|alca|reposicao|acessorio)\b/.test(
+    normalized,
   );
+}
+
+function inferProductTypeFromText(value: string): ProductType {
+  const normalized = normalizeSearchText(value);
+  const tokens = new Set(tokenizeSearchText(productTypeText(normalized)));
+
+  if (hasPrimaryAccessorySignal(normalized)) return 'ACCESSORY';
+  if (
+    tokens.has('shorts') ||
+    tokens.has('bermuda') ||
+    tokens.has('vestuario') ||
+    tokens.has('roupa')
+  ) {
+    return 'APPAREL';
+  }
+  if (
+    tokens.has('mesa') ||
+    tokens.has('escrivaninha') ||
+    tokens.has('bancada')
+  ) {
+    return 'TABLE_DESK';
+  }
+  if (tokens.has('prateleira') || tokens.has('estante')) return 'SHELVING';
+  if (tokens.has('cesto')) return 'LAUNDRY_BASKET';
+  if (tokens.has('suporte') || tokens.has('base')) return 'SUPPORT';
   if ((tokens.has('air') && tokens.has('fryer')) || tokens.has('fritadeira')) {
     return 'AIR_FRYER';
   }
@@ -280,7 +328,8 @@ export function inferProductType(
     tokens.has('iphone') ||
     tokens.has('smartphone') ||
     tokens.has('celular') ||
-    tokens.has('telefone')
+    tokens.has('telefone') ||
+    tokens.has('galaxy')
   ) {
     return 'SMARTPHONE';
   }
@@ -309,15 +358,44 @@ export function inferProductType(
   ) {
     return 'DRINKWARE';
   }
-  if (
-    tokens.has('armario') ||
-    tokens.has('gabinete') ||
-    tokens.has('multiuso') ||
-    (tokens.has('area') && tokens.has('servico'))
-  ) {
+  if (tokens.has('armario') || tokens.has('gabinete')) {
+    return 'CABINET_STORAGE';
+  }
+  if (tokens.has('area') && tokens.has('servico')) {
     return 'CABINET_STORAGE';
   }
   return 'UNKNOWN';
+}
+
+export function inferProductType(
+  value: string,
+  category?: string | null,
+): ProductType {
+  const valueType = inferProductTypeFromText(value);
+  return valueType !== 'UNKNOWN'
+    ? valueType
+    : inferProductTypeFromText(category || '');
+}
+
+function isRawMarketplaceCategory(value: string): boolean {
+  return /^\d+(?:\s+\d+)*$/.test(normalizeSearchText(value));
+}
+
+export function inferCandidateProductType(input: {
+  category?: string | null;
+  productName?: string | null;
+  title?: string | null;
+}): ProductType {
+  const structuredCategory = input.category?.trim();
+  if (structuredCategory && !isRawMarketplaceCategory(structuredCategory)) {
+    const categoryType = inferProductTypeFromText(structuredCategory);
+    if (categoryType !== 'UNKNOWN') return categoryType;
+  }
+
+  const productNameType = inferProductTypeFromText(input.productName || '');
+  if (productNameType !== 'UNKNOWN') return productNameType;
+
+  return inferProductTypeFromText(input.title || '');
 }
 
 function tokenMatchesCandidate(
@@ -329,7 +407,10 @@ function tokenMatchesCandidate(
 
   if (
     requestedType !== 'UNKNOWN' &&
-    GENERIC_TYPE_TOKENS[requestedType]?.has(token)
+    GENERIC_TYPE_TOKENS[requestedType]?.has(token) &&
+    [...GENERIC_TYPE_TOKENS[requestedType]].some((value) =>
+      candidateTokens.has(value),
+    )
   ) {
     return true;
   }
@@ -399,19 +480,24 @@ export function isAccessoryCandidate(
       : requested.tokens;
   if (requestedTokens.some((token) => ACCESSORY_TERMS.has(token))) return false;
 
-  const candidateTokens = tokenizeSearchText(
-    [title, category].filter(Boolean).join(' '),
+  return (
+    hasPrimaryAccessorySignal(title) ||
+    (category ? hasPrimaryAccessorySignal(category) : false)
   );
-  return candidateTokens.some((token) => ACCESSORY_TERMS.has(token));
 }
 
 export function isCompatibleProductType(
   requested: ProductIdentity,
   candidateTitle: string,
   candidateCategory?: string | null,
+  candidateProductName?: string | null,
 ): boolean {
   if (requested.productType === 'UNKNOWN') return true;
-  const candidateType = inferProductType(candidateTitle, candidateCategory);
+  const candidateType = inferCandidateProductType({
+    title: candidateTitle,
+    category: candidateCategory,
+    productName: candidateProductName,
+  });
   return candidateType === requested.productType;
 }
 

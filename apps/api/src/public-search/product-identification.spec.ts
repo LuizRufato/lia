@@ -3,6 +3,7 @@ import {
   areCompatibleProductVariants,
   areCompatibleProductTokens,
   createProductIdentity,
+  inferCandidateProductType,
   identifyProduct,
   isAccessoryCandidate,
   isCompatibleProductType,
@@ -148,12 +149,56 @@ describe('public product identification', () => {
     expect(
       isCompatibleProductType(
         identity,
-        'Bermuda masculina com bolso para celular',
+        'Kit 3 Shorts 2 em 1 Compressão Bermuda Masculina Academia Treino Bolso Celular',
       ),
     ).toBe(false);
     expect(
       areCompatibleProductTokens(identity, 'Smartphone Samsung Galaxy A15'),
     ).toBe(true);
+  });
+
+  it('uses primary product signals before compatibility mentions', () => {
+    expect(
+      inferCandidateProductType({
+        title:
+          'Kit 3 Shorts 2 em 1 Compressão Bermuda Masculina Academia Treino Bolso Celular',
+      }),
+    ).toBe('APPAREL');
+    expect(
+      inferCandidateProductType({
+        title: 'Mesa Dobrável Notebook Retrátil Home Office Apoio Cama Sofá',
+      }),
+    ).toBe('TABLE_DESK');
+    expect(
+      inferCandidateProductType({
+        title:
+          'Prateleira Modular Lavanderia Desmontável Multiuso Estante Organizadora',
+      }),
+    ).toBe('SHELVING');
+  });
+
+  it('lets a structured category override a misleading title mention', () => {
+    expect(
+      inferCandidateProductType({
+        category: 'Moda > Shorts',
+        title: 'Shorts masculino com bolso para celular',
+      }),
+    ).toBe('APPAREL');
+    expect(
+      inferCandidateProductType({
+        category: 'Móveis > Mesas para escritório',
+        title: 'Mesa para notebook dobrável',
+      }),
+    ).toBe('TABLE_DESK');
+  });
+
+  it('does not treat a raw Shopee category id as semantic evidence', () => {
+    expect(
+      inferCandidateProductType({
+        category: '100636,100717,101220',
+        title: 'Mesa Dobrável Notebook Retrátil',
+      }),
+    ).toBe('TABLE_DESK');
   });
 
   it('requires the Stanley brand for a drinkware query and rejects accessories', () => {
@@ -172,6 +217,12 @@ describe('public product identification', () => {
     expect(isCompatibleProductType(identity, 'Bolsa térmica Stanley')).toBe(
       false,
     );
+    expect(
+      isCompatibleProductType(
+        identity,
+        'Canudo de reposição para Copo Stanley',
+      ),
+    ).toBe(false);
   });
 
   it('uses controlled laundry-room synonyms without broadening to unrelated items', () => {

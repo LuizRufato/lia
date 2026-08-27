@@ -303,11 +303,20 @@ export class PublicSearchService {
       >;
       const metrics = payload.metrics || {};
       const candidateCategory =
-        observation?.category || payload.product?.sourceCategory;
+        observation?.category ||
+        payload.product?.normalizedCategory ||
+        payload.product?.sourceCategory;
+      const candidateProductName =
+        typeof payload.product?.name === 'string' ? payload.product.name : null;
       const candidateTitle = offer.title || payload.product?.title || '';
       if (
         isAccessoryCandidate(candidateTitle, candidateCategory, identity) ||
-        !isCompatibleProductType(identity, candidateTitle, candidateCategory) ||
+        !isCompatibleProductType(
+          identity,
+          candidateTitle,
+          candidateCategory,
+          candidateProductName,
+        ) ||
         !areCompatibleProductTokens(
           identity,
           candidateTitle,
