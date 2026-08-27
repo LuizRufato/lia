@@ -6,10 +6,14 @@ export function proxy(request: NextRequest) {
 
   const isPublicLanding = request.nextUrl.pathname === "/";
   const isPublicBrandAsset = request.nextUrl.pathname.startsWith("/brand/");
+  const isPublicSeoFile = ["/robots.txt", "/sitemap.xml"].includes(
+    request.nextUrl.pathname,
+  );
   if (
     !token &&
     !isPublicLanding &&
     !isPublicBrandAsset &&
+    !isPublicSeoFile &&
     !request.nextUrl.pathname.startsWith("/login")
   ) {
     return NextResponse.redirect(new URL("/login", request.url));

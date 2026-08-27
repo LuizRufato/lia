@@ -13,8 +13,50 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LIA — Preço bom de verdade",
-  description: "Inteligência que encontra. Você aproveita.",
+  metadataBase: new URL("https://botlia.com.br"),
+  title: "LIA — A inteligência que encontra a melhor oferta",
+  description:
+    "Pesquise um produto ou cole um link. A LIA identifica o que você procura, compara as ofertas disponíveis nos marketplaces integrados e mostra onde vale mais a pena comprar.",
+  applicationName: "LIA",
+  alternates: { canonical: "https://botlia.com.br/" },
+  icons: {
+    icon: [
+      {
+        url: "/brand/lia-mascot.png",
+        type: "image/png",
+        sizes: "512x512",
+      },
+    ],
+    apple: [
+      {
+        url: "/brand/lia-mascot.png",
+        type: "image/png",
+        sizes: "512x512",
+      },
+    ],
+  },
+  openGraph: {
+    type: "website",
+    locale: "pt_BR",
+    siteName: "LIA",
+    url: "https://botlia.com.br/",
+    title: "LIA Achou! — A inteligência que encontra a melhor oferta",
+    description:
+      "Você procura. A LIA acha. Compare oportunidades e descubra onde vale mais a pena comprar.",
+    images: [
+      {
+        url: "/brand/lia-achou.png",
+        alt: "LIA Achou!",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "LIA Achou! — A inteligência que encontra a melhor oferta",
+    description:
+      "Você procura. A LIA acha. Compare oportunidades e descubra onde vale mais a pena comprar.",
+    images: ["/brand/lia-achou.png"],
+  },
 };
 
 export default function RootLayout({
