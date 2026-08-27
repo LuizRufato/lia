@@ -5,9 +5,11 @@ export function proxy(request: NextRequest) {
   const token = request.cookies.get("Authentication")?.value;
 
   const isPublicLanding = request.nextUrl.pathname === "/";
+  const isPublicBrandAsset = request.nextUrl.pathname.startsWith("/brand/");
   if (
     !token &&
     !isPublicLanding &&
+    !isPublicBrandAsset &&
     !request.nextUrl.pathname.startsWith("/login")
   ) {
     return NextResponse.redirect(new URL("/login", request.url));
