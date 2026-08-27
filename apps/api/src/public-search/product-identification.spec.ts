@@ -179,6 +179,54 @@ describe('public product identification', () => {
     ).toBe('SHELVING');
   });
 
+  it('prioritizes compact primary nouns and the real mochila smoke title', () => {
+    const realMochilaTitle =
+      'MochIia Vlagem Feminina Masculinas Multifuncional Reforçada Impermeável Expansível Mochila Notebook Antifurto USB';
+
+    expect(inferCandidateProductType({ title: realMochilaTitle })).toBe('BAG');
+    expect(classifyProduct(realMochilaTitle)).toEqual({
+      primaryType: 'BAG',
+      relation: 'ACCESSORY_FOR',
+      relationTarget: 'NOTEBOOK',
+    });
+
+    for (const [query, candidate] of [
+      ['notebook', 'Mochila Notebook'],
+      ['notebook', 'Bolsa Notebook'],
+      ['notebook', 'Case Notebook'],
+      ['TV', 'Suporte TV'],
+      ['TV', 'Base TV'],
+      ['celular', 'Capa Celular'],
+      ['celular', 'Capinha iPhone'],
+      ['celular', 'Carregador Celular'],
+      ['celular', 'Película iPhone'],
+    ]) {
+      const identity = createProductIdentity(query, {
+        name: query,
+        source: 'TEXT',
+      });
+
+      expect(isCompatibleProductType(identity, candidate)).toBe(false);
+    }
+  });
+
+  it('keeps compact accessory queries searchable', () => {
+    for (const [query, expected] of [
+      ['mochila notebook', 'BAG'],
+      ['capa iphone', 'CASE'],
+      ['suporte tv', 'SUPPORT'],
+      ['carregador celular', 'CHARGER'],
+    ]) {
+      const identity = createProductIdentity(query, {
+        name: query,
+        source: 'TEXT',
+      });
+
+      expect(identity.productType).toBe(expected);
+      expect(isCompatibleProductType(identity, query)).toBe(true);
+    }
+  });
+
   it('classifies the real smoke candidates by their primary product noun', () => {
     expect(
       inferCandidateProductType({

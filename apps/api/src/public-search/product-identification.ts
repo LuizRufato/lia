@@ -350,6 +350,10 @@ function productTypeText(value: string): string {
   return normalizeSearchText(value).replace(REFERENCED_PRODUCT_PATTERN, ' ');
 }
 
+function normalizePrimaryNounTypos(value: string): string {
+  return value.replace(/\bmochiia\b/g, 'mochila');
+}
+
 function hasPrimaryAccessorySignal(value: string): boolean {
   const normalized = normalizeSearchText(value);
   return /^(?:capa|capinha|pelicula|suporte|base|cabo|carregador|microfone|adaptador|bolsa|mochila|case|protecao|holder|tampa|canudo|alca|reposicao|acessorio)\b/.test(
@@ -399,7 +403,7 @@ function hasPeripheralAccessorySignal(value: string): boolean {
 }
 
 function inferProductTypeFromText(value: string): ProductType {
-  const normalized = normalizeSearchText(value);
+  const normalized = normalizePrimaryNounTypos(normalizeSearchText(value));
   const tokens = new Set(tokenizeSearchText(productTypeText(normalized)));
 
   const primaryAccessoryType = inferPrimaryAccessoryType(normalized);
