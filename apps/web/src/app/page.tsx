@@ -14,14 +14,14 @@ export const metadata: Metadata = {
     locale: "pt_BR",
     siteName: "LIA",
     url: "https://botlia.com.br/",
-    images: [{ url: "/brand/lia-achou.png", alt: "LIA Achou!" }],
+    images: [{ url: "/brand/lia-social.png", alt: "LIA Achou!" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "LIA Achou! — A inteligência que encontra a melhor oferta",
     description:
       "Você procura. A LIA acha. Compare oportunidades e descubra onde vale mais a pena comprar.",
-    images: ["/brand/lia-achou.png"],
+    images: ["/brand/lia-social.png"],
   },
 };
 

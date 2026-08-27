@@ -45,7 +45,7 @@ export const metadata: Metadata = {
       "Você procura. A LIA acha. Compare oportunidades e descubra onde vale mais a pena comprar.",
     images: [
       {
-        url: "/brand/lia-achou.png",
+        url: "/brand/lia-social.png",
         alt: "LIA Achou!",
       },
     ],
@@ -55,7 +55,7 @@ export const metadata: Metadata = {
     title: "LIA Achou! — A inteligência que encontra a melhor oferta",
     description:
       "Você procura. A LIA acha. Compare oportunidades e descubra onde vale mais a pena comprar.",
-    images: ["/brand/lia-achou.png"],
+    images: ["/brand/lia-social.png"],
   },
 };
 
