@@ -2,6 +2,7 @@ import {
   assertSafePublicUrl,
   areCompatibleProductVariants,
   areCompatibleProductTokens,
+  classifyProduct,
   createProductIdentity,
   inferCandidateProductType,
   inferQueryProductType,
@@ -197,6 +198,74 @@ describe('public product identification', () => {
           'Campainha Com Câmera Vídeo Porteiro Sem Fio Wi-Fi HD Inteligente Vê Pelo Celular',
       }),
     ).toBe('DOORBELL');
+    expect(
+      inferCandidateProductType({
+        title:
+          'Capinha de Celular BTS IPHONE 13 11 15 14 12 16 17 PRO MAX X XR XS MAX PLUS Proteção Anti Impacto Promoção',
+      }),
+    ).toBe('CASE');
+    expect(
+      inferCandidateProductType({
+        category: 'Celulares e Acessórios',
+        title:
+          'Capinha de Celular BTS IPHONE 13 11 15 14 12 16 17 PRO MAX X XR XS MAX PLUS Proteção Anti Impacto Promoção',
+      }),
+    ).toBe('CASE');
+  });
+
+  it('keeps primary product type separate from a related target', () => {
+    expect(classifyProduct('capa para celular')).toEqual({
+      primaryType: 'CASE',
+      relation: 'ACCESSORY_FOR',
+      relationTarget: 'SMARTPHONE',
+    });
+    expect(classifyProduct('suporte para TV')).toEqual({
+      primaryType: 'SUPPORT',
+      relation: 'ACCESSORY_FOR',
+      relationTarget: 'TELEVISION',
+    });
+    expect(classifyProduct('mesa para notebook')).toEqual({
+      primaryType: 'TABLE_DESK',
+      relation: 'USED_WITH',
+      relationTarget: 'NOTEBOOK',
+    });
+    expect(classifyProduct('carregador para iPhone')).toEqual({
+      primaryType: 'CHARGER',
+      relation: 'ACCESSORY_FOR',
+      relationTarget: 'SMARTPHONE',
+    });
+  });
+
+  it('does not use an accessory relation target as the primary type', () => {
+    const identity = createProductIdentity('celular', {
+      name: 'celular',
+      source: 'TEXT',
+    });
+
+    expect(
+      isCompatibleProductType(
+        identity,
+        'Capinha de Celular BTS IPHONE 13 11 15 14 12 16 17 PRO MAX X XR XS MAX PLUS Proteção Anti Impacto Promoção',
+      ),
+    ).toBe(false);
+    expect(
+      isCompatibleProductType(
+        createProductIdentity('capa para celular', {
+          name: 'capa para celular',
+          source: 'TEXT',
+        }),
+        'Capa Silicone para iPhone 17',
+      ),
+    ).toBe(true);
+    expect(
+      isCompatibleProductType(
+        createProductIdentity('capa para celular', {
+          name: 'capa para celular',
+          source: 'TEXT',
+        }),
+        'Smartphone Apple iPhone 17',
+      ),
+    ).toBe(false);
   });
 
   it('keeps candidate type independent from query type', () => {
@@ -214,6 +283,22 @@ describe('public product identification', () => {
     ]) {
       expect(inferQueryProductType(query)).toBeDefined();
       expect(inferCandidateProductType(candidate)).toBe('SCALE');
+    }
+  });
+
+  it('classifies the real incompatible alternatives independently from celular', () => {
+    const query = createProductIdentity('celular', {
+      name: 'celular',
+      source: 'TEXT',
+    });
+    const alternatives = [
+      'Fácil De Usar Tipo-C Telefone Poeira Plug Liga Kindle Leitor Durável Multi Funcional Para E-Readers Dispositivos',
+      'Kit Mobilador Gamer Completo Teclado RGB Mouse Gamer Mouse Pad Hub USB C Tripé Celular Free Fire',
+    ];
+
+    for (const title of alternatives) {
+      expect(inferCandidateProductType({ title })).toBe('ACCESSORY');
+      expect(isCompatibleProductType(query, title)).toBe(false);
     }
   });
 

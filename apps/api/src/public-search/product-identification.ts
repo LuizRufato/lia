@@ -55,6 +55,8 @@ const MARKETPLACE_NOISE_PATTERNS = [
 const ACCESSORY_TERMS = new Set([
   'capa',
   'capas',
+  'capinha',
+  'capinhas',
   'pelicula',
   'peliculas',
   'suporte',
@@ -135,8 +137,27 @@ export type ProductType =
   | 'SHELVING'
   | 'LAUNDRY_BASKET'
   | 'SUPPORT'
+  | 'CASE'
+  | 'SCREEN_PROTECTOR'
+  | 'CHARGER'
+  | 'CABLE'
+  | 'HOLDER'
+  | 'POWER_BANK'
+  | 'BAG'
+  | 'STRAW'
+  | 'LID'
+  | 'MICROPHONE'
+  | 'ADAPTER'
   | 'ACCESSORY'
   | 'UNKNOWN';
+
+export type ProductRelation = 'ACCESSORY_FOR' | 'USED_WITH';
+
+export interface ProductClassification {
+  primaryType: ProductType;
+  relation: ProductRelation | null;
+  relationTarget: ProductType | null;
+}
 
 export interface ProductIdentity {
   input: string;
@@ -260,6 +281,17 @@ const PRODUCT_TYPE_ANCHORS: Record<
   SHELVING: ['prateleira', 'estante'],
   LAUNDRY_BASKET: ['cesto'],
   SUPPORT: ['suporte', 'base'],
+  CASE: ['capa', 'capinha', 'case'],
+  SCREEN_PROTECTOR: ['pelicula', 'protecao'],
+  CHARGER: ['carregador'],
+  CABLE: ['cabo'],
+  HOLDER: ['holder'],
+  POWER_BANK: ['power', 'bank'],
+  BAG: ['bolsa', 'mochila'],
+  STRAW: ['canudo'],
+  LID: ['tampa'],
+  MICROPHONE: ['microfone'],
+  ADAPTER: ['adaptador'],
   ACCESSORY: [...ACCESSORY_TERMS],
 };
 
@@ -289,6 +321,17 @@ const GENERIC_TYPE_TOKENS: Record<
   SHELVING: new Set(['prateleira', 'estante']),
   LAUNDRY_BASKET: new Set(['cesto']),
   SUPPORT: new Set(['suporte', 'base']),
+  CASE: new Set(['capa', 'capinha', 'case']),
+  SCREEN_PROTECTOR: new Set(['pelicula', 'protecao']),
+  CHARGER: new Set(['carregador']),
+  CABLE: new Set(['cabo']),
+  HOLDER: new Set(['holder']),
+  POWER_BANK: new Set(['power', 'bank']),
+  BAG: new Set(['bolsa', 'mochila']),
+  STRAW: new Set(['canudo']),
+  LID: new Set(['tampa']),
+  MICROPHONE: new Set(['microfone']),
+  ADAPTER: new Set(['adaptador']),
   ACCESSORY: new Set([...ACCESSORY_TERMS]),
 };
 
@@ -309,8 +352,49 @@ function productTypeText(value: string): string {
 
 function hasPrimaryAccessorySignal(value: string): boolean {
   const normalized = normalizeSearchText(value);
-  return /^(?:capa|pelicula|suporte|base|cabo|carregador|microfone|adaptador|bolsa|mochila|case|protecao|holder|tampa|canudo|alca|reposicao|acessorio)\b/.test(
+  return /^(?:capa|capinha|pelicula|suporte|base|cabo|carregador|microfone|adaptador|bolsa|mochila|case|protecao|holder|tampa|canudo|alca|reposicao|acessorio)\b/.test(
     normalized,
+  );
+}
+
+function inferPrimaryAccessoryType(value: string): ProductType | null {
+  if (!hasPrimaryAccessorySignal(value)) return null;
+
+  const firstToken = normalizeSearchText(value).split(/\s+/)[0];
+  const accessoryTypes: Record<string, ProductType> = {
+    capa: 'CASE',
+    capinha: 'CASE',
+    capas: 'CASE',
+    capinhas: 'CASE',
+    case: 'CASE',
+    pelicula: 'SCREEN_PROTECTOR',
+    protecao: 'SCREEN_PROTECTOR',
+    carregador: 'CHARGER',
+    cabo: 'CABLE',
+    holder: 'HOLDER',
+    bolsa: 'BAG',
+    mochila: 'BAG',
+    canudo: 'STRAW',
+    tampa: 'LID',
+    microfone: 'MICROPHONE',
+    adaptador: 'ADAPTER',
+    suporte: 'SUPPORT',
+    base: 'SUPPORT',
+  };
+
+  return accessoryTypes[firstToken] || 'ACCESSORY';
+}
+
+function hasPeripheralAccessorySignal(value: string): boolean {
+  const normalized = normalizeSearchText(value);
+  const tokens = new Set(tokenizeSearchText(normalized));
+
+  return (
+    (tokens.has('plug') && tokens.has('poeira') && tokens.has('tipo')) ||
+    (tokens.has('kit') &&
+      ['teclado', 'mouse', 'hub', 'tripe', 'gamer'].some((token) =>
+        tokens.has(token),
+      ))
   );
 }
 
@@ -318,7 +402,9 @@ function inferProductTypeFromText(value: string): ProductType {
   const normalized = normalizeSearchText(value);
   const tokens = new Set(tokenizeSearchText(productTypeText(normalized)));
 
-  if (hasPrimaryAccessorySignal(normalized)) return 'ACCESSORY';
+  const primaryAccessoryType = inferPrimaryAccessoryType(normalized);
+  if (primaryAccessoryType) return primaryAccessoryType;
+  if (hasPeripheralAccessorySignal(normalized)) return 'ACCESSORY';
   if (
     tokens.has('shorts') ||
     tokens.has('bermuda') ||
@@ -415,6 +501,64 @@ export function inferQueryProductType(query: string): ProductType {
   return inferProductTypeFromText(query);
 }
 
+const RELATION_TARGET_TYPES: Array<{
+  type: ProductType;
+  tokens: string[];
+}> = [
+  {
+    type: 'SMARTPHONE',
+    tokens: ['iphone', 'smartphone', 'celular', 'telefone', 'galaxy'],
+  },
+  { type: 'NOTEBOOK', tokens: ['notebook', 'laptop'] },
+  {
+    type: 'TELEVISION',
+    tokens: ['tv', 'televisao', 'televisor', 'smarttv'],
+  },
+  { type: 'DRINKWARE', tokens: ['copo', 'tumbler', 'caneca', 'garrafa'] },
+];
+
+const RELATIONAL_PRIMARY_TYPES = new Set<ProductType>([
+  'CASE',
+  'SCREEN_PROTECTOR',
+  'CHARGER',
+  'CABLE',
+  'HEADPHONES',
+  'HOLDER',
+  'POWER_BANK',
+  'BAG',
+  'STRAW',
+  'LID',
+  'MICROPHONE',
+  'ADAPTER',
+  'SUPPORT',
+  'TABLE_DESK',
+  'ACCESSORY',
+]);
+
+function inferRelationTarget(value: string): ProductType | null {
+  const tokens = new Set(tokenizeSearchText(value));
+  return (
+    RELATION_TARGET_TYPES.find(({ tokens: targetTokens }) =>
+      targetTokens.some((token) => tokens.has(token)),
+    )?.type || null
+  );
+}
+
+export function classifyProduct(value: string): ProductClassification {
+  const primaryType = inferProductTypeFromText(value);
+  const relationTarget = inferRelationTarget(value);
+
+  if (!relationTarget || !RELATIONAL_PRIMARY_TYPES.has(primaryType)) {
+    return { primaryType, relation: null, relationTarget: null };
+  }
+
+  return {
+    primaryType,
+    relation: primaryType === 'TABLE_DESK' ? 'USED_WITH' : 'ACCESSORY_FOR',
+    relationTarget,
+  };
+}
+
 function isRawMarketplaceCategory(value: string): boolean {
   return /^\d+(?:\s+\d+)*$/.test(normalizeSearchText(value));
 }
@@ -424,16 +568,22 @@ export function inferCandidateProductType(input: {
   productName?: string | null;
   title?: string | null;
 }): ProductType {
+  const productNameType = inferProductTypeFromText(input.productName || '');
+  const titleType = inferProductTypeFromText(input.title || '');
+  const explicitRelationType = [productNameType, titleType].find((type) =>
+    RELATIONAL_PRIMARY_TYPES.has(type),
+  );
+  if (explicitRelationType) return explicitRelationType;
+
   const structuredCategory = input.category?.trim();
   if (structuredCategory && !isRawMarketplaceCategory(structuredCategory)) {
     const categoryType = inferProductTypeFromText(structuredCategory);
     if (categoryType !== 'UNKNOWN') return categoryType;
   }
 
-  const productNameType = inferProductTypeFromText(input.productName || '');
   if (productNameType !== 'UNKNOWN') return productNameType;
 
-  return inferProductTypeFromText(input.title || '');
+  return titleType;
 }
 
 function tokenMatchesCandidate(
@@ -531,12 +681,14 @@ export function isCompatibleProductType(
   candidateProductName?: string | null,
 ): boolean {
   if (requested.productType === 'UNKNOWN') return true;
-  const candidateType = inferCandidateProductType({
+  const candidatePrimaryType = inferCandidateProductType({
     title: candidateTitle,
     category: candidateCategory,
     productName: candidateProductName,
   });
-  return candidateType === requested.productType;
+  // A related target (for example, smartphone in "case for smartphone")
+  // never satisfies the primary product type gate.
+  return candidatePrimaryType === requested.productType;
 }
 
 function isPrivateIp(address: string): boolean {

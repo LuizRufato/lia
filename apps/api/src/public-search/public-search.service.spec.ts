@@ -157,6 +157,15 @@ describe('PublicSearchService', () => {
     [
       'Campainha Com Câmera Vídeo Porteiro Sem Fio Wi-Fi HD Inteligente Vê Pelo Celular',
     ],
+    [
+      'Capinha de Celular BTS IPHONE 13 11 15 14 12 16 17 PRO MAX X XR XS MAX PLUS Proteção Anti Impacto Promoção',
+    ],
+    [
+      'Fácil De Usar Tipo-C Telefone Poeira Plug Liga Kindle Leitor Durável Multi Funcional Para E-Readers Dispositivos',
+    ],
+    [
+      'Kit Mobilador Gamer Completo Teclado RGB Mouse Gamer Mouse Pad Hub USB C Tripé Celular Free Fire',
+    ],
     ['Capa anti impacto para celular'],
     ['Suporte articulado para celular'],
   ])(
