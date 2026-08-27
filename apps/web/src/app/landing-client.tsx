@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useMemo, useState } from "react";
 
 type PublicOffer = {
   title: string;
@@ -119,6 +119,7 @@ export default function LandingClient() {
   const [loading, setLoading] = useState(false);
   const [featuredLoading, setFeaturedLoading] = useState(true);
   const [error, setError] = useState("");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const searchMessages = useMemo(
     () => [
       "Identificando seu produto…",
@@ -142,10 +143,29 @@ export default function LandingClient() {
     };
   }, []);
 
-  async function search(event?: FormEvent) {
-    event?.preventDefault();
-    const value = query.trim();
-    if (value.length < 2) {
+  function scrollToSection(id: string) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+      block: "start",
+    });
+  }
+
+  function handleSectionNavigation(
+    event: MouseEvent<HTMLAnchorElement>,
+    id: string,
+  ) {
+    event.preventDefault();
+    setMobileNavOpen(false);
+    scrollToSection(id);
+  }
+
+  async function runSearch(value: string) {
+    const normalizedValue = value.trim();
+    if (normalizedValue.length < 2) {
       setError("Digite pelo menos 2 caracteres para começar.");
       return;
     }
@@ -156,7 +176,7 @@ export default function LandingClient() {
       const response = await fetch("/api/public/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: value }),
+        body: JSON.stringify({ query: normalizedValue }),
       });
       const data = (await response.json()) as SearchResult;
       setResult(data);
@@ -171,10 +191,31 @@ export default function LandingClient() {
     }
   }
 
-  function useSuggestion(value: string) {
+  function search(event?: FormEvent) {
+    event?.preventDefault();
+    void runSearch(query);
+  }
+
+  function searchOffer(value: string) {
+    setQuery(value);
+    setMobileNavOpen(false);
+    scrollToSection("public-search");
+    void runSearch(value);
+  }
+
+  useEffect(() => {
+    if (!result) return;
+    const frame = window.requestAnimationFrame(() =>
+      scrollToSection("search-result"),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [result]);
+
+  function applySuggestion(value: string) {
     setQuery(value);
     setResult(null);
     setError("");
+    scrollToSection("public-search");
   }
 
   return (
@@ -190,9 +231,24 @@ export default function LandingClient() {
           />
         </Link>
         <nav className="landing-nav" aria-label="Navegação principal">
-          <a href="#como-funciona">Como funciona</a>
-          <a href="#ofertas">Ofertas</a>
-          <a href="#categorias">Categorias</a>
+          <a
+            href="#como-funciona"
+            onClick={(event) => handleSectionNavigation(event, "como-funciona")}
+          >
+            Como funciona
+          </a>
+          <a
+            href="#ofertas"
+            onClick={(event) => handleSectionNavigation(event, "ofertas")}
+          >
+            Ofertas
+          </a>
+          <a
+            href="#categorias"
+            onClick={(event) => handleSectionNavigation(event, "categorias")}
+          >
+            Categorias
+          </a>
         </nav>
         <div className="header-actions">
           <Link href="/login" className="login-link">
@@ -207,6 +263,52 @@ export default function LandingClient() {
             Entrar no grupo VIP <span>→</span>
           </a>
         </div>
+        <button
+          type="button"
+          className="mobile-menu-toggle"
+          aria-label={mobileNavOpen ? "Fechar menu" : "Abrir menu"}
+          aria-controls="mobile-navigation"
+          aria-expanded={mobileNavOpen}
+          onClick={() => setMobileNavOpen((open) => !open)}
+        >
+          {mobileNavOpen ? "×" : "☰"}
+        </button>
+        {mobileNavOpen && (
+          <nav
+            id="mobile-navigation"
+            className="mobile-nav"
+            aria-label="Navegação mobile"
+          >
+            <a
+              href="#como-funciona"
+              onClick={(event) =>
+                handleSectionNavigation(event, "como-funciona")
+              }
+            >
+              Como funciona
+            </a>
+            <a
+              href="#ofertas"
+              onClick={(event) => handleSectionNavigation(event, "ofertas")}
+            >
+              Ofertas
+            </a>
+            <a
+              href="#categorias"
+              onClick={(event) => handleSectionNavigation(event, "categorias")}
+            >
+              Categorias
+            </a>
+            <a
+              className="mobile-nav-vip"
+              href={VIP_LINK}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Entrar no grupo VIP →
+            </a>
+          </nav>
+        )}
       </header>
 
       <section className="hero-shell">
@@ -246,7 +348,7 @@ export default function LandingClient() {
               <button
                 key={item}
                 type="button"
-                onClick={() => useSuggestion(item)}
+                onClick={() => applySuggestion(item)}
               >
                 {item}
               </button>
@@ -288,7 +390,11 @@ export default function LandingClient() {
       </section>
 
       {result && (
-        <section className="result-section" aria-live="polite">
+        <section
+          id="search-result"
+          className="result-section"
+          aria-live="polite"
+        >
           {result.status === "FOUND" && result.recommendation ? (
             <div className="result-layout">
               <div className="result-heading">
@@ -299,7 +405,7 @@ export default function LandingClient() {
               <div className="result-main-card glass-panel">
                 <OfferCard
                   offer={result.recommendation}
-                  onSearch={useSuggestion}
+                  onSearch={searchOffer}
                 />
                 <div className="recommendation-note">
                   {result.recommendation.recommendation}
@@ -312,7 +418,7 @@ export default function LandingClient() {
                     <OfferCard
                       key={offer.title}
                       offer={offer}
-                      onSearch={useSuggestion}
+                      onSearch={searchOffer}
                     />
                   ))}
                 </div>
@@ -381,7 +487,10 @@ export default function LandingClient() {
             />
           </div>
           <p>As melhores oportunidades encontradas agora pela LIA.</p>
-          <a href="#public-search">
+          <a
+            href="#public-search"
+            onClick={(event) => handleSectionNavigation(event, "public-search")}
+          >
             Ver todas as ofertas <span>→</span>
           </a>
         </div>
@@ -398,11 +507,7 @@ export default function LandingClient() {
             </div>
           )}
           {featured.slice(0, 4).map((offer) => (
-            <OfferCard
-              key={offer.title}
-              offer={offer}
-              onSearch={useSuggestion}
-            />
+            <OfferCard key={offer.title} offer={offer} onSearch={searchOffer} />
           ))}
         </div>
       </section>
@@ -485,7 +590,7 @@ export default function LandingClient() {
             <button
               key={category}
               type="button"
-              onClick={() => useSuggestion(category)}
+              onClick={() => applySuggestion(category)}
             >
               {category}
             </button>
@@ -517,9 +622,24 @@ export default function LandingClient() {
           <span>Preço bom de verdade.</span>
         </div>
         <div className="footer-links">
-          <a href="#como-funciona">Como funciona</a>
-          <a href="#ofertas">Ofertas</a>
-          <a href="#categorias">Categorias</a>
+          <a
+            href="#como-funciona"
+            onClick={(event) => handleSectionNavigation(event, "como-funciona")}
+          >
+            Como funciona
+          </a>
+          <a
+            href="#ofertas"
+            onClick={(event) => handleSectionNavigation(event, "ofertas")}
+          >
+            Ofertas
+          </a>
+          <a
+            href="#categorias"
+            onClick={(event) => handleSectionNavigation(event, "categorias")}
+          >
+            Categorias
+          </a>
           <Link href="/login">Entrar</Link>
         </div>
         <p>Inteligência que encontra. Você aproveita.</p>
