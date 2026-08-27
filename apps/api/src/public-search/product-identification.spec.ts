@@ -1,6 +1,7 @@
 import {
   assertSafePublicUrl,
   areCompatibleProductVariants,
+  areCompatibleProductTokens,
   createProductIdentity,
   identifyProduct,
   isAccessoryCandidate,
@@ -133,6 +134,62 @@ describe('public product identification', () => {
         'Fritadeira Air Fryer 3,5L',
       ),
     ).toBe(true);
+  });
+
+  it('matches celular by product type and rejects a product that only references it', () => {
+    const identity = createProductIdentity('celular', {
+      name: 'celular',
+      source: 'TEXT',
+    });
+
+    expect(
+      isCompatibleProductType(identity, 'Smartphone Samsung Galaxy A15'),
+    ).toBe(true);
+    expect(
+      isCompatibleProductType(
+        identity,
+        'Bermuda masculina com bolso para celular',
+      ),
+    ).toBe(false);
+    expect(
+      areCompatibleProductTokens(identity, 'Smartphone Samsung Galaxy A15'),
+    ).toBe(true);
+  });
+
+  it('requires the Stanley brand for a drinkware query and rejects accessories', () => {
+    const identity = createProductIdentity('copo Stanley', {
+      name: 'copo Stanley',
+      source: 'TEXT',
+    });
+
+    expect(identity.productType).toBe('DRINKWARE');
+    expect(
+      areCompatibleProductTokens(identity, 'Copo térmico Stanley Quencher'),
+    ).toBe(true);
+    expect(
+      isCompatibleProductType(identity, 'Tampa de reposição para copo Stanley'),
+    ).toBe(false);
+    expect(isCompatibleProductType(identity, 'Bolsa térmica Stanley')).toBe(
+      false,
+    );
+  });
+
+  it('uses controlled laundry-room synonyms without broadening to unrelated items', () => {
+    const identity = createProductIdentity('armário para lavanderia', {
+      name: 'armário para lavanderia',
+      source: 'TEXT',
+    });
+
+    expect(identity.productType).toBe('CABINET_STORAGE');
+    expect(
+      areCompatibleProductTokens(
+        identity,
+        'Armário multiuso área de serviço 2 portas',
+      ),
+    ).toBe(true);
+    expect(
+      isCompatibleProductType(identity, 'Cesto de roupas para lavanderia'),
+    ).toBe(false);
   });
 
   it.each([

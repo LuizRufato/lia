@@ -13,7 +13,9 @@ import {
   isAccessoryCandidate,
   areCompatibleProductVariants,
   isCompatibleProductType,
-  tokenizeSearchText,
+  areCompatibleProductTokens,
+  countCompatibleProductTokens,
+  getProductSearchAnchors,
 } from './product-identification';
 import { rankPublicCandidates } from './ranking';
 import { randomBytes } from 'node:crypto';
@@ -73,7 +75,7 @@ export class PublicSearchService {
       return {
         status: 'NO_EXACT_MATCH',
         message:
-          'A LIA identificou o produto, mas ainda não encontrou uma correspondência exata nas fontes disponíveis.',
+          'Não encontrei uma oferta compatível entre as opções que a LIA já analisou. Tente informar marca, modelo ou uma descrição diferente.',
         identification: this.publicIdentity(identity),
         source: 'LOCAL_CATALOG_FALLBACK',
         realtimeSearchAvailable: false,
@@ -258,15 +260,17 @@ export class PublicSearchService {
     marketplaceTypes: string[],
   ) {
     const queryTokens = identity.tokens;
-    const anchor = [...queryTokens].sort((a, b) => b.length - a.length)[0];
-    if (!anchor) return [];
+    const anchors = getProductSearchAnchors(identity);
+    if (!anchors.length) return [];
 
     const offers = await this.prisma.offer.findMany({
       where: {
         tenantId,
         status: 'ACTIVE',
         marketplace: { type: { in: marketplaceTypes as any } },
-        title: { contains: anchor, mode: 'insensitive' },
+        OR: anchors.map((anchor) => ({
+          title: { contains: anchor, mode: 'insensitive' },
+        })),
       },
       orderBy: { updatedAt: 'desc' },
       take: MAX_CANDIDATES,
@@ -304,6 +308,14 @@ export class PublicSearchService {
       if (
         isAccessoryCandidate(candidateTitle, candidateCategory, identity) ||
         !isCompatibleProductType(identity, candidateTitle, candidateCategory) ||
+        !areCompatibleProductTokens(
+          identity,
+          candidateTitle,
+          candidateCategory,
+          [payload.product?.brand, payload.product?.sku]
+            .filter(Boolean)
+            .join(' '),
+        ) ||
         !areCompatibleProductVariants(
           identity,
           candidateTitle,
@@ -312,17 +324,16 @@ export class PublicSearchService {
       ) {
         return [];
       }
-      const candidateTokens = tokenizeSearchText(
-        [candidateTitle, payload.product?.brand, payload.product?.sku]
+      // Exact matching is deliberately strict. A partial match must never be
+      // presented as the same product.
+      const matchedTokens = countCompatibleProductTokens(
+        identity,
+        candidateTitle,
+        candidateCategory,
+        [payload.product?.brand, payload.product?.sku]
           .filter(Boolean)
           .join(' '),
       );
-      const matchedTokens = queryTokens.filter((token) =>
-        candidateTokens.includes(token),
-      ).length;
-
-      // Exact matching is deliberately strict. A partial match must never be
-      // presented as the same product.
       if (matchedTokens !== queryTokens.length) return [];
 
       const imageUrl = offer.imageUrl || payload.product?.images?.[0] || null;

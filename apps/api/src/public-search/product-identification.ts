@@ -111,7 +111,14 @@ const URL_OPTIONAL_TERMS = new Set([
 const VARIANT_UNIT_PATTERN = /^(\d+)(gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/;
 
 export type ProductType =
-  'SMARTPHONE' | 'TELEVISION' | 'NOTEBOOK' | 'SHOES' | 'AIR_FRYER' | 'UNKNOWN';
+  | 'SMARTPHONE'
+  | 'TELEVISION'
+  | 'NOTEBOOK'
+  | 'SHOES'
+  | 'AIR_FRYER'
+  | 'DRINKWARE'
+  | 'CABINET_STORAGE'
+  | 'UNKNOWN';
 
 export interface ProductIdentity {
   input: string;
@@ -213,8 +220,59 @@ export function areCompatibleProductVariants(
   });
 }
 
-export function inferProductType(value: string): ProductType {
-  const tokens = new Set(tokenizeSearchText(value));
+const REFERENCED_PRODUCT_PATTERN =
+  /\b(?:para|p|de|com|compativel com)\s+(?:o|a|um|uma)?\s*(?:iphone|smartphone|celular|telefone|tv|televisao|televisor|smarttv|notebook|laptop|copo|tumbler|caneca|armario|gabinete)\b/g;
+
+const PRODUCT_TYPE_ANCHORS: Record<
+  Exclude<ProductType, 'UNKNOWN'>,
+  string[]
+> = {
+  SMARTPHONE: ['iphone', 'smartphone', 'celular', 'telefone', 'galaxy'],
+  TELEVISION: ['tv', 'televisao', 'televisor', 'smarttv'],
+  NOTEBOOK: ['notebook', 'laptop'],
+  SHOES: ['tenis', 'calcado', 'sapato', 'sapatilha'],
+  AIR_FRYER: ['air', 'fryer', 'fritadeira'],
+  DRINKWARE: ['copo', 'tumbler', 'caneca', 'garrafa'],
+  CABINET_STORAGE: ['armario', 'gabinete', 'multiuso', 'servico'],
+};
+
+const GENERIC_TYPE_TOKENS: Record<
+  Exclude<ProductType, 'UNKNOWN'>,
+  Set<string>
+> = {
+  SMARTPHONE: new Set(['smartphone', 'celular', 'telefone', 'galaxy']),
+  TELEVISION: new Set(['tv', 'televisao', 'televisor', 'smarttv']),
+  NOTEBOOK: new Set(['notebook', 'laptop']),
+  SHOES: new Set(['tenis', 'calcado', 'sapato', 'sapatilha']),
+  AIR_FRYER: new Set(['air', 'fryer', 'fritadeira']),
+  DRINKWARE: new Set(['copo', 'tumbler', 'caneca', 'garrafa']),
+  CABINET_STORAGE: new Set(['armario', 'gabinete', 'multiuso']),
+};
+
+const CONTROLLED_SYNONYMS: Record<string, string[][]> = {
+  lavanderia: [['area', 'servico']],
+  area: [['lavanderia']],
+  servico: [['lavanderia']],
+  tumbler: [['copo']],
+  caneca: [['copo']],
+  smartphone: [['celular'], ['telefone']],
+  celular: [['smartphone'], ['telefone']],
+  telefone: [['smartphone'], ['celular']],
+};
+
+function productTypeText(value: string): string {
+  return normalizeSearchText(value).replace(REFERENCED_PRODUCT_PATTERN, ' ');
+}
+
+export function inferProductType(
+  value: string,
+  category?: string | null,
+): ProductType {
+  const tokens = new Set(
+    tokenizeSearchText(
+      [productTypeText(value), category].filter(Boolean).join(' '),
+    ),
+  );
   if ((tokens.has('air') && tokens.has('fryer')) || tokens.has('fritadeira')) {
     return 'AIR_FRYER';
   }
@@ -243,7 +301,91 @@ export function inferProductType(value: string): ProductType {
   ) {
     return 'SHOES';
   }
+  if (
+    tokens.has('copo') ||
+    tokens.has('tumbler') ||
+    tokens.has('caneca') ||
+    (tokens.has('garrafa') && tokens.has('termica'))
+  ) {
+    return 'DRINKWARE';
+  }
+  if (
+    tokens.has('armario') ||
+    tokens.has('gabinete') ||
+    tokens.has('multiuso') ||
+    (tokens.has('area') && tokens.has('servico'))
+  ) {
+    return 'CABINET_STORAGE';
+  }
   return 'UNKNOWN';
+}
+
+function tokenMatchesCandidate(
+  token: string,
+  requestedType: ProductType,
+  candidateTokens: Set<string>,
+): boolean {
+  if (candidateTokens.has(token)) return true;
+
+  if (
+    requestedType !== 'UNKNOWN' &&
+    GENERIC_TYPE_TOKENS[requestedType]?.has(token)
+  ) {
+    return true;
+  }
+
+  return (CONTROLLED_SYNONYMS[token] || []).some((synonym) =>
+    synonym.every((part) => candidateTokens.has(part)),
+  );
+}
+
+export function countCompatibleProductTokens(
+  requested: ProductIdentity,
+  candidateTitle: string,
+  candidateCategory?: string | null,
+  candidateDetails?: string | null,
+): number {
+  const candidateTokens = new Set(
+    tokenizeSearchText(
+      [candidateTitle, candidateCategory, candidateDetails]
+        .filter(Boolean)
+        .join(' '),
+    ),
+  );
+  return requested.tokens.filter((token) =>
+    tokenMatchesCandidate(token, requested.productType, candidateTokens),
+  ).length;
+}
+
+export function areCompatibleProductTokens(
+  requested: ProductIdentity,
+  candidateTitle: string,
+  candidateCategory?: string | null,
+  candidateDetails?: string | null,
+): boolean {
+  return (
+    countCompatibleProductTokens(
+      requested,
+      candidateTitle,
+      candidateCategory,
+      candidateDetails,
+    ) === requested.tokens.length
+  );
+}
+
+export function getProductSearchAnchors(identity: ProductIdentity): string[] {
+  const anchors = new Set(identity.tokens);
+  if (identity.productType !== 'UNKNOWN') {
+    for (const anchor of PRODUCT_TYPE_ANCHORS[identity.productType]) {
+      anchors.add(anchor);
+    }
+  }
+  for (const token of identity.tokens) {
+    for (const synonym of CONTROLLED_SYNONYMS[token] || []) {
+      for (const part of synonym) anchors.add(part);
+    }
+  }
+  return [...anchors].filter((anchor) => anchor.length >= 2);
 }
 
 export function isAccessoryCandidate(
@@ -269,10 +411,8 @@ export function isCompatibleProductType(
   candidateCategory?: string | null,
 ): boolean {
   if (requested.productType === 'UNKNOWN') return true;
-  const candidateType = inferProductType(
-    [candidateTitle, candidateCategory].filter(Boolean).join(' '),
-  );
-  return candidateType === 'UNKNOWN' || candidateType === requested.productType;
+  const candidateType = inferProductType(candidateTitle, candidateCategory);
+  return candidateType === requested.productType;
 }
 
 function isPrivateIp(address: string): boolean {

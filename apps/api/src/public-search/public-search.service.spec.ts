@@ -131,4 +131,64 @@ describe('PublicSearchService', () => {
 
     expect(result.status).toBe('FOUND');
   });
+
+  it('does not return a bermuda when searching for celular', async () => {
+    const { service, offersService } = makeService([
+      { ...exactOffer, title: 'Bermuda masculina com bolso para celular' },
+    ]);
+
+    const result = await service.search('celular');
+
+    expect(result.status).toBe('NO_EXACT_MATCH');
+    expect(offersService.verifyMonetization).not.toHaveBeenCalled();
+  });
+
+  it('returns a smartphone for a generic celular query', async () => {
+    const { service } = makeService([
+      { ...exactOffer, title: 'Smartphone Samsung Galaxy A15 128GB' },
+    ]);
+
+    const result = await service.search('celular');
+
+    expect(result.status).toBe('FOUND');
+  });
+
+  it.each([
+    ['Copo térmico Stanley Quencher', 'FOUND'],
+    ['Copo térmico CamelBak', 'NO_EXACT_MATCH'],
+    ['Tampa de reposição para copo Stanley', 'NO_EXACT_MATCH'],
+    ['Bolsa térmica Stanley', 'NO_EXACT_MATCH'],
+  ])(
+    'matches copo Stanley only to the product itself: %s',
+    async (title, status) => {
+      const { service } = makeService([{ ...exactOffer, title }]);
+
+      const result = await service.search('copo Stanley');
+
+      expect(result.status).toBe(status);
+    },
+  );
+
+  it('matches armário para lavanderia to área de serviço', async () => {
+    const { service } = makeService([
+      {
+        ...exactOffer,
+        title: 'Armário multiuso área de serviço 2 portas',
+      },
+    ]);
+
+    const result = await service.search('armário para lavanderia');
+
+    expect(result.status).toBe('FOUND');
+  });
+
+  it('keeps a laundry basket out of an armário para lavanderia search', async () => {
+    const { service } = makeService([
+      { ...exactOffer, title: 'Cesto de roupas para lavanderia' },
+    ]);
+
+    const result = await service.search('armário para lavanderia');
+
+    expect(result.status).toBe('NO_EXACT_MATCH');
+  });
 });
