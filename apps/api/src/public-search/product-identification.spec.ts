@@ -30,13 +30,10 @@ describe('public product identification', () => {
   ])(
     'keeps URL metadata equivalent to the same textual product identity for %s',
     (marketplace, noise) => {
-      const textIdentity = createProductIdentity(
-        'Apple iPhone 17 Pro Max 256 GB',
-        {
-          name: 'Apple iPhone 17 Pro Max 256 GB',
-          source: 'TEXT',
-        },
-      );
+      const textIdentity = createProductIdentity('iPhone 17 Pro Max 256 GB', {
+        name: 'iPhone 17 Pro Max 256 GB',
+        source: 'TEXT',
+      });
       const urlIdentity = createProductIdentity('https://example.com/item', {
         name: `Apple iPhone 17 Pro Max 256 GB | ${marketplace} | ${noise}`,
         brand: 'Apple',

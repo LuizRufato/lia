@@ -333,10 +333,10 @@ export function createProductIdentity(
     : undefined;
   const identityText = [name, brand, model].filter(Boolean).join(' ');
   const tokens =
-    metadata.source === 'URL_METADATA' && (brand || model)
+    metadata.source === 'URL_METADATA' && model
       ? [
           ...new Set([
-            ...tokenizeSearchText([brand, model].filter(Boolean).join(' ')),
+            ...tokenizeSearchText(model),
             ...extractVariantTokens(name),
           ]),
         ]
