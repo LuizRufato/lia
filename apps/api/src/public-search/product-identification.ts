@@ -36,6 +36,70 @@ const STOP_WORDS = new Set([
   'for',
 ]);
 
+const MARKETPLACE_NOISE_PATTERNS = [
+  /\bmercado\s+livre\b/gi,
+  /\bmagazine\s+luiza\b/gi,
+  /\bcasas\s+bahia\b/gi,
+  /\bali\s*express\b/gi,
+  /\bamazon\b/gi,
+  /\bshopee\b/gi,
+  /\bmagalu\b/gi,
+  /\bkabum\b/gi,
+  /\boferta(?:s)?\b/gi,
+  /\bpromo(?:cao|ção)(?:s)?\b/gi,
+  /\bfrete\s+(?:gratis|grátis)\b/gi,
+  /\bmelhor\s+pre(?:co|ço)\b/gi,
+  /\b(?:novo|original|imperdivel|imperdível)\b/gi,
+];
+
+const ACCESSORY_TERMS = new Set([
+  'capa',
+  'capas',
+  'pelicula',
+  'peliculas',
+  'suporte',
+  'suportes',
+  'base',
+  'bases',
+  'cabo',
+  'cabos',
+  'carregador',
+  'carregadores',
+  'microfone',
+  'microfones',
+  'adaptador',
+  'adaptadores',
+  'bolsa',
+  'bolsas',
+  'mochila',
+  'mochilas',
+  'case',
+  'cases',
+  'protecao',
+  'protecoes',
+  'holder',
+]);
+
+const PRODUCT_VARIANT_WORDS = new Set([
+  'pro',
+  'max',
+  'mini',
+  'plus',
+  'ultra',
+  'se',
+  'azul',
+  'branco',
+  'preto',
+  'cinza',
+  'verde',
+  'rosa',
+  'vermelho',
+  'amarelo',
+]);
+
+export type ProductType =
+  'SMARTPHONE' | 'TELEVISION' | 'NOTEBOOK' | 'SHOES' | 'AIR_FRYER' | 'UNKNOWN';
+
 export interface ProductIdentity {
   input: string;
   name: string;
@@ -43,6 +107,7 @@ export interface ProductIdentity {
   model?: string;
   attributes: string[];
   tokens: string[];
+  productType: ProductType;
   source: 'TEXT' | 'URL_METADATA';
 }
 
@@ -58,13 +123,88 @@ export function normalizeSearchText(value: string): string {
 }
 
 export function tokenizeSearchText(value: string): string[] {
-  return [
-    ...new Set(
-      normalizeSearchText(value)
-        .split(/\s+/)
-        .filter((token) => token.length >= 2 && !STOP_WORDS.has(token)),
-    ),
-  ];
+  const rawTokens = normalizeSearchText(value)
+    .split(/\s+/)
+    .filter((token) => token.length >= 2 && !STOP_WORDS.has(token));
+  const expandedTokens = rawTokens.flatMap((token) => {
+    const compactVariant = token.match(/^(\d+)(gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/);
+    return compactVariant
+      ? [token, compactVariant[1], compactVariant[2]]
+      : [token];
+  });
+  return [...new Set(expandedTokens)];
+}
+
+function extractVariantTokens(value: string): string[] {
+  return tokenizeSearchText(value).filter(
+    (token) =>
+      PRODUCT_VARIANT_WORDS.has(token) ||
+      /^\d+$/.test(token) ||
+      /^(?:gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/.test(token) ||
+      /^\d+(?:gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/.test(token),
+  );
+}
+
+export function inferProductType(value: string): ProductType {
+  const tokens = new Set(tokenizeSearchText(value));
+  if ((tokens.has('air') && tokens.has('fryer')) || tokens.has('fritadeira')) {
+    return 'AIR_FRYER';
+  }
+  if (
+    tokens.has('iphone') ||
+    tokens.has('smartphone') ||
+    tokens.has('celular') ||
+    tokens.has('telefone')
+  ) {
+    return 'SMARTPHONE';
+  }
+  if (
+    tokens.has('tv') ||
+    tokens.has('televisao') ||
+    tokens.has('televisor') ||
+    tokens.has('smarttv')
+  ) {
+    return 'TELEVISION';
+  }
+  if (tokens.has('notebook') || tokens.has('laptop')) return 'NOTEBOOK';
+  if (
+    tokens.has('tenis') ||
+    tokens.has('calcado') ||
+    tokens.has('sapato') ||
+    tokens.has('sapatilha')
+  ) {
+    return 'SHOES';
+  }
+  return 'UNKNOWN';
+}
+
+export function isAccessoryCandidate(
+  title: string,
+  category: string | null | undefined,
+  requested: ProductIdentity | string,
+): boolean {
+  const requestedTokens =
+    typeof requested === 'string'
+      ? tokenizeSearchText(requested)
+      : requested.tokens;
+  if (requestedTokens.some((token) => ACCESSORY_TERMS.has(token))) return false;
+
+  const candidateTokens = tokenizeSearchText(
+    [title, category].filter(Boolean).join(' '),
+  );
+  return candidateTokens.some((token) => ACCESSORY_TERMS.has(token));
+}
+
+export function isCompatibleProductType(
+  requested: ProductIdentity,
+  candidateTitle: string,
+  candidateCategory?: string | null,
+): boolean {
+  if (requested.productType === 'UNKNOWN') return true;
+  const candidateType = inferProductType(
+    [candidateTitle, candidateCategory].filter(Boolean).join(' '),
+  );
+  return candidateType === 'UNKNOWN' || candidateType === requested.productType;
 }
 
 function isPrivateIp(address: string): boolean {
@@ -154,6 +294,64 @@ function decodeHtml(value: string): string {
     .replace(/&gt;/gi, '>')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function cleanMetadataText(value: string): string {
+  let cleaned = decodeHtml(value);
+  for (const pattern of MARKETPLACE_NOISE_PATTERNS) {
+    cleaned = cleaned.replace(pattern, ' ');
+  }
+  return cleaned
+    .replace(/[|•]+/g, ' ')
+    .replace(/\s+[-–—]\s+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function createProductIdentity(
+  input: string,
+  metadata: {
+    name: string;
+    brand?: string;
+    model?: string;
+    source: ProductIdentity['source'];
+  },
+): ProductIdentity {
+  const name =
+    metadata.source === 'URL_METADATA'
+      ? cleanMetadataText(metadata.name)
+      : metadata.name.trim();
+  const brand = metadata.brand
+    ? metadata.source === 'URL_METADATA'
+      ? cleanMetadataText(metadata.brand)
+      : metadata.brand.trim()
+    : undefined;
+  const model = metadata.model
+    ? metadata.source === 'URL_METADATA'
+      ? cleanMetadataText(metadata.model)
+      : metadata.model.trim()
+    : undefined;
+  const identityText = [name, brand, model].filter(Boolean).join(' ');
+  const tokens =
+    metadata.source === 'URL_METADATA' && (brand || model)
+      ? [
+          ...new Set([
+            ...tokenizeSearchText([brand, model].filter(Boolean).join(' ')),
+            ...extractVariantTokens(name),
+          ]),
+        ]
+      : tokenizeSearchText(identityText);
+
+  return {
+    input,
+    name,
+    ...(brand ? { brand } : {}),
+    ...(model ? { model } : {}),
+    attributes: tokens,
+    tokens,
+    productType: inferProductType(identityText),
+    source: metadata.source,
+  };
 }
 
 function tagContent(html: string, tag: string): string | undefined {
@@ -253,14 +451,14 @@ export async function identifyProduct(input: string): Promise<ProductIdentity> {
   if (!trimmed) throw new PublicSearchInputError('Informe um produto ou URL.');
 
   if (!/^https?:\/\//i.test(trimmed)) {
-    const tokens = tokenizeSearchText(trimmed);
-    return {
-      input: trimmed,
+    const identity = createProductIdentity(trimmed, {
       name: trimmed,
-      attributes: tokens,
-      tokens,
       source: 'TEXT',
-    };
+    });
+    if (!identity.tokens.length) {
+      throw new PublicSearchInputError('Informe um produto ou URL.');
+    }
+    return identity;
   }
 
   const { html, url } = await readPublicHtml(trimmed);
@@ -277,22 +475,18 @@ export async function identifyProduct(input: string): Promise<ProductIdentity> {
     metaContent(html, 'og:title') ||
     tagContent(html, 'title') ||
     decodeHtml(url.pathname.split('/').filter(Boolean).pop() || '');
-  const attributes = [brand, model, name].filter(Boolean).join(' ');
-  const tokens = tokenizeSearchText(attributes);
+  const identity = createProductIdentity(trimmed, {
+    name,
+    ...(brand ? { brand } : {}),
+    ...(model ? { model } : {}),
+    source: 'URL_METADATA',
+  });
 
-  if (!name || tokens.length < 2) {
+  if (!identity.name || identity.tokens.length < 2) {
     throw new PublicSearchInputError(
       'Não consegui identificar esse produto automaticamente. Tente informar o nome e o modelo.',
     );
   }
 
-  return {
-    input: trimmed,
-    name,
-    ...(brand ? { brand } : {}),
-    ...(model ? { model } : {}),
-    attributes: tokens,
-    tokens,
-    source: 'URL_METADATA',
-  };
+  return identity;
 }

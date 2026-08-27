@@ -10,6 +10,8 @@ import {
   normalizeSearchText,
   PublicSearchInputError,
   ProductIdentity,
+  isAccessoryCandidate,
+  isCompatibleProductType,
   tokenizeSearchText,
 } from './product-identification';
 import { rankPublicCandidates } from './ranking';
@@ -58,11 +60,14 @@ export class PublicSearchService {
     }
 
     const tenantId = await this.resolvePublicTenantId();
-    const candidates = await this.findExactCandidates(tenantId, identity);
+    const marketplaceTypes = await this.findConnectedMarketplaceTypes(tenantId);
+    const candidates = marketplaceTypes.length
+      ? await this.findExactCandidates(tenantId, identity, marketplaceTypes)
+      : [];
 
     if (!candidates.length) {
       this.logger.log(
-        `Public search found no exact Shopee catalog match (source=${identity.source}, durationMs=${Date.now() - startedAt}).`,
+        `Public search found no exact catalog match in connected marketplaces (source=${identity.source}, durationMs=${Date.now() - startedAt}).`,
       );
       return {
         status: 'NO_EXACT_MATCH',
@@ -149,7 +154,7 @@ export class PublicSearchService {
       source: 'LOCAL_CATALOG_FALLBACK',
       realtimeSearchAvailable: false,
       limitation:
-        'A busca direcionada por palavra-chave ainda não está disponível na API Shopee habilitada para esta conta; a recomendação usa o catálogo Shopee persistido mais recente.',
+        'Esta recomendação usa as ofertas mais recentes já analisadas pela LIA. Os preços e a disponibilidade podem mudar no marketplace.',
       recommendation: this.publicOffer(
         best,
         `${trackerBase}/${publicLink.token}`,
@@ -249,10 +254,9 @@ export class PublicSearchService {
   private async findExactCandidates(
     tenantId: string,
     identity: ProductIdentity,
+    marketplaceTypes: string[],
   ) {
-    const queryTokens = tokenizeSearchText(
-      [identity.name, identity.brand, identity.model].filter(Boolean).join(' '),
-    );
+    const queryTokens = identity.tokens;
     const anchor = [...queryTokens].sort((a, b) => b.length - a.length)[0];
     if (!anchor) return [];
 
@@ -260,7 +264,7 @@ export class PublicSearchService {
       where: {
         tenantId,
         status: 'ACTIVE',
-        marketplace: { type: 'SHOPEE' },
+        marketplace: { type: { in: marketplaceTypes as any } },
         title: { contains: anchor, mode: 'insensitive' },
       },
       orderBy: { updatedAt: 'desc' },
@@ -285,15 +289,6 @@ export class PublicSearchService {
     });
 
     return offers.flatMap((offer) => {
-      const titleTokens = tokenizeSearchText(offer.title);
-      const matchedTokens = queryTokens.filter((token) =>
-        titleTokens.includes(token),
-      ).length;
-
-      // Exact matching is deliberately strict. A partial match must never be
-      // presented as the same product.
-      if (matchedTokens !== queryTokens.length) return [];
-
       const observation = offer.observations[0];
       const evaluation = observation?.evaluations[0];
       const history = offer.priceHistories[0];
@@ -302,12 +297,34 @@ export class PublicSearchService {
         any
       >;
       const metrics = payload.metrics || {};
+      const candidateCategory =
+        observation?.category || payload.product?.sourceCategory;
+      const candidateTitle = offer.title || payload.product?.title || '';
+      if (
+        isAccessoryCandidate(candidateTitle, candidateCategory, identity) ||
+        !isCompatibleProductType(identity, candidateTitle, candidateCategory)
+      ) {
+        return [];
+      }
+      const candidateTokens = tokenizeSearchText(
+        [candidateTitle, payload.product?.brand, payload.product?.sku]
+          .filter(Boolean)
+          .join(' '),
+      );
+      const matchedTokens = queryTokens.filter((token) =>
+        candidateTokens.includes(token),
+      ).length;
+
+      // Exact matching is deliberately strict. A partial match must never be
+      // presented as the same product.
+      if (matchedTokens !== queryTokens.length) return [];
+
       const imageUrl = offer.imageUrl || payload.product?.images?.[0] || null;
 
       return [
         {
           id: offer.id,
-          title: offer.title,
+          title: candidateTitle,
           priceCents: offer.price,
           originalPriceCents: history?.originalPriceCents ?? null,
           discountBps: history?.discountBps ?? null,
@@ -323,6 +340,18 @@ export class PublicSearchService {
         } satisfies LocalCandidate,
       ];
     });
+  }
+
+  private async findConnectedMarketplaceTypes(
+    tenantId: string,
+  ): Promise<string[]> {
+    const integrations = await this.prisma.marketplaceIntegration.findMany({
+      where: { tenantId, status: 'CONNECTED' },
+      select: { provider: true },
+    });
+    return integrations.map((integration: { provider: string }) =>
+      String(integration.provider),
+    );
   }
 
   private publicIdentity(identity: ProductIdentity) {

@@ -24,11 +24,14 @@ describe('PublicSearchService', () => {
     title: 'iPhone 16 Pro 256GB Preto',
   };
 
-  function makeService() {
+  function makeService(offers = [exactOffer, similarOffer]) {
     const prisma = {
       tenant: { findMany: jest.fn().mockResolvedValue([{ id: 'tenant-1' }]) },
+      marketplaceIntegration: {
+        findMany: jest.fn().mockResolvedValue([{ provider: 'SHOPEE' }]),
+      },
       offer: {
-        findMany: jest.fn().mockResolvedValue([exactOffer, similarOffer]),
+        findMany: jest.fn().mockResolvedValue(offers),
       },
       affiliateLink: {
         findUnique: jest.fn().mockResolvedValue({ id: 'affiliate-1' }),
@@ -38,12 +41,10 @@ describe('PublicSearchService', () => {
       },
     } as any;
     const offersService = {
-      verifyMonetization: jest
-        .fn()
-        .mockResolvedValue({
-          status: 'VERIFIED',
-          affiliateUrl: 'https://s.shopee.com.br/verified',
-        }),
+      verifyMonetization: jest.fn().mockResolvedValue({
+        status: 'VERIFIED',
+        affiliateUrl: 'https://s.shopee.com.br/verified',
+      }),
     } as any;
     return {
       service: new PublicSearchService(prisma, offersService),
@@ -74,5 +75,34 @@ describe('PublicSearchService', () => {
 
     expect(result.status).toBe('NO_EXACT_MATCH');
     expect(result.recommendation).toBeUndefined();
+  });
+
+  it.each([
+    ['iPhone', 'Microfone de lapela compatível com iPhone'],
+    ['TV', 'Base suporte para TV'],
+    ['notebook', 'Mochila para notebook'],
+  ])(
+    'does not present %s accessories as the main product',
+    async (query, title) => {
+      const accessory = { ...exactOffer, id: `accessory-${query}`, title };
+      const { service, offersService } = makeService([accessory]);
+
+      const result = await service.search(query);
+
+      expect(result.status).toBe('NO_EXACT_MATCH');
+      expect(offersService.verifyMonetization).not.toHaveBeenCalled();
+    },
+  );
+
+  it('accepts a product title with descriptive words and preserves the variant', async () => {
+    const candidate = {
+      ...exactOffer,
+      title: 'Apple iPhone 17 Pro Max 256GB 5G Tela Super Retina',
+    };
+    const { service } = makeService([candidate]);
+
+    const result = await service.search('iPhone 17 Pro Max 256 GB');
+
+    expect(result.status).toBe('FOUND');
   });
 });
