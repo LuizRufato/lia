@@ -18,6 +18,12 @@ export interface EvolutionGroup {
   participants: number;
 }
 
+export interface EvolutionImageMessage {
+  mediaUrl: string;
+  caption: string;
+  fileName?: string;
+}
+
 export class WhatsAppEvolutionProvider {
   private api: AxiosInstance;
 
@@ -293,6 +299,73 @@ export class WhatsAppEvolutionProvider {
     text: string,
   ): Promise<string | null> {
     return this.sendTextMessage(instanceName, token, groupJid, text);
+  }
+
+  async sendGroupMediaMessage(
+    instanceName: string,
+    token: string,
+    groupJid: string,
+    media: EvolutionImageMessage,
+  ): Promise<string | null> {
+    return this.sendMediaMessage(instanceName, token, groupJid, media);
+  }
+
+  private async sendMediaMessage(
+    instanceName: string,
+    token: string,
+    number: string,
+    media: EvolutionImageMessage,
+  ): Promise<string | null> {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(media.mediaUrl);
+    } catch {
+      throw new Error("Imagem de publicação inválida");
+    }
+    if (parsedUrl.protocol !== "https:") {
+      throw new Error("Imagem de publicação inválida");
+    }
+
+    const extension = parsedUrl.pathname
+      .toLowerCase()
+      .match(/\.(jpe?g|png|webp|gif)$/)?.[1];
+    const mimetype =
+      extension === "png"
+        ? "image/png"
+        : extension === "webp"
+          ? "image/webp"
+          : extension === "gif"
+            ? "image/gif"
+            : "image/jpeg";
+    try {
+      const response = await this.api.post(
+        `/message/sendMedia/${instanceName}`,
+        {
+          number,
+          mediatype: "image",
+          mimetype,
+          caption: media.caption,
+          media: media.mediaUrl,
+          fileName: media.fileName || `lia-product.${extension || "jpg"}`,
+        },
+        { headers: { apikey: token } },
+      );
+      return response.data?.key?.id || response.data?.message?.key?.id || null;
+    } catch (error: any) {
+      const status = error.response?.status;
+      if (!status || status >= 500 || error.code === "ECONNABORTED") {
+        throw new Error("WhatsApp provider media response ambiguous");
+      }
+      const providerMessage = error.response?.data?.message;
+      const safeMessage = Array.isArray(providerMessage)
+        ? providerMessage.map(String).join("; ")
+        : typeof providerMessage === "string"
+          ? providerMessage
+          : "Provider rejected the media request";
+      throw new Error(
+        `Evolution sendMedia rejected request (HTTP ${status}): ${safeMessage.slice(0, 240)}`,
+      );
+    }
   }
 
   private async sendTextMessage(

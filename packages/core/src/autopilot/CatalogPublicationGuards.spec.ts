@@ -64,6 +64,70 @@ describe("CatalogPublicationGuards", () => {
     expect(result.until).toEqual(new Date("2026-08-26T12:00:00Z"));
   });
 
+  it("starts cooldown at successful publication time", () => {
+    const result = findProductCooldown(
+      [
+        record({
+          createdAt: new Date("2026-08-25T10:00:00Z"),
+          publishedAt: new Date("2026-08-25T14:00:00Z"),
+        }),
+      ],
+      {
+        tenantId: "tenant-1",
+        channelId: "channel-a",
+        externalId: "item-1",
+        now,
+        cooldownHours: 2,
+      },
+    );
+    expect(result.until).toEqual(new Date("2026-08-25T16:00:00Z"));
+  });
+
+  it("does not start cooldown for an uncertain delivery", () => {
+    expect(
+      findProductCooldown([record({ status: "DELIVERY_UNKNOWN" })], {
+        tenantId: "tenant-1",
+        channelId: "channel-a",
+        externalId: "item-1",
+        now,
+        cooldownHours: 24,
+      }).active,
+    ).toBe(false);
+  });
+
+  it("uses a stable canonical identity when available", () => {
+    expect(
+      findProductCooldown(
+        [record({ externalId: "listing-a", productIdentity: "product-1" })],
+        {
+          tenantId: "tenant-1",
+          channelId: "channel-a",
+          externalId: "listing-b",
+          productIdentity: "product-1",
+          now,
+          cooldownHours: 24,
+        },
+      ).active,
+    ).toBe(true);
+  });
+
+  it("keeps a five-day product cooldown until it has actually expired", () => {
+    const publishedAt = new Date("2026-08-25T15:00:00Z");
+    const cooldown = (current: string) =>
+      findProductCooldown([record({ createdAt: publishedAt, publishedAt })], {
+        tenantId: "tenant-1",
+        channelId: "channel-a",
+        externalId: "item-1",
+        now: new Date(current),
+        cooldownHours: 5 * 24,
+      }).active;
+
+    expect(cooldown("2026-08-25T15:05:00Z")).toBe(true);
+    expect(cooldown("2026-08-26T15:00:00Z")).toBe(true);
+    expect(cooldown("2026-08-29T15:00:00Z")).toBe(true);
+    expect(cooldown("2026-08-30T15:00:01Z")).toBe(false);
+  });
+
   it("does not treat another tenant or product as the same stable identity", () => {
     expect(
       findProductCooldown([record({ tenantId: "tenant-2" })], {

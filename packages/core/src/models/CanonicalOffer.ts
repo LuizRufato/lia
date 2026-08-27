@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIP } from "node:net";
 
 export const CanonicalOfferSchema = z.object({
   marketplace: z.string().min(1),
@@ -77,7 +78,31 @@ export function firstHttpsImageUrl(images: unknown): string | null {
     if (typeof candidate !== "string") continue;
     try {
       const parsed = new URL(candidate);
-      if (parsed.protocol === "https:") return parsed.toString();
+      const hostname = parsed.hostname.toLowerCase();
+      const ipVersion = isIP(hostname);
+      const privateIpv4 =
+        ipVersion === 4 &&
+        (/^(10|127)\./.test(hostname) ||
+          /^192\.168\./.test(hostname) ||
+          /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname) ||
+          /^169\.254\./.test(hostname) ||
+          /^0\./.test(hostname));
+      const privateIpv6 =
+        ipVersion === 6 &&
+        (hostname === "::1" ||
+          hostname.startsWith("fc") ||
+          hostname.startsWith("fd") ||
+          hostname.startsWith("fe80:"));
+      if (
+        parsed.protocol === "https:" &&
+        !parsed.username &&
+        !parsed.password &&
+        hostname !== "localhost" &&
+        !hostname.endsWith(".local") &&
+        !privateIpv4 &&
+        !privateIpv6
+      )
+        return parsed.toString();
     } catch {
       // Invalid image URLs are treated as absent data.
     }

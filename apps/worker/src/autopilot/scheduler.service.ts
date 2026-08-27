@@ -140,7 +140,8 @@ export class AutopilotSchedulerService
       minScore: dbConfig.minScore.toNumber(),
       minimumCommissionCents: dbConfig.minimumCommissionCents,
       maxDailyPosts: dbConfig.maxDailyPosts,
-      intervalMinutes: dbConfig.intervalMinutes,
+      intervalMinutes:
+        dbConfig.minSendIntervalMinutes != null ? 0 : dbConfig.intervalMinutes,
       enabledChannelIds: dbConfig.enabledChannels.map((c: any) => c.channelId),
       enabledMarketplaceIds: dbConfig.enabledMarketplaces.map(
         (m: any) => m.marketplaceId,
@@ -225,6 +226,23 @@ export class AutopilotSchedulerService
         'Fora da janela de publicação do tenant.',
         eligibleEvaluation.id,
         0,
+      );
+      return;
+    }
+
+    if (
+      configSnapshot.mode === AutopilotMode.AUTO &&
+      dbConfig.nextEligibleSendAt &&
+      dbConfig.nextEligibleSendAt > now
+    ) {
+      await this.deferCandidate(
+        dbConfig,
+        candidate,
+        'DEFERRED_INTERVAL',
+        dbConfig.nextEligibleSendAt,
+        'Cadência variável de envio ainda não liberou uma nova publicação.',
+        eligibleEvaluation.id,
+        eligibleEvaluation.score?.toNumber() ?? 0,
       );
       return;
     }
@@ -335,6 +353,10 @@ export class AutopilotSchedulerService
           dbConfig.timezone,
           decision.channelId,
           dbOffer.externalId,
+          this.getProductIdentity(
+            dbOffer,
+            eligibleEvaluation.observation.canonicalPayload,
+          ),
           catalogSignals.category,
           catalogPolicy,
           now,
@@ -549,6 +571,16 @@ export class AutopilotSchedulerService
     };
   }
 
+  private getProductIdentity(offer: any, canonicalPayload: any): string {
+    const provider = offer?.marketplace?.type || 'UNKNOWN';
+    const externalProductId =
+      typeof canonicalPayload?.externalProductId === 'string' &&
+      canonicalPayload.externalProductId.trim()
+        ? canonicalPayload.externalProductId.trim()
+        : offer?.externalId || '';
+    return `${provider}:${externalProductId}`;
+  }
+
   private async rejectCatalogCandidate(
     dbConfig: any,
     candidate: any,
@@ -591,6 +623,7 @@ export class AutopilotSchedulerService
     timezone: string,
     channelId: string,
     externalId: string,
+    productIdentity: string,
     category: string | null,
     policy: CatalogPolicyConfig & {
       productCooldownHours: number | null;
@@ -642,7 +675,14 @@ export class AutopilotSchedulerService
                 observation: {
                   select: {
                     category: true,
-                    offer: { select: { externalId: true, title: true } },
+                    canonicalPayload: true,
+                    offer: {
+                      select: {
+                        externalId: true,
+                        title: true,
+                        marketplace: { select: { type: true } },
+                      },
+                    },
                   },
                 },
               },
@@ -658,6 +698,10 @@ export class AutopilotSchedulerService
         externalId:
           publication.candidate?.evaluation?.observation?.offer?.externalId ||
           '',
+        productIdentity: this.getProductIdentity(
+          publication.candidate?.evaluation?.observation?.offer,
+          publication.candidate?.evaluation?.observation?.canonicalPayload,
+        ),
         category: classifyCommercialCategory({
           title: publication.candidate?.evaluation?.observation?.offer?.title,
           rawCategory: publication.candidate?.evaluation?.observation?.category,
@@ -673,6 +717,7 @@ export class AutopilotSchedulerService
         tenantId,
         channelId,
         externalId,
+        productIdentity,
         now,
         cooldownHours: policy.productCooldownHours,
       });

@@ -129,6 +129,45 @@ describe("WhatsAppEvolutionProvider lifecycle safety", () => {
     );
   });
 
+  it("sends a validated image URL with the rendered caption", async () => {
+    api.post.mockResolvedValueOnce({ data: { key: { id: "media-id" } } });
+    await expect(
+      new WhatsAppEvolutionProvider().sendGroupMediaMessage(
+        "lia-tenant",
+        "instance-key",
+        "120@g.us",
+        {
+          mediaUrl: "https://cdn.example/product.png?sig=1",
+          caption: "Oferta atualizada",
+        },
+      ),
+    ).resolves.toBe("media-id");
+    expect(api.post).toHaveBeenCalledWith(
+      "/message/sendMedia/lia-tenant",
+      {
+        number: "120@g.us",
+        mediatype: "image",
+        mimetype: "image/png",
+        caption: "Oferta atualizada",
+        media: "https://cdn.example/product.png?sig=1",
+        fileName: "lia-product.png",
+      },
+      { headers: { apikey: "instance-key" } },
+    );
+  });
+
+  it("rejects non-HTTPS media URLs before calling Evolution", async () => {
+    await expect(
+      new WhatsAppEvolutionProvider().sendGroupMediaMessage(
+        "lia-tenant",
+        "instance-key",
+        "120@g.us",
+        { mediaUrl: "http://private.example/product.jpg", caption: "Oferta" },
+      ),
+    ).rejects.toThrow("Imagem de publicação inválida");
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it("returns a sanitized provider message for a rejected 4xx request without secrets", async () => {
     api.post.mockRejectedValueOnce({
       response: {

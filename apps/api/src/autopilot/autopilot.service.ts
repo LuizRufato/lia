@@ -19,6 +19,7 @@ import {
   normalizeCatalogList,
   normalizeCatalogText,
   getRedisConfig,
+  validateSendPacing,
 } from '@lia/core';
 
 export const CONTROLLED_ONE_SHOT_CONFIRMATION = 'CONTROLLED_ONE_SHOT_REAL';
@@ -223,6 +224,9 @@ export class AutopilotService {
         allowedStartMinute: config.allowedStartMinute,
         allowedEndMinute: config.allowedEndMinute,
         intervalMinutes: config.intervalMinutes,
+        minSendIntervalMinutes: config.minSendIntervalMinutes,
+        maxSendIntervalMinutes: config.maxSendIntervalMinutes,
+        nextEligibleSendAt: config.nextEligibleSendAt,
         minScore: config.minScore.toNumber(),
         minimumCommissionCents: config.minimumCommissionCents,
         maxDailyPosts: config.maxDailyPosts,
@@ -353,6 +357,8 @@ export class AutopilotService {
       allowedStartMinute,
       allowedEndMinute,
       intervalMinutes,
+      minSendIntervalMinutes,
+      maxSendIntervalMinutes,
       minScore,
       minimumCommissionCents,
       maxDailyPosts,
@@ -381,6 +387,35 @@ export class AutopilotService {
       minimumCommissionCents < 0
     ) {
       throw new BadRequestException('Configuração do Autopilot inválida.');
+    }
+
+    const pacingProvided =
+      minSendIntervalMinutes !== undefined ||
+      maxSendIntervalMinutes !== undefined;
+    let pacingPatch: {
+      minSendIntervalMinutes?: number | null;
+      maxSendIntervalMinutes?: number | null;
+    } = {};
+    if (pacingProvided) {
+      if (minSendIntervalMinutes === null && maxSendIntervalMinutes === null) {
+        pacingPatch = {
+          minSendIntervalMinutes: null,
+          maxSendIntervalMinutes: null,
+        };
+      } else {
+        try {
+          const pacing = validateSendPacing(
+            minSendIntervalMinutes,
+            maxSendIntervalMinutes,
+          );
+          pacingPatch = {
+            minSendIntervalMinutes: pacing.minMinutes,
+            maxSendIntervalMinutes: pacing.maxMinutes,
+          };
+        } catch {
+          throw new BadRequestException('Cadência de envio inválida.');
+        }
+      }
     }
 
     const normalizedCatalogPolicy =
@@ -444,6 +479,7 @@ export class AutopilotService {
           minimumCommissionCents,
           maxDailyPosts,
           timezone,
+          ...pacingPatch,
         },
         create: {
           tenantId,
@@ -455,6 +491,7 @@ export class AutopilotService {
           minimumCommissionCents,
           maxDailyPosts,
           timezone,
+          ...pacingPatch,
         },
       });
       await tx.autopilotChannelConfig.deleteMany({

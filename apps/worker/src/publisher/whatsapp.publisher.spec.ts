@@ -17,6 +17,9 @@ jest.mock('@lia/integrations', () => {
     }),
     WhatsAppEvolutionProvider: jest.fn().mockImplementation(() => ({
       sendGroupMessage: jest.fn().mockResolvedValue('evolution-message'),
+      sendGroupMediaMessage: jest
+        .fn()
+        .mockResolvedValue('evolution-media-message'),
     })),
     getEncryptionKey: jest.fn().mockReturnValue('key'),
     decryptSecret: jest.fn().mockReturnValue('instance-token'),
@@ -132,5 +135,69 @@ describe('WhatsAppPublisher', () => {
     expect(provider.sendGroupMessage.mock.calls[0][3]).not.toContain(
       'undefined',
     );
+  });
+
+  it('uses the latest saved template and sends the product image as media', async () => {
+    const mockChannel = {
+      id: 'chan1',
+      externalChatId: 'group@g.us',
+      tenantId: 'tenant1',
+      tenant: {
+        channelIntegrations: [
+          {
+            provider: 'WHATSAPP',
+            status: 'CONNECTED',
+            transport: 'WEB_UNOFFICIAL',
+            externalInstanceName: 'lia',
+            encryptedAccessToken: 'encrypted',
+            tokenIv: 'iv',
+            tokenAuthTag: 'tag',
+          },
+        ],
+      },
+    };
+    (prismaService.channel.findUnique as jest.Mock).mockResolvedValue(
+      mockChannel,
+    );
+    (prismaService as any).publicationTemplate = {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          name: 'Editado agora',
+          type: 'ACHADINHO',
+          enabled: true,
+          isDefault: true,
+          priority: 100,
+          ctaMode: 'CUSTOM',
+          customCta: 'Abrir agora',
+          body: 'EDITADO {titulo} {link}',
+        },
+      ]),
+    };
+
+    await publisher.publish(
+      'offer1',
+      'pub1',
+      'chan1',
+      'https://go.botlia.com.br/slug',
+      'Oferta real',
+      1250,
+      null,
+      undefined,
+      'https://cdn.example/product.jpg',
+    );
+
+    const provider = (WhatsAppEvolutionProvider as jest.Mock).mock.results.at(
+      -1,
+    )?.value;
+    expect(provider.sendGroupMediaMessage).toHaveBeenCalledWith(
+      'lia',
+      'instance-token',
+      'group@g.us',
+      expect.objectContaining({
+        mediaUrl: 'https://cdn.example/product.jpg',
+        caption: expect.stringContaining('EDITADO Oferta real'),
+      }),
+    );
+    expect(provider.sendGroupMessage).not.toHaveBeenCalled();
   });
 });

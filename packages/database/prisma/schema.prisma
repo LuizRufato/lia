@@ -618,6 +618,10 @@ model AutopilotConfig {
   minimumCommissionCents Int     @default(500)
   maxDailyPosts          Int     @default(30)
   intervalMinutes        Int     @default(30)
+  minSendIntervalMinutes Int?
+  maxSendIntervalMinutes Int?
+  nextEligibleSendAt     DateTime?
+  sendLeaseUntil         DateTime?
 
   enabledChannels     AutopilotChannelConfig[]
   enabledMarketplaces AutopilotMarketplaceConfig[]

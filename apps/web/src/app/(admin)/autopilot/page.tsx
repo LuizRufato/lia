@@ -78,6 +78,8 @@ export default function AutopilotDashboard() {
     minimumCommissionCents: 500,
     maxDailyPosts: 0,
     intervalMinutes: 0,
+    minSendIntervalMinutes: null as number | null,
+    maxSendIntervalMinutes: null as number | null,
     allowedStartMinute: 0,
     allowedEndMinute: 0,
     timezone: "America/Campo_Grande",
@@ -115,6 +117,8 @@ export default function AutopilotDashboard() {
           minimumCommissionCents: json.config.minimumCommissionCents,
           maxDailyPosts: json.config.maxDailyPosts,
           intervalMinutes: json.config.intervalMinutes,
+          minSendIntervalMinutes: json.config.minSendIntervalMinutes ?? null,
+          maxSendIntervalMinutes: json.config.maxSendIntervalMinutes ?? null,
           allowedStartMinute: json.config.allowedStartMinute,
           allowedEndMinute: json.config.allowedEndMinute,
           timezone: json.config.timezone || "America/Campo_Grande",
@@ -184,6 +188,14 @@ export default function AutopilotDashboard() {
         minimumCommissionCents: Number(form.minimumCommissionCents),
         maxDailyPosts: Number(form.maxDailyPosts),
         intervalMinutes: Number(form.intervalMinutes),
+        minSendIntervalMinutes:
+          form.minSendIntervalMinutes == null
+            ? null
+            : Number(form.minSendIntervalMinutes),
+        maxSendIntervalMinutes:
+          form.maxSendIntervalMinutes == null
+            ? null
+            : Number(form.maxSendIntervalMinutes),
         allowedStartMinute: Number(form.allowedStartMinute),
         allowedEndMinute: Number(form.allowedEndMinute),
         catalogPolicy: form.catalogPolicy,
@@ -353,6 +365,20 @@ export default function AutopilotDashboard() {
             </h2>
             <p className="mt-1 text-sm text-gray-500">
               Saúde operacional baseada no heartbeat e nos dados já processados.
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+              Próximo envio elegível
+            </p>
+            <p className="mt-1 font-semibold text-gray-900">
+              {data.config?.nextEligibleSendAt
+                ? formatDateTime(data.config.nextEligibleSendAt)
+                : "Após uma publicação"}
+            </p>
+            <p className="text-xs text-gray-500">
+              Só é usado quando a cadência variável está configurada.
             </p>
           </div>
           <span
@@ -593,6 +619,56 @@ export default function AutopilotDashboard() {
                         minutos
                       </span>
                     </div>
+                  </div>
+
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                    <p className="text-sm font-semibold text-gray-700">
+                      Cadência de publicações
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <label className="text-xs font-medium text-gray-600">
+                        Mínimo (min)
+                        <input
+                          type="number"
+                          min="1"
+                          value={form.minSendIntervalMinutes ?? ""}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              minSendIntervalMinutes:
+                                e.target.value === ""
+                                  ? null
+                                  : Number(e.target.value),
+                            })
+                          }
+                          className="mt-1 w-full rounded-md border border-gray-300 p-2 text-sm"
+                          placeholder="Desativado"
+                        />
+                      </label>
+                      <label className="text-xs font-medium text-gray-600">
+                        Máximo (min)
+                        <input
+                          type="number"
+                          min="1"
+                          value={form.maxSendIntervalMinutes ?? ""}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              maxSendIntervalMinutes:
+                                e.target.value === ""
+                                  ? null
+                                  : Number(e.target.value),
+                            })
+                          }
+                          className="mt-1 w-full rounded-md border border-gray-300 p-2 text-sm"
+                          placeholder="Desativado"
+                        />
+                      </label>
+                    </div>
+                    <p className="mt-2 text-xs text-gray-500">
+                      A LIA aguarda um intervalo variável dentro dessa faixa
+                      entre publicações.
+                    </p>
                   </div>
                 </div>
               </div>

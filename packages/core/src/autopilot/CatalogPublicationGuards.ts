@@ -4,6 +4,7 @@ export interface CatalogPublicationRecord {
   tenantId: string;
   channelId: string;
   externalId: string;
+  productIdentity?: string;
   category: string | null;
   status: "PUBLISHED" | "DELIVERY_UNKNOWN" | string;
   createdAt: Date;
@@ -16,27 +17,34 @@ export function findProductCooldown(
     tenantId: string;
     channelId: string;
     externalId: string;
+    productIdentity?: string;
     now: Date;
     cooldownHours: number;
   },
 ): { active: boolean; until: Date | null } {
   const cutoff = input.now.getTime() - input.cooldownHours * 60 * 60 * 1000;
+  const identity = input.productIdentity || input.externalId;
   const match = records
     .filter(
       (record) =>
         record.tenantId === input.tenantId &&
         record.channelId === input.channelId &&
-        record.externalId === input.externalId &&
-        ["PUBLISHED", "DELIVERY_UNKNOWN"].includes(record.status) &&
-        record.createdAt.getTime() >= cutoff,
+        (record.productIdentity || record.externalId) === identity &&
+        record.status === "PUBLISHED" &&
+        (record.publishedAt || record.createdAt).getTime() >= cutoff,
     )
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+    .sort(
+      (a, b) =>
+        (b.publishedAt || b.createdAt).getTime() -
+        (a.publishedAt || a.createdAt).getTime(),
+    )[0];
 
   return match
     ? {
         active: true,
         until: new Date(
-          match.createdAt.getTime() + input.cooldownHours * 60 * 60 * 1000,
+          (match.publishedAt || match.createdAt).getTime() +
+            input.cooldownHours * 60 * 60 * 1000,
         ),
       }
     : { active: false, until: null };

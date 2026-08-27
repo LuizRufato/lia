@@ -4,7 +4,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { randomBytes } from 'crypto';
-import { PublishCandidateJobData } from '@lia/core';
+import {
+  PublishCandidateJobData,
+  firstHttpsImageUrl,
+  findProductCooldown,
+  randomSendDelayMs,
+  validateSendPacing,
+} from '@lia/core';
 import { WhatsAppPublisher } from './whatsapp.publisher';
 import { WhatsAppSafetyGovernor } from './whatsapp-safety-governor';
 
@@ -427,6 +433,46 @@ export class PublisherProcessor extends WorkerHost {
       };
     }
 
+    if (
+      !affiliateUrl ||
+      offer.marketplace.type !== 'SHOPEE' ||
+      (!affiliateUrl.includes('shopee') && !affiliateUrl.includes('shope.ee'))
+    ) {
+      throw new Error(
+        'Bloqueio Crítico: Tentativa de injetar productLink bruto no rastreador. É exigido AffiliateUrl verificado.',
+      );
+    }
+
+    const sendLease = await this.claimSendLease(
+      offer.tenantId,
+      channel.id,
+      new Date(),
+    );
+    if (!sendLease.acquired) {
+      return {
+        failed: true,
+        reason: 'SAFETY_GOVERNOR',
+        deferredReason: 'SEND_PACING',
+        retryAt: sendLease.retryAt,
+      };
+    }
+
+    const productCooldown = await this.findProductCooldown(
+      offer,
+      channel.id,
+      candidate.evaluation.observation.canonicalPayload,
+      new Date(),
+    );
+    if (productCooldown.active) {
+      await this.releaseSendLease(offer.tenantId);
+      return {
+        failed: true,
+        reason: 'SAFETY_GOVERNOR',
+        deferredReason: 'PRODUCT_COOLDOWN',
+        retryAt: productCooldown.until || new Date(Date.now() + 60_000),
+      };
+    }
+
     // 3. Idempotent Publication Creation
     let publication;
     try {
@@ -442,6 +488,7 @@ export class PublisherProcessor extends WorkerHost {
         this.logger.warn(
           `Publication already exists for candidate ${candidate.id} and channel ${channel.id}. Skipping to prevent duplication.`,
         );
+        await this.releaseSendLease(offer.tenantId);
         return { skipped: true, reason: 'Duplicate' };
       }
       throw error;
@@ -449,16 +496,6 @@ export class PublisherProcessor extends WorkerHost {
 
     // 4. Create TrackedLink
     // Slug generation with retry on collision (P2002)
-    if (
-      !affiliateUrl ||
-      offer.marketplace.type !== 'SHOPEE' ||
-      (!affiliateUrl.includes('shopee') && !affiliateUrl.includes('shope.ee'))
-    ) {
-      throw new Error(
-        'Bloqueio Crítico: Tentativa de injetar productLink bruto no rastreador. É exigido AffiliateUrl verificado.',
-      );
-    }
-
     let slug = '';
     let linkId = '';
     let retryCount = 0;
@@ -531,6 +568,13 @@ export class PublisherProcessor extends WorkerHost {
       } else if (channel.provider === 'WHATSAPP') {
         // Obter desconto
         const discountBps = offer.priceHistories?.[0]?.discountBps || null;
+        const canonicalImages = Array.isArray(
+          (candidate.evaluation.observation.canonicalPayload as any)?.product
+            ?.images,
+        )
+          ? (candidate.evaluation.observation.canonicalPayload as any).product
+              .images
+          : [];
         messageId = await this.whatsappPublisher.publish(
           offer.id,
           publication.id,
@@ -555,6 +599,7 @@ export class PublisherProcessor extends WorkerHost {
               offer.marketplace?.name || offer.marketplace?.type || 'Shopee',
             category: candidate.evaluation.observation.category,
           },
+          firstHttpsImageUrl([...canonicalImages, offer.imageUrl]),
         );
       } else {
         throw new Error(`Provider ${channel.provider} not supported`);
@@ -571,18 +616,22 @@ export class PublisherProcessor extends WorkerHost {
               'Provider não retornou messageId; entrega desconhecida.',
           },
         });
+        await this.releaseSendLease(offer.tenantId);
         return { failed: true, reason: 'DELIVERY_UNKNOWN' };
       }
 
       // 6. Success -> Save messageId
+      const sentAt = new Date();
       await this.prisma.publication.update({
         where: { id: publication.id },
         data: {
           status: 'PUBLISHED',
           externalMessageId: messageId,
-          publishedAt: new Date(),
+          publishedAt: sentAt,
         },
       });
+
+      await this.completeSendLease(offer.tenantId, sentAt);
 
       if (channel.provider === 'WHATSAPP') {
         await this.whatsappSafetyGovernor.recordSuccess(channel.tenantId);
@@ -594,6 +643,7 @@ export class PublisherProcessor extends WorkerHost {
       if (channel.provider === 'WHATSAPP') {
         await this.whatsappSafetyGovernor.recordFailure(channel.tenantId);
       }
+      await this.releaseSendLease(offer.tenantId);
       const isRateLimit = error.status === 429;
       const isNetworkTimeout =
         error.code === 'ECONNABORTED' || (error.request && !error.response);
@@ -635,6 +685,178 @@ export class PublisherProcessor extends WorkerHost {
         return { failed: true, reason: error.message };
       }
     }
+  }
+
+  private async claimSendLease(tenantId: string, channelId: string, now: Date) {
+    const current = await this.prisma.autopilotConfig.findUnique({
+      where: { tenantId },
+      select: { id: true, nextEligibleSendAt: true, intervalMinutes: true },
+    });
+    if (!current) return { acquired: true, retryAt: null as Date | null };
+    let retryAt = current.nextEligibleSendAt;
+    if (!retryAt && current.intervalMinutes > 0) {
+      const lastPublication = await this.prisma.publication.findFirst({
+        where: { channel: { tenantId }, status: 'PUBLISHED' },
+        orderBy: { publishedAt: 'desc' },
+        select: { publishedAt: true, createdAt: true },
+      });
+      if (lastPublication) {
+        const lastSentAt =
+          lastPublication.publishedAt || lastPublication.createdAt;
+        retryAt = new Date(
+          lastSentAt.getTime() + current.intervalMinutes * 60_000,
+        );
+      }
+    }
+    if (retryAt && retryAt > now) {
+      return { acquired: false, retryAt };
+    }
+
+    const leaseUntil = new Date(now.getTime() + 5 * 60_000);
+    const claimed = await this.prisma.autopilotConfig.updateMany({
+      where: {
+        id: current.id,
+        AND: [
+          {
+            OR: [
+              { nextEligibleSendAt: null },
+              { nextEligibleSendAt: { lte: now } },
+            ],
+          },
+          {
+            OR: [{ sendLeaseUntil: null }, { sendLeaseUntil: { lte: now } }],
+          },
+        ],
+      },
+      data: { sendLeaseUntil: leaseUntil },
+    });
+    return {
+      acquired: claimed.count === 1,
+      retryAt: claimed.count ? null : new Date(now.getTime() + 60_000),
+    };
+  }
+
+  private async releaseSendLease(tenantId: string) {
+    await this.prisma.autopilotConfig.updateMany({
+      where: { tenantId },
+      data: { sendLeaseUntil: null },
+    });
+  }
+
+  private async completeSendLease(tenantId: string, sentAt: Date) {
+    const config = await this.prisma.autopilotConfig.findUnique({
+      where: { tenantId },
+      select: {
+        minSendIntervalMinutes: true,
+        maxSendIntervalMinutes: true,
+        intervalMinutes: true,
+      },
+    });
+    let nextEligibleSendAt: Date | null = null;
+    if (
+      config?.minSendIntervalMinutes != null &&
+      config.maxSendIntervalMinutes != null
+    ) {
+      const pacing = validateSendPacing(
+        config.minSendIntervalMinutes,
+        config.maxSendIntervalMinutes,
+      );
+      nextEligibleSendAt = new Date(
+        sentAt.getTime() + randomSendDelayMs(pacing),
+      );
+    } else if (config && config.intervalMinutes > 0) {
+      nextEligibleSendAt = new Date(
+        sentAt.getTime() + config.intervalMinutes * 60_000,
+      );
+    }
+    await this.prisma.autopilotConfig.updateMany({
+      where: { tenantId },
+      data: { nextEligibleSendAt, sendLeaseUntil: null },
+    });
+  }
+
+  private async findProductCooldown(
+    offer: any,
+    channelId: string,
+    canonicalPayload: any,
+    now: Date,
+  ) {
+    const policy = await this.prisma.autopilotCatalogPolicy.findFirst({
+      where: { autopilotConfig: { tenantId: offer.tenantId } },
+      select: { productCooldownHours: true },
+    });
+    if (policy?.productCooldownHours == null) {
+      return { active: false, until: null as Date | null };
+    }
+
+    const from = new Date(
+      now.getTime() - policy.productCooldownHours * 60 * 60 * 1000,
+    );
+    const publications = await this.prisma.publication.findMany({
+      where: {
+        channelId,
+        status: 'PUBLISHED',
+        createdAt: { lte: now },
+        OR: [{ createdAt: { gte: from } }, { publishedAt: { gte: from } }],
+      },
+      select: {
+        channelId: true,
+        status: true,
+        createdAt: true,
+        publishedAt: true,
+        candidate: {
+          select: {
+            evaluation: {
+              select: {
+                observation: {
+                  select: {
+                    canonicalPayload: true,
+                    offer: {
+                      select: {
+                        externalId: true,
+                        marketplace: { select: { type: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const records = publications.map((publication: any) => ({
+      tenantId: offer.tenantId,
+      channelId: publication.channelId,
+      externalId:
+        publication.candidate?.evaluation?.observation?.offer?.externalId || '',
+      productIdentity: this.getProductIdentity(
+        publication.candidate?.evaluation?.observation?.offer,
+        publication.candidate?.evaluation?.observation?.canonicalPayload,
+      ),
+      category: null,
+      status: publication.status,
+      createdAt: publication.createdAt,
+      publishedAt: publication.publishedAt,
+    }));
+    return findProductCooldown(records, {
+      tenantId: offer.tenantId,
+      channelId,
+      externalId: offer.externalId,
+      productIdentity: this.getProductIdentity(offer, canonicalPayload),
+      now,
+      cooldownHours: policy.productCooldownHours,
+    });
+  }
+
+  private getProductIdentity(offer: any, canonicalPayload: any): string {
+    const provider = offer?.marketplace?.type || 'UNKNOWN';
+    const externalProductId =
+      typeof canonicalPayload?.externalProductId === 'string' &&
+      canonicalPayload.externalProductId.trim()
+        ? canonicalPayload.externalProductId.trim()
+        : offer?.externalId || '';
+    return `${provider}:${externalProductId}`;
   }
 
   @OnWorkerEvent('failed')
