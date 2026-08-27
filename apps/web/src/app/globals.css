@@ -110,6 +110,14 @@
     transform 0.2s,
     box-shadow 0.2s;
 }
+.landing-page a.primary-button,
+.landing-page a.primary-button:link,
+.landing-page a.primary-button:visited,
+.landing-page a.primary-button:hover,
+.landing-page a.primary-button:focus-visible,
+.landing-page a.primary-button:active {
+  color: #fff;
+}
 .primary-button:hover {
   transform: translateY(-2px);
   box-shadow: 0 14px 25px rgba(20, 104, 237, 0.28);
