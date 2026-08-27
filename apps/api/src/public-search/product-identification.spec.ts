@@ -1,5 +1,6 @@
 import {
   assertSafePublicUrl,
+  areCompatibleProductVariants,
   createProductIdentity,
   identifyProduct,
   isAccessoryCandidate,
@@ -49,8 +50,42 @@ describe('public product identification', () => {
     },
   );
 
+  it.each(['Mercado Livre', 'Amazon'])(
+    'does not require SEO-only URL metadata tokens for %s',
+    (marketplace) => {
+      const textIdentity = createProductIdentity('iPhone 17 Pro Max 256 GB', {
+        name: 'iPhone 17 Pro Max 256 GB',
+        source: 'TEXT',
+      });
+      const urlIdentity = createProductIdentity('https://example.com/item', {
+        name: `Apple iPhone 17 Pro Max 256GB 5G Titânio Natural - Frete Grátis | ${marketplace}`,
+        brand: 'Apple',
+        source: 'URL_METADATA',
+      });
+
+      expect(urlIdentity.coreTokens).toEqual(textIdentity.coreTokens);
+      expect(urlIdentity.hardVariantTokens).toEqual(
+        textIdentity.hardVariantTokens,
+      );
+      expect(urlIdentity.tokens).toEqual(textIdentity.tokens);
+      const candidateTokens = tokenizeSearchText(
+        'Apple iPhone 17 Pro Max 256GB Smartphone',
+      );
+      expect(candidateTokens).toEqual(
+        expect.arrayContaining(textIdentity.tokens),
+      );
+      expect(candidateTokens).toEqual(
+        expect.arrayContaining(urlIdentity.tokens),
+      );
+      expect(urlIdentity.optionalTokens).toEqual(
+        expect.arrayContaining(['apple', '5g', 'titanio', 'natural']),
+      );
+    },
+  );
+
   it.each([
     ['iPhone', 'Microfone de lapela compatível com iPhone'],
+    ['iPhone', 'Capa anti impacto para iPhone'],
     ['TV', 'Base suporte para TV'],
     ['notebook', 'Mochila para notebook'],
   ])('rejects an accessory for generic product %s', (query, candidate) => {
@@ -74,6 +109,18 @@ describe('public product identification', () => {
     expect(
       isCompatibleProductType(identity, 'Apple iPhone 17 Pro Max 512GB'),
     ).toBe(true);
+    expect(
+      areCompatibleProductVariants(identity, 'Apple iPhone 17 Pro Max 512GB'),
+    ).toBe(false);
+    expect(
+      areCompatibleProductVariants(
+        createProductIdentity('iPhone 17 Pro', {
+          name: 'iPhone 17 Pro',
+          source: 'TEXT',
+        }),
+        'Apple iPhone 17 Pro Max 256GB',
+      ),
+    ).toBe(false);
     expect(tokenizeSearchText('Apple iPhone 17 Pro Max 512GB')).not.toEqual(
       expect.arrayContaining(['256', 'gb']),
     );

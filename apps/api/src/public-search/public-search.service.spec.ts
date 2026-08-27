@@ -79,6 +79,7 @@ describe('PublicSearchService', () => {
 
   it.each([
     ['iPhone', 'Microfone de lapela compatível com iPhone'],
+    ['iPhone', 'Capa anti impacto para iPhone'],
     ['TV', 'Base suporte para TV'],
     ['notebook', 'Mochila para notebook'],
   ])(
@@ -102,6 +103,31 @@ describe('PublicSearchService', () => {
     const { service } = makeService([candidate]);
 
     const result = await service.search('iPhone 17 Pro Max 256 GB');
+
+    expect(result.status).toBe('FOUND');
+  });
+
+  it('rejects a broader model variant as an exact match', async () => {
+    const candidate = {
+      ...exactOffer,
+      title: 'Apple iPhone 17 Pro Max 256GB Smartphone',
+    };
+    const { service, offersService } = makeService([candidate]);
+
+    const result = await service.search('iPhone 17 Pro');
+
+    expect(result.status).toBe('NO_EXACT_MATCH');
+    expect(offersService.verifyMonetization).not.toHaveBeenCalled();
+  });
+
+  it('accepts a real Air Fryer candidate', async () => {
+    const candidate = {
+      ...exactOffer,
+      title: 'Air Fryer Philips Walita 4L',
+    };
+    const { service } = makeService([candidate]);
+
+    const result = await service.search('Air Fryer');
 
     expect(result.status).toBe('FOUND');
   });

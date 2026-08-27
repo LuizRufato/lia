@@ -11,6 +11,7 @@ import {
   PublicSearchInputError,
   ProductIdentity,
   isAccessoryCandidate,
+  areCompatibleProductVariants,
   isCompatibleProductType,
   tokenizeSearchText,
 } from './product-identification';
@@ -302,7 +303,12 @@ export class PublicSearchService {
       const candidateTitle = offer.title || payload.product?.title || '';
       if (
         isAccessoryCandidate(candidateTitle, candidateCategory, identity) ||
-        !isCompatibleProductType(identity, candidateTitle, candidateCategory)
+        !isCompatibleProductType(identity, candidateTitle, candidateCategory) ||
+        !areCompatibleProductVariants(
+          identity,
+          candidateTitle,
+          candidateCategory,
+        )
       ) {
         return [];
       }

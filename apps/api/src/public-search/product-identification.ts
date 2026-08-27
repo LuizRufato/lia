@@ -80,13 +80,24 @@ const ACCESSORY_TERMS = new Set([
   'holder',
 ]);
 
-const PRODUCT_VARIANT_WORDS = new Set([
+const MODEL_VARIANT_WORDS = new Set([
   'pro',
   'max',
   'mini',
   'plus',
   'ultra',
   'se',
+]);
+
+const URL_OPTIONAL_TERMS = new Set([
+  'apple',
+  'smartphone',
+  'celular',
+  'telefone',
+  '5g',
+  '4g',
+  'titanio',
+  'natural',
   'azul',
   'branco',
   'preto',
@@ -96,6 +107,8 @@ const PRODUCT_VARIANT_WORDS = new Set([
   'vermelho',
   'amarelo',
 ]);
+
+const VARIANT_UNIT_PATTERN = /^(\d+)(gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/;
 
 export type ProductType =
   'SMARTPHONE' | 'TELEVISION' | 'NOTEBOOK' | 'SHOES' | 'AIR_FRYER' | 'UNKNOWN';
@@ -107,6 +120,9 @@ export interface ProductIdentity {
   model?: string;
   attributes: string[];
   tokens: string[];
+  coreTokens: string[];
+  hardVariantTokens: string[];
+  optionalTokens: string[];
   productType: ProductType;
   source: 'TEXT' | 'URL_METADATA';
 }
@@ -135,14 +151,66 @@ export function tokenizeSearchText(value: string): string[] {
   return [...new Set(expandedTokens)];
 }
 
-function extractVariantTokens(value: string): string[] {
-  return tokenizeSearchText(value).filter(
-    (token) =>
-      PRODUCT_VARIANT_WORDS.has(token) ||
-      /^\d+$/.test(token) ||
-      /^(?:gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/.test(token) ||
-      /^\d+(?:gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/.test(token),
+function extractHardVariantTokens(value: string): string[] {
+  const rawTokens = normalizeSearchText(value).split(/\s+/).filter(Boolean);
+  const variants = new Set<string>();
+
+  for (let index = 0; index < rawTokens.length; index += 1) {
+    const token = rawTokens[index];
+    if (MODEL_VARIANT_WORDS.has(token)) variants.add(token);
+
+    const compactVariant = token.match(VARIANT_UNIT_PATTERN);
+    if (compactVariant && token !== '5g' && token !== '4g') {
+      variants.add(`${compactVariant[1]}${compactVariant[2]}`);
+      continue;
+    }
+
+    const next = rawTokens[index + 1];
+    if (
+      /^\d+$/.test(token) &&
+      next &&
+      /^(?:gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/.test(next)
+    ) {
+      variants.add(`${token}${next}`);
+    }
+  }
+
+  return [...variants];
+}
+
+function expandHardVariantTokens(variants: string[]): string[] {
+  return variants.flatMap((variant) => {
+    const compactVariant = variant.match(VARIANT_UNIT_PATTERN);
+    return compactVariant
+      ? [variant, compactVariant[1], compactVariant[2]]
+      : [variant];
+  });
+}
+
+function sameTokenSet(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length && left.every((token) => right.includes(token))
   );
+}
+
+export function areCompatibleProductVariants(
+  requested: ProductIdentity,
+  candidateTitle: string,
+  candidateCategory?: string | null,
+): boolean {
+  const candidateVariants = extractHardVariantTokens(
+    [candidateTitle, candidateCategory].filter(Boolean).join(' '),
+  );
+  const families = [
+    (value: string) => MODEL_VARIANT_WORDS.has(value),
+    (value: string) => VARIANT_UNIT_PATTERN.test(value),
+  ];
+
+  return families.every((isFamily) => {
+    const requestedFamily = requested.hardVariantTokens.filter(isFamily);
+    if (!requestedFamily.length) return true;
+    return sameTokenSet(requestedFamily, candidateVariants.filter(isFamily));
+  });
 }
 
 export function inferProductType(value: string): ProductType {
@@ -332,15 +400,28 @@ export function createProductIdentity(
       : metadata.model.trim()
     : undefined;
   const identityText = [name, brand, model].filter(Boolean).join(' ');
-  const tokens =
-    metadata.source === 'URL_METADATA' && model
-      ? [
-          ...new Set([
-            ...tokenizeSearchText(model),
-            ...extractVariantTokens(name),
-          ]),
-        ]
-      : tokenizeSearchText(identityText);
+  const nameTokens = tokenizeSearchText(name);
+  const modelTokens = model ? tokenizeSearchText(model) : [];
+  const hardVariantTokens = extractHardVariantTokens(
+    [name, model].filter(Boolean).join(' '),
+  );
+  const expandedHardVariantTokens = expandHardVariantTokens(hardVariantTokens);
+  const hardVariantTokenSet = new Set(expandedHardVariantTokens);
+  const urlOptionalTokenSet = new Set(
+    [...URL_OPTIONAL_TERMS].flatMap((term) => tokenizeSearchText(term)),
+  );
+  const optionalTokens =
+    metadata.source === 'URL_METADATA'
+      ? nameTokens.filter((token) => URL_OPTIONAL_TERMS.has(token))
+      : [];
+  const coreSourceTokens =
+    metadata.source === 'URL_METADATA' && model ? modelTokens : nameTokens;
+  const coreTokens = coreSourceTokens.filter(
+    (token) =>
+      !hardVariantTokenSet.has(token) &&
+      !(metadata.source === 'URL_METADATA' && urlOptionalTokenSet.has(token)),
+  );
+  const tokens = [...new Set([...coreTokens, ...expandedHardVariantTokens])];
 
   return {
     input,
@@ -349,6 +430,9 @@ export function createProductIdentity(
     ...(model ? { model } : {}),
     attributes: tokens,
     tokens,
+    coreTokens,
+    hardVariantTokens,
+    optionalTokens,
     productType: inferProductType(identityText),
     source: metadata.source,
   };
