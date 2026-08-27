@@ -147,6 +147,32 @@ describe('PublicSearchService', () => {
     expect(offersService.verifyMonetization).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      'Balança Bioimpedancia Digital Bluetooth Corporal até 180kg Resultado Pelo Celular',
+    ],
+    [
+      "Fones De Ouvido Intra-Auriculares Estéreo Sem Fio À Prova D'água Para Jogos Celular Inteligente 200mAh",
+    ],
+    [
+      'Campainha Com Câmera Vídeo Porteiro Sem Fio Wi-Fi HD Inteligente Vê Pelo Celular',
+    ],
+    ['Capa anti impacto para celular'],
+    ['Suporte articulado para celular'],
+  ])(
+    'rejects a non-smartphone smoke candidate for celular: %s',
+    async (title) => {
+      const { service, offersService } = makeService([
+        { ...exactOffer, title },
+      ]);
+
+      const result = await service.search('celular');
+
+      expect(result.status).toBe('NO_EXACT_MATCH');
+      expect(offersService.verifyMonetization).not.toHaveBeenCalled();
+    },
+  );
+
   it('returns a smartphone for a generic celular query', async () => {
     const { service } = makeService([
       { ...exactOffer, title: 'Smartphone Samsung Galaxy A15 128GB' },

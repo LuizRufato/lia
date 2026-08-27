@@ -4,6 +4,7 @@ import {
   areCompatibleProductTokens,
   createProductIdentity,
   inferCandidateProductType,
+  inferQueryProductType,
   identifyProduct,
   isAccessoryCandidate,
   isCompatibleProductType,
@@ -175,6 +176,45 @@ describe('public product identification', () => {
           'Prateleira Modular Lavanderia Desmontável Multiuso Estante Organizadora',
       }),
     ).toBe('SHELVING');
+  });
+
+  it('classifies the real smoke candidates by their primary product noun', () => {
+    expect(
+      inferCandidateProductType({
+        title:
+          'Balança Bioimpedancia Digital Bluetooth Corporal até 180kg Resultado Pelo Celular',
+      }),
+    ).toBe('SCALE');
+    expect(
+      inferCandidateProductType({
+        title:
+          "Fones De Ouvido Intra-Auriculares Estéreo Sem Fio À Prova D'água Para Jogos Celular Inteligente 200mAh",
+      }),
+    ).toBe('HEADPHONES');
+    expect(
+      inferCandidateProductType({
+        title:
+          'Campainha Com Câmera Vídeo Porteiro Sem Fio Wi-Fi HD Inteligente Vê Pelo Celular',
+      }),
+    ).toBe('DOORBELL');
+  });
+
+  it('keeps candidate type independent from query type', () => {
+    const candidate = {
+      title: 'Balança Inteligente Bluetooth com App no Celular',
+    };
+
+    expect(inferCandidateProductType(candidate)).toBe('SCALE');
+    for (const query of [
+      'celular',
+      'balança',
+      'bluetooth',
+      'app',
+      'qualquer',
+    ]) {
+      expect(inferQueryProductType(query)).toBeDefined();
+      expect(inferCandidateProductType(candidate)).toBe('SCALE');
+    }
   });
 
   it('lets a structured category override a misleading title mention', () => {

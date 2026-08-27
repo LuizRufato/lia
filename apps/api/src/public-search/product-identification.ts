@@ -121,6 +121,9 @@ const VARIANT_UNIT_PATTERN = /^(\d+)(gb|tb|v|hz|w|kg|g|l|ml|cm|mm)$/;
 
 export type ProductType =
   | 'SMARTPHONE'
+  | 'SCALE'
+  | 'HEADPHONES'
+  | 'DOORBELL'
   | 'TELEVISION'
   | 'NOTEBOOK'
   | 'SHOES'
@@ -243,6 +246,9 @@ const PRODUCT_TYPE_ANCHORS: Record<
   string[]
 > = {
   SMARTPHONE: ['iphone', 'smartphone', 'celular', 'telefone', 'galaxy'],
+  SCALE: ['balanca', 'peso'],
+  HEADPHONES: ['fone', 'fones', 'headphone', 'headset', 'earbud', 'earbuds'],
+  DOORBELL: ['campainha', 'porteiro', 'interfone'],
   TELEVISION: ['tv', 'televisao', 'televisor', 'smarttv'],
   NOTEBOOK: ['notebook', 'laptop'],
   SHOES: ['tenis', 'calcado', 'sapato', 'sapatilha'],
@@ -262,6 +268,16 @@ const GENERIC_TYPE_TOKENS: Record<
   Set<string>
 > = {
   SMARTPHONE: new Set(['smartphone', 'celular', 'telefone', 'galaxy']),
+  SCALE: new Set(['balanca', 'peso']),
+  HEADPHONES: new Set([
+    'fone',
+    'fones',
+    'headphone',
+    'headset',
+    'earbud',
+    'earbuds',
+  ]),
+  DOORBELL: new Set(['campainha', 'porteiro', 'interfone']),
   TELEVISION: new Set(['tv', 'televisao', 'televisor', 'smarttv']),
   NOTEBOOK: new Set(['notebook', 'laptop']),
   SHOES: new Set(['tenis', 'calcado', 'sapato', 'sapatilha']),
@@ -321,6 +337,24 @@ function inferProductTypeFromText(value: string): ProductType {
   if (tokens.has('prateleira') || tokens.has('estante')) return 'SHELVING';
   if (tokens.has('cesto')) return 'LAUNDRY_BASKET';
   if (tokens.has('suporte') || tokens.has('base')) return 'SUPPORT';
+  if (tokens.has('balanca')) return 'SCALE';
+  if (
+    tokens.has('fone') ||
+    tokens.has('fones') ||
+    tokens.has('headphone') ||
+    tokens.has('headset') ||
+    tokens.has('earbud') ||
+    tokens.has('earbuds')
+  ) {
+    return 'HEADPHONES';
+  }
+  if (
+    tokens.has('campainha') ||
+    tokens.has('porteiro') ||
+    tokens.has('interfone')
+  ) {
+    return 'DOORBELL';
+  }
   if ((tokens.has('air') && tokens.has('fryer')) || tokens.has('fritadeira')) {
     return 'AIR_FRYER';
   }
@@ -375,6 +409,10 @@ export function inferProductType(
   return valueType !== 'UNKNOWN'
     ? valueType
     : inferProductTypeFromText(category || '');
+}
+
+export function inferQueryProductType(query: string): ProductType {
+  return inferProductTypeFromText(query);
 }
 
 function isRawMarketplaceCategory(value: string): boolean {
@@ -659,7 +697,7 @@ export function createProductIdentity(
     coreTokens,
     hardVariantTokens,
     optionalTokens,
-    productType: inferProductType(identityText),
+    productType: inferQueryProductType(identityText),
     source: metadata.source,
   };
 }
