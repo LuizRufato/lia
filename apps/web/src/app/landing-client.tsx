@@ -182,10 +182,10 @@ export default function LandingClient() {
       <header className="landing-header glass-panel">
         <Link href="/" className="brand-mark" aria-label="LIA — início">
           <Image
-            src="/brand/lia-brand.png"
-            alt="LIA"
-            width={112}
-            height={48}
+            src="/brand/lia-achou.png"
+            alt="LIA Achou!"
+            width={64}
+            height={52}
             priority
           />
         </Link>
@@ -204,7 +204,7 @@ export default function LandingClient() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Entrar no grupo VIP <span>ϟ</span>
+            Entrar no grupo VIP <span>→</span>
           </a>
         </div>
       </header>
@@ -237,7 +237,7 @@ export default function LandingClient() {
               maxLength={500}
             />
             <button type="submit" className="primary-button" disabled={loading}>
-              {loading ? "Analisando…" : "Buscar ϟ"}
+              {loading ? "Analisando…" : "Buscar →"}
             </button>
           </form>
           <div className="suggestion-row">
@@ -508,7 +508,7 @@ export default function LandingClient() {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Entrar no grupo VIP ϟ
+          Entrar no grupo VIP →
         </a>
       </section>
       <footer className="landing-footer">
