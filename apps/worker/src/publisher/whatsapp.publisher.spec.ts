@@ -137,7 +137,7 @@ describe('WhatsAppPublisher', () => {
     );
   });
 
-  it('uses the latest saved template and sends the product image as media', async () => {
+  it('uses the latest saved template and sends text for the Smart Preview', async () => {
     const mockChannel = {
       id: 'chan1',
       externalChatId: 'group@g.us',
@@ -183,21 +183,99 @@ describe('WhatsAppPublisher', () => {
       1250,
       null,
       undefined,
-      'https://cdn.example/product.jpg',
     );
 
     const provider = (WhatsAppEvolutionProvider as jest.Mock).mock.results.at(
       -1,
     )?.value;
-    expect(provider.sendGroupMediaMessage).toHaveBeenCalledWith(
+    expect(provider.sendGroupMessage).toHaveBeenCalledWith(
       'lia',
       'instance-token',
       'group@g.us',
-      expect.objectContaining({
-        mediaUrl: 'https://cdn.example/product.jpg',
-        caption: expect.stringContaining('EDITADO Oferta real'),
-      }),
+      expect.stringContaining('EDITADO Oferta real'),
     );
-    expect(provider.sendGroupMessage).not.toHaveBeenCalled();
+    expect(provider.sendGroupMessage.mock.calls[0][3]).toContain(
+      'https://go.botlia.com.br/slug',
+    );
+    expect(provider.sendGroupMediaMessage).not.toHaveBeenCalled();
+  });
+
+  it('loads an edited persisted template on the next send without recreating the publisher', async () => {
+    const mockChannel = {
+      id: 'chan1',
+      externalChatId: 'group@g.us',
+      tenantId: 'tenant1',
+      tenant: {
+        channelIntegrations: [
+          {
+            provider: 'WHATSAPP',
+            status: 'CONNECTED',
+            transport: 'WEB_UNOFFICIAL',
+            externalInstanceName: 'lia',
+            encryptedAccessToken: 'encrypted',
+            tokenIv: 'iv',
+            tokenAuthTag: 'tag',
+          },
+        ],
+      },
+    };
+    (prismaService.channel.findUnique as jest.Mock).mockResolvedValue(
+      mockChannel,
+    );
+    const findMany = jest
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          name: 'Versão A',
+          type: 'ACHADINHO',
+          enabled: true,
+          isDefault: true,
+          priority: 100,
+          ctaMode: 'AUTO',
+          customCta: null,
+          body: 'A {titulo} {link}',
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          name: 'Versão B',
+          type: 'ACHADINHO',
+          enabled: true,
+          isDefault: true,
+          priority: 100,
+          ctaMode: 'AUTO',
+          customCta: null,
+          body: 'B {titulo} {link}',
+        },
+      ]);
+    (prismaService as any).publicationTemplate = { findMany };
+
+    await publisher.publish(
+      'offer1',
+      'pub1',
+      'chan1',
+      'https://go.botlia.com.br/a',
+      'Oferta real',
+      1250,
+      null,
+    );
+    await publisher.publish(
+      'offer1',
+      'pub2',
+      'chan1',
+      'https://go.botlia.com.br/b',
+      'Oferta real',
+      1250,
+      null,
+    );
+
+    const providers = (WhatsAppEvolutionProvider as jest.Mock).mock.results;
+    expect(providers.at(-2)?.value.sendGroupMessage.mock.calls[0][3]).toContain(
+      'A Oferta real',
+    );
+    expect(providers.at(-1)?.value.sendGroupMessage.mock.calls[0][3]).toContain(
+      'B Oferta real',
+    );
+    expect(findMany).toHaveBeenCalledTimes(2);
   });
 });

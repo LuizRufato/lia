@@ -99,6 +99,36 @@ describe("CopyEngine", () => {
     ).toBe("ACHADINHO");
   });
 
+  it("prioritizes the matching type and uses the default only as fallback", () => {
+    const templates: PublicationTemplateRecord[] = [
+      {
+        ...DEFAULT_PUBLICATION_TEMPLATES[0],
+        name: "Achadinho editado",
+        body: "ACHADINHO {titulo}",
+      },
+      {
+        ...DEFAULT_PUBLICATION_TEMPLATES[4],
+        name: "Fallback padrão",
+        isDefault: true,
+        body: "PADRÃO {titulo}",
+      },
+    ];
+
+    expect(CopyEngine.selectTemplate(templates, context()).name).toBe(
+      "Achadinho editado",
+    );
+    expect(
+      CopyEngine.selectTemplate(
+        templates.map((template) =>
+          template.type === "ACHADINHO"
+            ? { ...template, enabled: false }
+            : template,
+        ),
+        context(),
+      ).name,
+    ).toBe("Fallback padrão");
+  });
+
   it("honors disabled templates and falls back safely", () => {
     const templates: PublicationTemplateRecord[] = [
       { ...DEFAULT_PUBLICATION_TEMPLATES[0], enabled: false },

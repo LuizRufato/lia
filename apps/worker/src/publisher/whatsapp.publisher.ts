@@ -10,7 +10,6 @@ import {
   CopyEngine,
   DEFAULT_PUBLICATION_TEMPLATES,
   PublicationCopyContext,
-  firstHttpsImageUrl,
 } from '@lia/core';
 
 @Injectable()
@@ -37,7 +36,6 @@ export class WhatsAppPublisher {
       PublicationCopyContext,
       'title' | 'priceCents' | 'finalLink'
     >,
-    imageUrl?: string | null,
   ): Promise<string | null> {
     // 1. Load Channel Integration and Configuration
     const channel = await this.prisma.channel.findUnique({
@@ -86,7 +84,7 @@ export class WhatsAppPublisher {
         });
         if (persisted.length) templates = persisted;
       }
-      const rendered = CopyEngine.renderPublication(templates, {
+      const copyContextValue = {
         title,
         priceCents,
         discountBps,
@@ -94,40 +92,44 @@ export class WhatsAppPublisher {
         locale: 'pt-BR',
         currency: 'BRL',
         ...copyContext,
-      });
+      };
+      const selectedTemplate = CopyEngine.selectTemplate(
+        templates,
+        copyContextValue,
+      );
+      const rendered = CopyEngine.render(selectedTemplate, copyContextValue);
+
+      this.logger.log(
+        JSON.stringify({
+          event: 'PUBLICATION_TEMPLATE_SELECTED',
+          tenantId: channel.tenantId,
+          offerId,
+          publicationId,
+          templateId: selectedTemplate.id ?? null,
+          templateName: rendered.templateName,
+          templateType: rendered.templateType,
+        }),
+      );
 
       this.logger.log(
         `Publishing offer ${offerId} to WhatsApp Group ${channel.externalChatId} via Evolution`,
       );
 
-      const safeImageUrl = firstHttpsImageUrl(imageUrl ? [imageUrl] : []);
-      let messageId: string | null;
-      if (safeImageUrl) {
-        this.logger.log(`PUBLICATION_IMAGE_SELECTED offer=${offerId}`);
-        this.logger.log(`PUBLICATION_MEDIA_SEND_STARTED offer=${offerId}`);
-        try {
-          messageId = await this.evolutionProvider.sendGroupMediaMessage(
-            whatsappIntegration.externalInstanceName,
-            instanceToken,
-            channel.externalChatId,
-            { mediaUrl: safeImageUrl, caption: rendered.text },
-          );
-        } catch (error) {
-          this.logger.error(`PUBLICATION_MEDIA_SEND_FAILED offer=${offerId}`);
-          throw error;
-        }
-        this.logger.log(`PUBLICATION_MEDIA_SEND_SUCCESS offer=${offerId}`);
-      } else {
-        this.logger.warn(
-          `${imageUrl ? 'PUBLICATION_IMAGE_INVALID' : 'PUBLICATION_IMAGE_MISSING'} offer=${offerId}`,
-        );
-        messageId = await this.evolutionProvider.sendGroupMessage(
-          whatsappIntegration.externalInstanceName,
-          instanceToken,
-          channel.externalChatId,
-          rendered.text,
-        );
-      }
+      this.logger.log(
+        JSON.stringify({
+          event: 'PUBLICATION_SMART_PREVIEW_TEXT_SEND',
+          tenantId: channel.tenantId,
+          offerId,
+          publicationId,
+          provider: 'EVOLUTION',
+        }),
+      );
+      const messageId = await this.evolutionProvider.sendGroupMessage(
+        whatsappIntegration.externalInstanceName,
+        instanceToken,
+        channel.externalChatId,
+        rendered.text,
+      );
 
       return messageId;
     }

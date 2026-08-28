@@ -17,6 +17,21 @@ const VARIABLES = [
   "{rating}",
 ];
 
+const selectionHint = (type: string) => {
+  switch (type) {
+    case "PRECO_CAIU":
+      return "Selecionado automaticamente quando há queda de preço comprovada.";
+    case "MAIS_VENDIDO":
+      return "Selecionado automaticamente quando a oferta tem volume de vendas comprovado.";
+    case "ACHADINHO":
+      return "Selecionado automaticamente para ofertas sem queda de preço ou destaque de vendas.";
+    case "OFERTA":
+      return "Usado como fallback quando não há template compatível por tipo.";
+    default:
+      return "Usado como fallback final quando não há outro template elegível.";
+  }
+};
+
 function StatusBadge({
   children,
   tone,
@@ -179,6 +194,9 @@ export default function TemplatesPage() {
                   <span className="mt-1 block text-[11px] font-medium uppercase tracking-wide text-gray-400">
                     {template.type}
                   </span>
+                  <span className="mt-1 block text-[11px] leading-4 text-gray-500">
+                    {selectionHint(template.type)}
+                  </span>
                 </div>
                 <FileText className="mt-0.5 h-4 w-4 shrink-0 text-blue-500" />
               </div>
@@ -290,7 +308,7 @@ export default function TemplatesPage() {
                     setSelected({ ...selected, isDefault })
                   }
                   label="Padrão"
-                  description="Só um template pode ser padrão."
+                  description="Fallback quando não houver template compatível por tipo. Só um pode ser padrão."
                 />
               </div>
               <div className="mt-6 flex items-center justify-between gap-4 border-t border-gray-100 pt-5">

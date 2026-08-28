@@ -6,7 +6,6 @@ import { TelegramService } from '../telegram/telegram.service';
 import { randomBytes } from 'crypto';
 import {
   PublishCandidateJobData,
-  firstHttpsImageUrl,
   findProductCooldown,
   getCanonicalProductFingerprint,
   randomSendDelayMs,
@@ -577,13 +576,6 @@ export class PublisherProcessor extends WorkerHost {
       } else if (channel.provider === 'WHATSAPP') {
         // Obter desconto
         const discountBps = offer.priceHistories?.[0]?.discountBps || null;
-        const canonicalImages = Array.isArray(
-          (candidate.evaluation.observation.canonicalPayload as any)?.product
-            ?.images,
-        )
-          ? (candidate.evaluation.observation.canonicalPayload as any).product
-              .images
-          : [];
         messageId = await this.whatsappPublisher.publish(
           offer.id,
           publication.id,
@@ -608,7 +600,6 @@ export class PublisherProcessor extends WorkerHost {
               offer.marketplace?.name || offer.marketplace?.type || 'Shopee',
             category: candidate.evaluation.observation.category,
           },
-          firstHttpsImageUrl([...canonicalImages, offer.imageUrl]),
         );
       } else {
         throw new Error(`Provider ${channel.provider} not supported`);
