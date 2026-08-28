@@ -99,6 +99,18 @@ export class WhatsAppPublisher {
       );
       const rendered = CopyEngine.render(selectedTemplate, copyContextValue);
 
+      if (rendered.warnings?.length) {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'PUBLICATION_TEMPLATE_DATA_DIVERGENCE',
+            tenantId: channel.tenantId,
+            offerId,
+            publicationId,
+            warnings: rendered.warnings,
+          }),
+        );
+      }
+
       this.logger.log(
         JSON.stringify({
           event: 'PUBLICATION_TEMPLATE_SELECTED',

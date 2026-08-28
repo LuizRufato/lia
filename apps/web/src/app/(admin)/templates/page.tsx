@@ -5,17 +5,29 @@ import { fetchAuth } from "@/lib/api";
 import { FileText, Loader2, Plus, Save } from "lucide-react";
 
 const TYPES = ["ACHADINHO", "OFERTA", "PRECO_CAIU", "MAIS_VENDIDO", "GENERIC"];
-const VARIABLES = [
-  "{titulo}",
-  "{preco_atual}",
-  "{preco_antigo}",
-  "{desconto}",
-  "{cta}",
-  "{link}",
-  "{marketplace}",
-  "{sales_count}",
-  "{rating}",
-];
+const VARIABLE_HELP = [
+  ["{titulo}", "Título real do produto."],
+  ["{preco_atual}", "Preço atual da oferta."],
+  ["{preco_antigo}", "Preço anterior comprovado; pode não existir."],
+  ["{desconto}", "Percentual real calculado ou informado pela Shopee."],
+  ["{cta}", "Chamada para ação configurada."],
+  ["{link}", "Smart Link rastreável da LIA."],
+  ["{marketplace}", "Marketplace da oferta."],
+  ["{sales_count}", "Número de vendas quando fornecido."],
+  ["{rating}", "Avaliação do produto quando fornecida."],
+] as const;
+
+const AVAILABILITY_LABELS: Record<string, string> = {
+  titulo: "título",
+  preco_atual: "preço atual",
+  preco_antigo: "preço antigo",
+  desconto: "desconto",
+  cta: "CTA",
+  link: "link",
+  marketplace: "marketplace",
+  sales_count: "vendas",
+  rating: "avaliação",
+};
 
 const selectionHint = (type: string) => {
   switch (type) {
@@ -335,34 +347,75 @@ export default function TemplatesPage() {
           <p className="mt-1 text-xs text-gray-500">
             Use estas variáveis no corpo para preencher os dados da oferta.
           </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {VARIABLES.map((variable) => (
-              <code
-                key={variable}
-                className="rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-700"
-              >
-                {variable}
-              </code>
+          <div className="mt-4 space-y-2">
+            {VARIABLE_HELP.map(([variable, description]) => (
+              <div key={variable} className="flex items-start gap-2 text-xs">
+                <code className="shrink-0 rounded-md bg-gray-100 px-2 py-1 text-gray-700">
+                  {variable}
+                </code>
+                <span className="pt-1 text-gray-500">{description}</span>
+              </div>
             ))}
           </div>
         </div>
         <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="font-semibold text-gray-900">
-            Pré-visualização{" "}
-            {preview?.isDemo ? "(demonstração)" : "(oferta real recente)"}
-          </h2>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-gray-900">Prévia real</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Usa somente ofertas reais recentes do banco.
+              </p>
+            </div>
+            <StatusBadge tone="blue">DADOS REAIS</StatusBadge>
+          </div>
           <div className="mt-4 space-y-3">
-            {preview?.previews?.map((item: any) => (
-              <div
-                key={item.id || item.name}
-                className="rounded-xl border border-gray-100 bg-gray-50 p-4 whitespace-pre-wrap text-sm leading-6 text-gray-700"
-              >
-                {item.rendered}
+            {(preview?.realPreviews || preview?.previews)?.map((item: any) => (
+              <div key={item.id || item.name}>
+                <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 whitespace-pre-wrap text-sm leading-6 text-gray-700">
+                  {item.available === false ? item.message : item.rendered}
+                </div>
+                {item.variablesAvailable && (
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 px-1 text-[11px] text-gray-500">
+                    {Object.entries(item.variablesAvailable).map(
+                      ([key, available]) => (
+                        <span key={key}>
+                          <span
+                            className={
+                              available ? "text-emerald-600" : "text-gray-400"
+                            }
+                          >
+                            {available ? "✓" : "✕"}
+                          </span>{" "}
+                          {AVAILABILITY_LABELS[key] || key}
+                        </span>
+                      ),
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
-          <p className="mt-3 text-xs text-gray-500">
-            A prévia não cria nem publica dados.
+          <div className="mt-6 border-t border-gray-100 pt-5">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-semibold text-gray-900">Prévia de layout</h2>
+              <StatusBadge tone="gray">DEMONSTRAÇÃO</StatusBadge>
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              Dados de demonstração — não serão publicados.
+            </p>
+            <div className="mt-4 space-y-3">
+              {preview?.layoutPreviews?.map((item: any) => (
+                <div
+                  key={`layout-${item.id || item.name}`}
+                  className="rounded-xl border border-blue-100 bg-blue-50/40 p-4 whitespace-pre-wrap text-sm leading-6 text-gray-700"
+                >
+                  {item.rendered}
+                </div>
+              ))}
+            </div>
+          </div>
+          <p className="mt-4 text-xs text-gray-500">
+            Nenhuma prévia cria oferta, publicação ou clique.
           </p>
         </div>
       </div>

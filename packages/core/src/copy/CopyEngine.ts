@@ -55,6 +55,7 @@ export interface RenderedPublicationCopy {
   templateName: string;
   previousPriceCents: number | null;
   discountPercentage: number | null;
+  warnings: string[];
 }
 
 export const PUBLICATION_TEMPLATE_VARIABLES = [
@@ -175,6 +176,7 @@ function resolvePreviousPrice(context: PublicationCopyContext) {
       const date = asDate(item.observedAt);
       return (
         date &&
+        Number.isInteger(item.priceCents) &&
         item.priceCents > current &&
         (!observedAt || date.getTime() < observedAt.getTime()) &&
         now - date.getTime() <= MAX_HISTORY_AGE_MS
@@ -194,11 +196,64 @@ function resolveDiscount(
   previous: number | null,
   reportedBps: number | null | undefined,
 ) {
-  if (!previous || previous <= current) return null;
-  const calculatedBps = Math.round(((previous - current) / previous) * 10_000);
-  if (reportedBps != null && Math.abs(reportedBps - calculatedBps) > 100)
-    return null;
-  return Math.max(1, Math.round(calculatedBps / 100));
+  const validReportedBps =
+    typeof reportedBps === "number" &&
+    Number.isInteger(reportedBps) &&
+    reportedBps > 0 &&
+    reportedBps <= 10_000
+      ? reportedBps
+      : null;
+
+  if (previous != null && previous > current) {
+    const calculatedBps = Math.round(
+      ((previous - current) / previous) * 10_000,
+    );
+    return {
+      percentage: Math.max(1, Math.round(calculatedBps / 100)),
+      mismatch:
+        validReportedBps != null &&
+        Math.abs(validReportedBps - calculatedBps) > 100,
+    };
+  }
+
+  return {
+    percentage:
+      validReportedBps != null
+        ? Math.max(1, Math.round(validReportedBps / 100))
+        : null,
+    mismatch: false,
+  };
+}
+
+const OPTIONAL_VARIABLES = new Set([
+  "preco_antigo",
+  "desconto",
+  "marketplace",
+  "sales_count",
+  "rating",
+]);
+
+function renderTemplateBody(body: string, values: Record<string, string>) {
+  return body
+    .split(/\r?\n/)
+    .map((line) => {
+      const keys = Array.from(line.matchAll(/\{([a-zA-Z0-9_]+)\}/g)).map(
+        (match) => match[1],
+      );
+      const hasMissingOptional = keys.some(
+        (key) => OPTIONAL_VARIABLES.has(key) && !values[key],
+      );
+      const hasPresentVariable = keys.some((key) => Boolean(values[key]));
+      if (hasMissingOptional && !hasPresentVariable) return null;
+
+      return line.replace(
+        /\{([a-zA-Z0-9_]+)\}/g,
+        (_match, key: string) => values[key] ?? "",
+      );
+    })
+    .filter((line): line is string => line !== null && line.trim() !== "")
+    .join("\n")
+    .trim();
 }
 
 export class CopyEngine {
@@ -231,7 +286,7 @@ export class CopyEngine {
     context: PublicationCopyContext,
   ): RenderedPublicationCopy {
     const previous = resolvePreviousPrice(context);
-    const discountPercentage = resolveDiscount(
+    const discount = resolveDiscount(
       context.priceCents,
       previous.cents,
       context.discountBps,
@@ -243,12 +298,11 @@ export class CopyEngine {
         context.locale,
         context.currency,
       ),
-      preco_antigo: previous.cents
-        ? previous.source === "HISTORY"
-          ? `Antes observado por: ${formatMoney(previous.cents, context.locale, context.currency)}`
-          : `De: ~${formatMoney(previous.cents, context.locale, context.currency)}~`
-        : "",
-      desconto: discountPercentage ? `${discountPercentage}% OFF` : "",
+      preco_antigo:
+        previous.cents != null
+          ? formatMoney(previous.cents, context.locale, context.currency)
+          : "",
+      desconto: discount.percentage ? `${discount.percentage}%` : "",
       cta: safeCta(context, template),
       link: context.finalLink,
       marketplace: context.marketplace || "",
@@ -258,25 +312,21 @@ export class CopyEngine {
           ? String(context.salesCount)
           : "",
       rating:
-        typeof context.rating === "number" && Number.isFinite(context.rating)
+        typeof context.rating === "number" &&
+        Number.isFinite(context.rating) &&
+        context.rating >= 0 &&
+        context.rating <= 5
           ? context.rating.toFixed(1)
           : "",
     };
-    const text = template.body
-      .replace(
-        /\{([a-zA-Z0-9_]+)\}/g,
-        (_match, key: string) => values[key] ?? "",
-      )
-      .split("\n")
-      .filter((line) => line.trim() !== "")
-      .join("\n")
-      .trim();
+    const text = renderTemplateBody(template.body, values);
     return {
       text: text || CopyEngine.fallback(context),
       templateType: (template.type as PublicationTemplateType) || "GENERIC",
       templateName: template.name,
       previousPriceCents: previous.cents,
-      discountPercentage,
+      discountPercentage: discount.percentage,
+      warnings: discount.mismatch ? ["DISCOUNT_SOURCE_DIVERGENCE"] : [],
     };
   }
 
@@ -321,6 +371,7 @@ export class CopyEngine {
         templateName: "Fallback seguro",
         previousPriceCents: null,
         discountPercentage: null,
+        warnings: [],
       };
     }
   }

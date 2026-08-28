@@ -31,7 +31,7 @@ describe('TemplatesService', () => {
     };
     const prisma: any = {
       publicationTemplate: client,
-      offer: { findFirst: jest.fn() },
+      offer: { findFirst: jest.fn(), findMany: jest.fn() },
       $transaction: jest.fn(async (callback: any) =>
         callback({
           publicationTemplate: client,
@@ -140,5 +140,98 @@ describe('TemplatesService', () => {
       where: { id: existing.id },
       data: expect.objectContaining({ isDefault: true }),
     });
+  });
+
+  it('uses representative real offers for type-specific previews', async () => {
+    const templates = DEFAULT_PUBLICATION_TEMPLATES.map((template, index) => ({
+      ...template,
+      id: `template-${index}`,
+      tenantId,
+      createdAt: new Date(),
+    }));
+    const { service } = createService(templates);
+    const prisma = (service as any).prisma;
+    prisma.offer.findMany.mockResolvedValue([
+      {
+        title: 'Oferta normal',
+        price: 15000,
+        updatedAt: new Date(),
+        marketplace: { name: 'Shopee', type: 'SHOPEE' },
+        priceHistories: [
+          {
+            priceCents: 15000,
+            originalPriceCents: null,
+            observedAt: new Date(),
+            discountBps: null,
+            salesCount: 12,
+            rating: 4.2,
+          },
+          {
+            priceCents: 20000,
+            observedAt: new Date(Date.now() - 86400000),
+            discountBps: null,
+            salesCount: 10,
+            rating: 4.1,
+          },
+        ],
+      },
+      {
+        title: 'Mais vendido',
+        price: 7990,
+        updatedAt: new Date(Date.now() - 1000),
+        marketplace: { name: 'Shopee', type: 'SHOPEE' },
+        priceHistories: [
+          {
+            priceCents: 7990,
+            originalPriceCents: null,
+            observedAt: new Date(),
+            discountBps: 2000,
+            salesCount: 250,
+            rating: 4.8,
+          },
+        ],
+      },
+    ]);
+
+    const result = await service.preview(tenantId);
+    const priceDrop = result.realPreviews.find(
+      (item: any) => item.type === 'PRECO_CAIU',
+    );
+    const bestSeller = result.realPreviews.find(
+      (item: any) => item.type === 'MAIS_VENDIDO',
+    );
+
+    expect(priceDrop.available).toBe(true);
+    expect(priceDrop.rendered.replace(/\u00a0/g, ' ')).toContain('R$ 200,00');
+    expect(priceDrop.rendered).not.toContain('Antes observado');
+    expect(bestSeller.rendered).toContain('250');
+    expect(bestSeller.variablesAvailable.desconto).toBe(true);
+    expect(result.layoutPreviews[0].rendered).toContain(
+      'Smartphone Exemplo LIA',
+    );
+  });
+
+  it('keeps real previews explicit when no suitable offer exists', async () => {
+    const templates = DEFAULT_PUBLICATION_TEMPLATES.map((template, index) => ({
+      ...template,
+      id: `template-${index}`,
+      tenantId,
+      createdAt: new Date(),
+    }));
+    const { service } = createService(templates);
+    const prisma = (service as any).prisma;
+    prisma.offer.findMany.mockResolvedValue([]);
+
+    const result = await service.preview(tenantId);
+
+    expect(result.realPreviews.every((item: any) => !item.available)).toBe(
+      true,
+    );
+    expect(result.realPreviews[0].message).toContain(
+      'Não há uma oferta real recente',
+    );
+    expect(result.layoutPreviews[0].rendered.replace(/\u00a0/g, ' ')).toContain(
+      'R$ 799,90',
+    );
   });
 });

@@ -8,6 +8,7 @@ import {
   CopyEngine,
   DEFAULT_PUBLICATION_TEMPLATES,
   PUBLICATION_TEMPLATE_VARIABLES,
+  PublicationCopyContext,
 } from '@lia/core';
 
 const TYPES = ['ACHADINHO', 'OFERTA', 'PRECO_CAIU', 'MAIS_VENDIDO', 'GENERIC'];
@@ -163,45 +164,117 @@ export class TemplatesService {
 
   async preview(tenantId: string) {
     const templates = await this.list(tenantId);
-    const offer = await this.prisma.offer.findFirst({
+    const offers = await this.prisma.offer.findMany({
       where: { tenantId, status: 'ACTIVE' },
       orderBy: { updatedAt: 'desc' },
+      take: 50,
       include: {
         marketplace: true,
         priceHistories: { orderBy: { observedAt: 'desc' }, take: 20 },
       },
     });
-    const context = offer
-      ? {
-          title: offer.title,
-          priceCents: offer.price,
-          currentOriginalPriceCents:
-            offer.priceHistories[0]?.originalPriceCents ?? null,
-          currentObservedAt:
-            offer.priceHistories[0]?.observedAt ?? offer.updatedAt,
-          previousPrices: offer.priceHistories.slice(1),
-          discountBps: offer.priceHistories[0]?.discountBps ?? null,
-          salesCount: offer.priceHistories[0]?.salesCount ?? null,
-          rating: offer.priceHistories[0]?.rating ?? null,
-          marketplace: offer.marketplace.name,
-          finalLink: 'https://go.botlia.com.br/preview',
-        }
-      : {
-          title: 'Produto de demonstração',
-          priceCents: 9990,
-          finalLink: 'https://go.botlia.com.br/preview',
-          marketplace: 'Shopee',
+    const contextFor = (offer: any): PublicationCopyContext => {
+      const histories = offer.priceHistories || [];
+      return {
+        title: offer.title,
+        priceCents: offer.price,
+        currentOriginalPriceCents: histories[0]?.originalPriceCents ?? null,
+        currentObservedAt: histories[0]?.observedAt ?? offer.updatedAt,
+        previousPrices: histories.slice(1),
+        discountBps: histories[0]?.discountBps ?? null,
+        salesCount: histories[0]?.salesCount ?? null,
+        rating: histories[0]?.rating ?? null,
+        marketplace: offer.marketplace.name || offer.marketplace.type,
+        finalLink: 'https://go.botlia.com.br/preview',
+        locale: 'pt-BR',
+        currency: 'BRL',
+      };
+    };
+    const representativeOffer = (type: string) => {
+      if (type === 'PRECO_CAIU') {
+        return offers.find(
+          (offer: any) =>
+            CopyEngine.render(
+              { ...DEFAULT_PUBLICATION_TEMPLATES[2], body: '{preco_antigo}' },
+              contextFor(offer),
+            ).previousPriceCents != null,
+        );
+      }
+      if (type === 'MAIS_VENDIDO') {
+        return offers.find(
+          (offer: any) =>
+            Number.isInteger(offer.priceHistories?.[0]?.salesCount) &&
+            offer.priceHistories[0].salesCount >= 100,
+        );
+      }
+      return offers[0];
+    };
+    const realPreviews = templates.map((template: any) => {
+      const offer = representativeOffer(template.type);
+      if (!offer) {
+        return {
+          id: template.id,
+          name: template.name,
+          type: template.type,
+          available: false,
+          rendered: null,
+          message:
+            'Não há uma oferta real recente com os dados necessários para demonstrar este template.',
+          variablesAvailable: null,
         };
-    return {
-      isDemo: !offer,
-      variables: PUBLICATION_TEMPLATE_VARIABLES,
-      offer: offer ? { title: offer.title, priceCents: offer.price } : null,
-      previews: templates.map((template: any) => ({
+      }
+      const rendered = CopyEngine.render(template, contextFor(offer));
+      const context = contextFor(offer);
+      return {
         id: template.id,
         name: template.name,
         type: template.type,
-        rendered: CopyEngine.render(template, context).text,
-      })),
+        available: true,
+        rendered: rendered.text,
+        variablesAvailable: {
+          titulo: Boolean(context.title?.trim()),
+          preco_atual: Number.isInteger(context.priceCents),
+          preco_antigo: rendered.previousPriceCents != null,
+          desconto: rendered.discountPercentage != null,
+          cta: true,
+          link: Boolean(context.finalLink),
+          marketplace: Boolean(context.marketplace),
+          sales_count:
+            Number.isInteger(context.salesCount) &&
+            (context.salesCount as number) >= 0,
+          rating:
+            typeof context.rating === 'number' &&
+            Number.isFinite(context.rating) &&
+            context.rating >= 0 &&
+            context.rating <= 5,
+        },
+        offer: { title: offer.title, priceCents: offer.price },
+      };
+    });
+    const demoContext: PublicationCopyContext = {
+      title: 'Smartphone Exemplo LIA',
+      priceCents: 79990,
+      currentOriginalPriceCents: 99990,
+      discountBps: 2000,
+      salesCount: 1250,
+      rating: 4.8,
+      marketplace: 'Shopee',
+      finalLink: 'https://go.botlia.com.br/preview',
+      locale: 'pt-BR',
+      currency: 'BRL',
+    };
+    const layoutPreviews = templates.map((template: any) => ({
+      id: template.id,
+      name: template.name,
+      type: template.type,
+      rendered: CopyEngine.render(template, demoContext).text,
+    }));
+    return {
+      isDemo: false,
+      variables: PUBLICATION_TEMPLATE_VARIABLES,
+      previews: realPreviews,
+      realPreviews,
+      layoutPreviews,
     };
   }
 }

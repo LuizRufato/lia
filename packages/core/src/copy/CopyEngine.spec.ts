@@ -31,7 +31,8 @@ describe("CopyEngine", () => {
     );
     expect(result.previousPriceCents).toBe(20000);
     expect(result.text.replace(/\u00a0/g, " ")).toContain("R$ 200,00");
-    expect(result.text).toContain("50% OFF");
+    expect(result.text).toContain("50%");
+    expect(result.text).not.toContain("Antes observado");
   });
 
   it("uses a recent prior observation but rejects stale history", () => {
@@ -70,8 +71,78 @@ describe("CopyEngine", () => {
         discountBps: 1000,
       }),
     );
-    expect(result.discountPercentage).toBeNull();
+    expect(result.discountPercentage).toBe(50);
+    expect(result.text).toContain("50%");
+    expect(result.warnings).toContain("DISCOUNT_SOURCE_DIVERGENCE");
+  });
+
+  it("uses Shopee discount data when no old price is available", () => {
+    const result = CopyEngine.render(
+      { ...DEFAULT_PUBLICATION_TEMPLATES[1], body: "{preco_atual} {desconto}" },
+      context({ discountBps: 2000 }),
+    );
+
+    expect(result.text.replace(/\u00a0/g, " ")).toBe("R$ 100,00 20%");
+    expect(result.discountPercentage).toBe(20);
+  });
+
+  it("renders every official variable as data without adding presentation labels", () => {
+    const result = CopyEngine.render(
+      {
+        ...DEFAULT_PUBLICATION_TEMPLATES[4],
+        ctaMode: "CUSTOM",
+        customCta: "Abrir oferta",
+        body: "{titulo}\n{preco_atual}\n{preco_antigo}\n{desconto}\n{cta}\n{link}\n{marketplace}\n{sales_count}\n{rating}",
+      },
+      context({
+        currentOriginalPriceCents: 20000,
+        discountBps: 2500,
+        salesCount: 1234,
+        rating: 4.8,
+      }),
+    );
+    const text = result.text.replace(/\u00a0/g, " ");
+
+    expect(text).toContain("Fone seguro");
+    expect(text).toContain("R$ 100,00");
+    expect(text).toContain("R$ 200,00");
+    expect(text).toContain("50%");
+    expect(text).toContain("Abrir oferta");
+    expect(text).toContain("https://go.botlia.com.br/abc");
+    expect(text).toContain("Shopee");
+    expect(text).toContain("1234");
+    expect(text).toContain("4.8");
+    expect(text).not.toContain("Antes observado");
+    expect(text).not.toContain("Desconto:");
+  });
+
+  it("keeps optional labels out when their values are unavailable", () => {
+    const result = CopyEngine.render(
+      {
+        ...DEFAULT_PUBLICATION_TEMPLATES[1],
+        body: "Antes: ~{preco_antigo}~\n🎯 {desconto} OFF\n📦 {sales_count} vendidos\n{titulo}",
+      },
+      context(),
+    );
+
+    expect(result.text).toBe("Fone seguro");
+    expect(result.text).not.toContain("Antes:");
     expect(result.text).not.toContain("OFF");
+    expect(result.text).not.toContain("vendidos");
+  });
+
+  it("accepts only ratings in the real 0–5 range", () => {
+    const valid = CopyEngine.render(
+      { ...DEFAULT_PUBLICATION_TEMPLATES[4], body: "⭐ {rating}" },
+      context({ rating: 4.8 }),
+    );
+    const invalid = CopyEngine.render(
+      { ...DEFAULT_PUBLICATION_TEMPLATES[4], body: "⭐ {rating}" },
+      context({ rating: 6 }),
+    );
+
+    expect(valid.text).toBe("⭐ 4.8");
+    expect(invalid.text).not.toContain("6");
   });
 
   it("selects price drop and sales templates only with evidence", () => {
