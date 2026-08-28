@@ -16,6 +16,7 @@ export * from "./contracts/jobs";
 export * from "./autopilot/AutopilotBrain";
 export * from "./autopilot/CatalogPolicy";
 export * from "./autopilot/CatalogPublicationGuards";
+export * from "./autopilot/ProductFingerprint";
 export * from "./autopilot/SendPacing";
 export * from "./autopilot/CommercialCatalogCategory";
 export * from "./autopilot/timezone";

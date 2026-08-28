@@ -8,6 +8,7 @@ import {
   PublishCandidateJobData,
   firstHttpsImageUrl,
   findProductCooldown,
+  getCanonicalProductFingerprint,
   randomSendDelayMs,
   validateSendPacing,
 } from '@lia/core';
@@ -851,12 +852,11 @@ export class PublisherProcessor extends WorkerHost {
 
   private getProductIdentity(offer: any, canonicalPayload: any): string {
     const provider = offer?.marketplace?.type || 'UNKNOWN';
-    const externalProductId =
-      typeof canonicalPayload?.externalProductId === 'string' &&
-      canonicalPayload.externalProductId.trim()
-        ? canonicalPayload.externalProductId.trim()
-        : offer?.externalId || '';
-    return `${provider}:${externalProductId}`;
+    return getCanonicalProductFingerprint(
+      provider,
+      canonicalPayload,
+      canonicalPayload?.externalProductId || offer?.externalId || null,
+    );
   }
 
   @OnWorkerEvent('failed')
