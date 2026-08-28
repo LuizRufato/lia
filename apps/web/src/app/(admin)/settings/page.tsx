@@ -28,6 +28,12 @@ type AdminAlertConfig = {
   criticalErrorEnabled: boolean;
   dailySummaryEnabled: boolean;
   enabledAt: string | null;
+  dailySummarySchedule: {
+    time: string;
+    timezone: string;
+    lastSentAt: string | null;
+    nextAt: string;
+  };
 };
 
 type AdminAlertTestResult = {
@@ -57,8 +63,8 @@ const ALERT_TYPES = [
     label: "Venda de alto valor",
     active: false,
   },
-  { key: "criticalErrorEnabled", label: "Erro crítico", active: false },
-  { key: "dailySummaryEnabled", label: "Resumo diário", active: false },
+  { key: "criticalErrorEnabled", label: "Erro crítico", active: true },
+  { key: "dailySummaryEnabled", label: "Resumo diário", active: true },
 ] as const;
 
 export default function SettingsPage() {
@@ -535,6 +541,32 @@ export default function SettingsPage() {
               <h3 className="font-semibold text-gray-900 mb-4">
                 Tipos de alerta
               </h3>
+              <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                <p className="font-medium">Resumo diário</p>
+                <p className="mt-1 text-xs text-blue-800">
+                  {alertConfig.dailySummaryEnabled ? "Ativado" : "Desativado"} ·
+                  todos os dias às {alertConfig.dailySummarySchedule.time} (
+                  {alertConfig.dailySummarySchedule.timezone})
+                </p>
+                <p className="mt-1 text-xs text-blue-800">
+                  Último envio:{" "}
+                  {alertConfig.dailySummarySchedule.lastSentAt
+                    ? new Date(
+                        alertConfig.dailySummarySchedule.lastSentAt,
+                      ).toLocaleString("pt-BR", {
+                        timeZone: alertConfig.dailySummarySchedule.timezone,
+                      })
+                    : "ainda não enviado"}
+                </p>
+                <p className="text-xs text-blue-800">
+                  Próximo envio:{" "}
+                  {new Date(
+                    alertConfig.dailySummarySchedule.nextAt,
+                  ).toLocaleString("pt-BR", {
+                    timeZone: alertConfig.dailySummarySchedule.timezone,
+                  })}
+                </p>
+              </div>
               <div className="space-y-3">
                 {ALERT_TYPES.map((alert) => (
                   <label

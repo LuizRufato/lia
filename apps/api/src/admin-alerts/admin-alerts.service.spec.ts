@@ -74,6 +74,12 @@ describe('AdminAlertsService', () => {
       criticalErrorEnabled: false,
       dailySummaryEnabled: false,
       enabledAt: null,
+      dailySummarySchedule: {
+        time: '22:10',
+        timezone: 'America/Campo_Grande',
+        lastSentAt: null,
+        nextAt: expect.any(Date),
+      },
     });
     expect(prisma.adminAlertConfig.findUnique).toHaveBeenCalledWith({
       where: { tenantId: 'tenant-a' },

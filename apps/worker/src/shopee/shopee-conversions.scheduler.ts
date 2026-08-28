@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -7,6 +7,7 @@ import {
   getShopeeConversionWindow,
   SHOPEE_CONVERSION_INTERVAL_MS,
 } from '@lia/integrations';
+import { AdminAlertEventsService } from '../admin-alerts/admin-alert-events.service';
 
 /** Keeps the conversion report current without relying on a manual endpoint. */
 @Injectable()
@@ -16,16 +17,42 @@ export class ShopeeConversionsSchedulerService {
   constructor(
     private readonly prisma: PrismaService,
     @InjectQueue('shopee-conversions-queue') private readonly queue: Queue,
+    @Optional() private readonly adminAlertEvents?: AdminAlertEventsService,
   ) {}
 
   @Cron('0 */5 * * * *')
   async scheduleConnectedIntegrations() {
     const integrations = await this.prisma.marketplaceIntegration.findMany({
-      where: { provider: 'SHOPEE', status: 'CONNECTED' },
-      select: { tenantId: true, lastConversionSyncAt: true },
+      where: { provider: 'SHOPEE' },
+      select: {
+        id: true,
+        tenantId: true,
+        status: true,
+        encryptedSecret: true,
+        lastConversionSyncAt: true,
+      },
     });
 
     for (const integration of integrations) {
+      if (integration.status !== 'CONNECTED') {
+        if (
+          integration.status !== 'NOT_CONNECTED' ||
+          integration.encryptedSecret
+        ) {
+          try {
+            await this.adminAlertEvents?.createShopeeDisconnectedAlert({
+              tenantId: integration.tenantId,
+              integrationId: integration.id,
+              state: integration.status,
+            });
+          } catch (error: any) {
+            this.logger.error(
+              `ADMIN_ALERT_SHOPEE_DISCONNECTED_FAILED: ${error?.message || error}`,
+            );
+          }
+        }
+        continue;
+      }
       const pendingJobs = await this.queue.getJobs(
         ['waiting', 'active', 'delayed', 'prioritized'],
         0,

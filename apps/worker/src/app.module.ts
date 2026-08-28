@@ -26,6 +26,8 @@ import { getBullMqRedisConnection } from '@lia/core';
 import { EvolutionReconciliationService } from './whatsapp/evolution-reconciliation.service';
 import { WhatsAppSafetyGovernor } from './publisher/whatsapp-safety-governor';
 import { AdminAlertsProcessor } from './admin-alerts/admin-alerts.processor';
+import { AdminAlertEventsService } from './admin-alerts/admin-alert-events.service';
+import { AdminAlertsScheduler } from './admin-alerts/admin-alerts.scheduler';
 
 @Module({
   imports: [
@@ -115,6 +117,8 @@ import { AdminAlertsProcessor } from './admin-alerts/admin-alerts.processor';
     EvolutionReconciliationService,
     WhatsAppSafetyGovernor,
     AdminAlertsProcessor,
+    AdminAlertEventsService,
+    AdminAlertsScheduler,
   ],
 })
 export class AppModule {}

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma.service';
 import {
@@ -6,13 +6,17 @@ import {
   getEncryptionKey,
   WhatsAppEvolutionProvider,
 } from '@lia/integrations';
+import { AdminAlertEventsService } from '../admin-alerts/admin-alert-events.service';
 
 /** Periodically reconciles remote Evolution state with the local integration row. */
 @Injectable()
 export class EvolutionReconciliationService {
   private readonly logger = new Logger(EvolutionReconciliationService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly adminAlertEvents?: AdminAlertEventsService,
+  ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async reconcile(): Promise<void> {
@@ -32,7 +36,9 @@ export class EvolutionReconciliationService {
     try {
       provider = new WhatsAppEvolutionProvider();
     } catch (error: any) {
-      this.logger.warn(`Evolution reconciliation unavailable: ${error.message}`);
+      this.logger.warn(
+        `Evolution reconciliation unavailable: ${error.message}`,
+      );
       return;
     }
 
@@ -54,7 +60,9 @@ export class EvolutionReconciliationService {
             ? 'CONNECTED'
             : state === 'connecting'
               ? 'CONNECTING'
-              : state === 'UNAUTHORIZED' || state === 'DISCONNECTED' || state === 'close'
+              : state === 'UNAUTHORIZED' ||
+                  state === 'DISCONNECTED' ||
+                  state === 'close'
                 ? 'NEEDS_REAUTH'
                 : 'ERROR';
         await this.prisma.channelIntegration.update({
@@ -63,21 +71,63 @@ export class EvolutionReconciliationService {
             status: nextStatus,
             lastHealthCheckAt: new Date(),
             lastErrorCode:
-              nextStatus === 'CONNECTED' ? null : `EVOLUTION_${state.toUpperCase()}`,
-            ...(nextStatus === 'CONNECTED' ? { connectedAt: integration.connectedAt || new Date() } : {}),
+              nextStatus === 'CONNECTED'
+                ? null
+                : `EVOLUTION_${state.toUpperCase()}`,
+            ...(nextStatus === 'CONNECTED'
+              ? { connectedAt: integration.connectedAt || new Date() }
+              : {}),
           },
         });
+        if (nextStatus === 'NEEDS_REAUTH' || nextStatus === 'ERROR') {
+          await this.reportOffline(
+            integration,
+            nextStatus,
+            integration.lastErrorCode,
+          );
+        }
       } catch (error: any) {
+        const wasConnected = integration.status === 'CONNECTED';
         await this.prisma.channelIntegration.update({
           where: { id: integration.id },
           data: {
-            status: 'ERROR',
+            status: wasConnected ? 'CONNECTED' : 'ERROR',
             lastHealthCheckAt: new Date(),
             lastErrorCode: 'EVOLUTION_HEALTH_CHECK_FAILED',
           },
         });
-        this.logger.warn(`Evolution health check failed for integration ${integration.id}: ${error.message}`);
+        if (!wasConnected) {
+          await this.reportOffline(
+            integration,
+            'ERROR',
+            'EVOLUTION_HEALTH_CHECK_FAILED',
+          );
+        }
+        this.logger.warn(
+          `Evolution health check failed for integration ${integration.id}: ${error.message}`,
+        );
       }
+    }
+  }
+
+  private async reportOffline(
+    integration: any,
+    state: string,
+    error?: string | null,
+  ) {
+    if (!this.adminAlertEvents) return;
+    try {
+      await this.adminAlertEvents.createEvolutionOfflineAlert({
+        tenantId: integration.tenantId,
+        integrationId: integration.id,
+        integrationName: integration.businessDisplayName,
+        state,
+        error,
+      });
+    } catch (alertError: any) {
+      this.logger.error(
+        `ADMIN_ALERT_EVOLUTION_OFFLINE_FAILED: ${alertError?.message || alertError}`,
+      );
     }
   }
 }

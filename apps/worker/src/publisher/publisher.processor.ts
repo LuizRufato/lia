@@ -1,6 +1,6 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job, UnrecoverableError, DelayedError } from 'bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { randomBytes } from 'crypto';
@@ -14,6 +14,7 @@ import {
 } from '@lia/core';
 import { WhatsAppPublisher } from './whatsapp.publisher';
 import { WhatsAppSafetyGovernor } from './whatsapp-safety-governor';
+import { AdminAlertEventsService } from '../admin-alerts/admin-alert-events.service';
 
 @Processor('publisher', {
   concurrency: 1, // To avoid telegram rate limits and race conditions
@@ -27,6 +28,7 @@ export class PublisherProcessor extends WorkerHost {
     private readonly telegramService: TelegramService,
     private readonly whatsappPublisher: WhatsAppPublisher,
     private readonly whatsappSafetyGovernor: WhatsAppSafetyGovernor,
+    @Optional() private readonly adminAlertEvents?: AdminAlertEventsService,
   ) {
     super();
   }
@@ -152,6 +154,12 @@ export class PublisherProcessor extends WorkerHost {
               }
             : { status: 'FAILED', deferredReason: result.reason || null },
       });
+      if (
+        result.reason !== 'REJECTED_MONETIZATION' &&
+        result.reason !== 'SAFETY_GOVERNOR'
+      ) {
+        await this.reportPublicationFailure(job, offer, channel, result.reason);
+      }
     } else if (result.published) {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
@@ -860,8 +868,60 @@ export class PublisherProcessor extends WorkerHost {
   }
 
   @OnWorkerEvent('failed')
-  onFailed(job: Job | undefined, error: Error) {
+  async onFailed(job: Job | undefined, error: Error) {
     this.logger.error(`Publisher job ${job?.id} failed: ${error.message}`);
+    if (!job || job.name === 'controlled-one-shot') return;
+    const attempts = Number(job.opts.attempts || 1);
+    if ((job.attemptsMade || 0) + 1 < attempts) return;
+    const candidateId = (job.data as any)?.candidateId;
+    const channelId = (job.data as any)?.channelId;
+    if (!candidateId || !channelId) return;
+    const candidate = await this.prisma.publicationCandidate.findUnique({
+      where: { id: candidateId },
+      select: {
+        evaluation: {
+          select: {
+            observation: {
+              select: { offer: { select: { tenantId: true, title: true } } },
+            },
+          },
+        },
+      },
+    });
+    const channel = await this.prisma.channel.findUnique({
+      where: { id: channelId },
+      select: { displayName: true },
+    });
+    if (candidate) {
+      await this.reportPublicationFailure(
+        job,
+        candidate.evaluation.observation.offer,
+        channel,
+        error.message,
+      );
+    }
+  }
+
+  private async reportPublicationFailure(
+    job: Job,
+    offer: { tenantId: string; title?: string | null },
+    channel: { displayName?: string | null } | null,
+    error?: string | null,
+  ) {
+    if (!this.adminAlertEvents) return;
+    try {
+      await this.adminAlertEvents.createPublicationFailureAlert({
+        tenantId: offer.tenantId,
+        jobId: job.id ? String(job.id) : null,
+        product: offer.title || null,
+        channel: channel?.displayName || null,
+        error,
+      });
+    } catch (alertError: any) {
+      this.logger.error(
+        `ADMIN_ALERT_PUBLICATION_FAILURE_FAILED: ${alertError?.message || alertError}`,
+      );
+    }
   }
 
   private async ensureVerifiedAffiliateLink(

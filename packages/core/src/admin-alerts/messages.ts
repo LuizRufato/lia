@@ -1,4 +1,18 @@
 export type AdminAlertMessagePayload = {
+  message?: string;
+  incidentType?: string;
+  product?: string | null;
+  channel?: string | null;
+  error?: string | null;
+  state?: string | null;
+  integration?: string | null;
+  period?: string | null;
+  publications?: number;
+  clicks?: number;
+  sales?: number;
+  commissionCents?: number | null;
+  topProduct?: string | null;
+  failures?: number;
   purchaseTime?: string;
   commissionStatus?: string;
   totalCommissionCents?: number | null;
@@ -13,6 +27,14 @@ export type AdminAlertMessagePayload = {
     }>;
   }>;
 };
+
+export type AdminAlertType =
+  | "NEW_SHOPEE_SALE"
+  | "COMMISSION_CONFIRMED"
+  | "SALE_CANCELLED"
+  | "HIGH_VALUE_SALE"
+  | "CRITICAL_ERROR"
+  | "DAILY_SUMMARY";
 
 export function buildNewShopeeSaleMessage(
   payload: AdminAlertMessagePayload,
@@ -83,6 +105,96 @@ export function buildSimulatedNewShopeeSaleMessage(
       },
     ],
   })}`;
+}
+
+export function buildDailySummaryMessage(
+  payload: AdminAlertMessagePayload,
+): string {
+  const publications = payload.publications ?? 0;
+  const clicks = payload.clicks ?? 0;
+  const sales = payload.sales ?? 0;
+  const commission = formatCents(payload.commissionCents) || "R$ 0,00";
+  const lines = ["📊 Resumo diário da LIA", ""];
+
+  if (!publications && !clicks && !sales && !(payload.failures ?? 0)) {
+    lines.push("Hoje não houve atividade relevante.", "");
+  }
+
+  lines.push(
+    `Publicações: ${publications}`,
+    `Cliques: ${clicks}`,
+    `Vendas: ${sales}`,
+    `Comissão: ${commission}`,
+  );
+  if (payload.topProduct) lines.push(`Produto destaque: ${payload.topProduct}`);
+  if (payload.failures) lines.push(`Falhas relevantes: ${payload.failures}`);
+  lines.push("LIA");
+  return lines.join("\n");
+}
+
+export function buildPublicationFailureMessage(
+  payload: AdminAlertMessagePayload,
+): string {
+  return [
+    "⚠️ Falha de publicação",
+    "",
+    payload.product ? `Produto: ${payload.product}` : null,
+    payload.channel ? `Canal: ${payload.channel}` : null,
+    payload.error ? `Erro: ${payload.error}` : null,
+    "LIA",
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+export function buildEvolutionOfflineMessage(
+  payload: AdminAlertMessagePayload,
+): string {
+  return [
+    "🔴 WhatsApp/Evolution desconectado",
+    "",
+    payload.integration ? `Integração: ${payload.integration}` : null,
+    payload.state ? `Estado: ${payload.state}` : null,
+    payload.error ? `Erro: ${payload.error}` : null,
+    "LIA",
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+export function buildShopeeDisconnectedMessage(
+  payload: AdminAlertMessagePayload,
+): string {
+  return [
+    "🔴 Integração Shopee desconectada",
+    "",
+    payload.state ? `Estado: ${payload.state}` : null,
+    payload.error ? `Erro: ${payload.error}` : null,
+    "LIA",
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+export function buildAdminAlertMessage(
+  type: AdminAlertType,
+  payload: AdminAlertMessagePayload,
+): string {
+  switch (type) {
+    case "DAILY_SUMMARY":
+      return buildDailySummaryMessage(payload);
+    case "CRITICAL_ERROR":
+      if (payload.message) return payload.message;
+      if (payload.incidentType === "SHOPEE_DISCONNECTED")
+        return buildShopeeDisconnectedMessage(payload);
+      if (payload.integration && payload.state)
+        return buildEvolutionOfflineMessage(payload);
+      return buildPublicationFailureMessage(payload);
+    case "NEW_SHOPEE_SALE":
+      return buildNewShopeeSaleMessage(payload);
+    default:
+      return payload.message || "⚠️ Alerta administrativo da LIA";
+  }
 }
 
 function appendAmount(lines: string[], label: string, cents?: number | null) {

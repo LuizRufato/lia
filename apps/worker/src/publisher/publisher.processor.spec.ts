@@ -57,4 +57,50 @@ describe('PublisherProcessor send cadence state', () => {
     ).resolves.toEqual({ acquired: false, retryAt: nextEligibleSendAt });
     expect(prisma.autopilotConfig.updateMany).not.toHaveBeenCalled();
   });
+
+  it('creates a publication failure alert only after the final retry', async () => {
+    const prisma = {
+      publicationCandidate: {
+        findUnique: jest.fn().mockResolvedValue({
+          evaluation: {
+            observation: {
+              offer: { tenantId: 'tenant-1', title: 'Produto teste' },
+            },
+          },
+        }),
+      },
+      channel: {
+        findUnique: jest.fn().mockResolvedValue({ displayName: 'Teste' }),
+      },
+    };
+    const events = { createPublicationFailureAlert: jest.fn() };
+    const processor = new PublisherProcessor(
+      prisma as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      events as any,
+    );
+    const makeJob = (attemptsMade: number) =>
+      ({
+        id: 'job-1',
+        name: 'publish-candidate',
+        data: { candidateId: 'candidate-1', channelId: 'channel-1' },
+        attemptsMade,
+        opts: { attempts: 3 },
+      }) as any;
+
+    await processor.onFailed(makeJob(1), new Error('temporary failure'));
+    expect(events.createPublicationFailureAlert).not.toHaveBeenCalled();
+
+    await processor.onFailed(makeJob(3), new Error('terminal failure'));
+    expect(events.createPublicationFailureAlert).toHaveBeenCalledTimes(1);
+    expect(events.createPublicationFailureAlert).toHaveBeenCalledWith({
+      tenantId: 'tenant-1',
+      jobId: 'job-1',
+      product: 'Produto teste',
+      channel: 'Teste',
+      error: 'terminal failure',
+    });
+  });
 });

@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Job, UnrecoverableError } from 'bullmq';
 import {
   generateAdminAlertRecipientHash,
-  buildNewShopeeSaleMessage,
+  buildAdminAlertMessage,
 } from '@lia/core';
 import {
   decryptSecret,
@@ -44,14 +44,18 @@ export class AdminAlertsProcessor extends WorkerHost {
         select: {
           enabled: true,
           newShopeeSaleEnabled: true,
+          commissionConfirmedEnabled: true,
+          saleCancelledEnabled: true,
+          highValueSaleEnabled: true,
+          criticalErrorEnabled: true,
+          dailySummaryEnabled: true,
           adminWhatsappIntegrationId: true,
           enabledAt: true,
         },
       }));
     if (
       !config?.enabled ||
-      alert.type !== 'NEW_SHOPEE_SALE' ||
-      !config.newShopeeSaleEnabled ||
+      !isAlertTypeEnabled(alert.type, config) ||
       !config.adminWhatsappIntegrationId ||
       !config.enabledAt ||
       alert.createdAt < config.enabledAt ||
@@ -120,12 +124,15 @@ export class AdminAlertsProcessor extends WorkerHost {
     });
 
     try {
+      this.logger.log(
+        `ADMIN_ALERT_SEND_STARTED alert=${alert.id} delivery=${delivery.id}`,
+      );
       const messageId =
         await new WhatsAppEvolutionProvider().sendPrivateMessage(
           sender.externalInstanceName!,
           token,
           recipient,
-          buildNewShopeeSaleMessage(alert.payload as any),
+          buildAdminAlertMessage(alert.type as any, alert.payload as any),
         );
       if (!messageId) throw new Error('WhatsApp provider response ambiguous');
       if (this.prisma.adminAlertDelivery?.update) {
@@ -135,6 +142,12 @@ export class AdminAlertsProcessor extends WorkerHost {
         });
       }
       await this.refreshAlertStatus(alert.id);
+      this.logger.log(
+        `ADMIN_ALERT_SEND_SUCCESS alert=${alert.id} delivery=${delivery.id} type=${alert.type}`,
+      );
+      if (alert.type === 'DAILY_SUMMARY') {
+        this.logger.log(`DAILY_SUMMARY_SEND_SUCCESS alert=${alert.id}`);
+      }
       return { success: true, messageId };
     } catch (error: any) {
       const safeError = sanitizeDeliveryError(error);
@@ -155,6 +168,12 @@ export class AdminAlertsProcessor extends WorkerHost {
       this.logger.error(
         `Admin alert delivery ${delivery.id} failed: ${safeError}`,
       );
+      this.logger.error(
+        `ADMIN_ALERT_SEND_FAILED alert=${alert.id} delivery=${delivery.id} type=${alert.type}`,
+      );
+      if (alert.type === 'DAILY_SUMMARY') {
+        this.logger.error(`DAILY_SUMMARY_SEND_FAILED alert=${alert.id}`);
+      }
       return { failed: true, reason: safeError };
     }
   }
@@ -378,6 +397,25 @@ export class AdminAlertsProcessor extends WorkerHost {
 }
 
 export { buildNewShopeeSaleMessage } from '@lia/core';
+
+function isAlertTypeEnabled(type: string, config: any): boolean {
+  switch (type) {
+    case 'NEW_SHOPEE_SALE':
+      return config.newShopeeSaleEnabled;
+    case 'COMMISSION_CONFIRMED':
+      return config.commissionConfirmedEnabled;
+    case 'SALE_CANCELLED':
+      return config.saleCancelledEnabled;
+    case 'HIGH_VALUE_SALE':
+      return config.highValueSaleEnabled;
+    case 'CRITICAL_ERROR':
+      return config.criticalErrorEnabled;
+    case 'DAILY_SUMMARY':
+      return config.dailySummaryEnabled;
+    default:
+      return false;
+  }
+}
 
 function isTransientDeliveryError(error: any): boolean {
   const message = String(error?.message || error).toLowerCase();

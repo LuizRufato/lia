@@ -19,6 +19,9 @@ import { UpdateAdminAlertConfigDto } from './dto/update-admin-alert-config.dto';
 
 const MAX_RECIPIENTS = 5;
 const TEST_COOLDOWN_MS = 60_000;
+const DAILY_SUMMARY_TIMEZONE = 'America/Campo_Grande';
+const DAILY_SUMMARY_HOUR = 22;
+const DAILY_SUMMARY_MINUTE = 10;
 const DEFAULTS = {
   enabled: false,
   newShopeeSaleEnabled: true,
@@ -490,6 +493,17 @@ export class AdminAlertsService {
     const selectedSender = senderIntegrations.find(
       (integration) => integration.id === config?.adminWhatsappIntegrationId,
     );
+    const lastSummary = this.prisma.adminAlert?.findFirst
+      ? await this.prisma.adminAlert.findFirst({
+          where: {
+            tenantId,
+            type: 'DAILY_SUMMARY',
+            deliveryStatus: 'SENT',
+          },
+          orderBy: { sentAt: 'desc' },
+          select: { sentAt: true },
+        })
+      : null;
     return {
       enabled: config?.enabled ?? DEFAULTS.enabled,
       hasRecipient: recipients.length > 0,
@@ -506,6 +520,12 @@ export class AdminAlertsService {
         ]),
       ),
       enabledAt: config?.enabledAt ?? null,
+      dailySummarySchedule: {
+        time: '22:10',
+        timezone: DAILY_SUMMARY_TIMEZONE,
+        lastSentAt: lastSummary?.sentAt ?? null,
+        nextAt: getNextDailySummaryAt(new Date()),
+      },
     };
   }
 
@@ -657,4 +677,41 @@ export class AdminAlertsService {
       },
     });
   }
+}
+
+function getNextDailySummaryAt(now: Date): Date {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: DAILY_SUMMARY_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+  const values = Object.fromEntries(
+    formatter
+      .formatToParts(now)
+      .filter(({ type }) => type !== 'literal')
+      .map(({ type, value }) => [type, Number(value)]),
+  ) as Record<string, number>;
+  const localTarget = Date.UTC(
+    values.year,
+    values.month - 1,
+    values.day,
+    DAILY_SUMMARY_HOUR,
+    DAILY_SUMMARY_MINUTE,
+  );
+  const localCurrent = Date.UTC(
+    values.year,
+    values.month - 1,
+    values.day,
+    values.hour,
+    values.minute,
+  );
+  const target =
+    localTarget > localCurrent
+      ? localTarget
+      : localTarget + 24 * 60 * 60 * 1000;
+  return new Date(target + 4 * 60 * 60 * 1000);
 }
