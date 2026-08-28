@@ -20,6 +20,7 @@ import {
   Store,
   MessagesSquare,
   Receipt,
+  Megaphone,
 } from "lucide-react";
 
 const MENU_ITEMS = [
@@ -28,6 +29,7 @@ const MENU_ITEMS = [
   { name: "Publicações", href: "/publications", icon: Send },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Vendas", href: "/sales", icon: Receipt },
+  { name: "LIA Ads", href: "/ads", icon: Megaphone },
   { name: "Piloto Automático", href: "/autopilot", icon: Bot },
   { name: "Templates", href: "/templates", icon: FileText },
   { name: "Integrações", href: "/integrations", icon: Store },

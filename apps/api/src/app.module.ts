@@ -22,6 +22,7 @@ import { AdminAlertsModule } from './admin-alerts/admin-alerts.module';
 import { TemplatesModule } from './templates/templates.module';
 import { PublicationsModule } from './publications/publications.module';
 import { PublicSearchModule } from './public-search/public-search.module';
+import { AdsModule } from './ads/ads.module';
 
 @Module({
   imports: [
@@ -87,6 +88,7 @@ import { PublicSearchModule } from './public-search/public-search.module';
     TemplatesModule,
     PublicationsModule,
     PublicSearchModule,
+    AdsModule,
   ],
   controllers: [AppController],
   providers: [
