@@ -13,11 +13,14 @@ model AdminUser {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships         TenantMembership[]
-  approvedAdCampaigns AdCampaign[]       @relation("AdCampaignApprovedBy")
-  rejectedAdCampaigns AdCampaign[]       @relation("AdCampaignRejectedBy")
-  adBillingEvents     AdBillingEvent[]
-  adAuditEvents       AdAuditEvent[]
+  memberships                  TenantMembership[]
+  approvedAdCampaigns          AdCampaign[]          @relation("AdCampaignApprovedBy")
+  rejectedAdCampaigns          AdCampaign[]          @relation("AdCampaignRejectedBy")
+  adBillingEvents              AdBillingEvent[]
+  adAuditEvents                AdAuditEvent[]
+  acquisitionCampaignsCreated  AcquisitionCampaign[] @relation("AcquisitionCampaignCreatedBy")
+  acquisitionCampaignsApproved AcquisitionCampaign[] @relation("AcquisitionCampaignApprovedBy")
+  acquisitionCreativesApproved AcquisitionCreative[] @relation("AcquisitionCreativeApprovedBy")
 }
 
 model Tenant {
@@ -38,18 +41,29 @@ model Tenant {
   adminAlerts          AdminAlert[]
   adminAlertRecipients AdminAlertRecipient[]
 
-  createdAt                  DateTime                    @default(now())
-  updatedAt                  DateTime                    @updatedAt
-  marketplaceConversions     MarketplaceConversion[]
-  marketplaceBrowserSessions MarketplaceBrowserSession[]
-  publicationTemplates       PublicationTemplate[]
-  publicTrackedLinks         PublicTrackedLink[]
-  adsConfig                  AdsConfig?
-  advertisers                Advertiser[]
-  adCampaigns                AdCampaign[]
-  adBillingEvents            AdBillingEvent[]
-  adBalances                 AdvertiserBalance[]
-  adAuditEvents              AdAuditEvent[]
+  createdAt                     DateTime                      @default(now())
+  updatedAt                     DateTime                      @updatedAt
+  marketplaceConversions        MarketplaceConversion[]
+  marketplaceBrowserSessions    MarketplaceBrowserSession[]
+  publicationTemplates          PublicationTemplate[]
+  publicTrackedLinks            PublicTrackedLink[]
+  adsConfig                     AdsConfig?
+  advertisers                   Advertiser[]
+  adCampaigns                   AdCampaign[]
+  adBillingEvents               AdBillingEvent[]
+  adBalances                    AdvertiserBalance[]
+  adAuditEvents                 AdAuditEvent[]
+  metaAcquisitionConfig         MetaAcquisitionConfig?
+  metaConnection                MetaConnection?
+  liaWhatsAppGroups             LiaWhatsAppGroup[]
+  acquisitionCampaigns          AcquisitionCampaign[]
+  acquisitionCreatives          AcquisitionCreative[]
+  acquisitionAudienceStrategies AcquisitionAudienceStrategy[]
+  acquisitionTrackingLinks      AcquisitionTrackingLink[]
+  acquisitionEvents             AcquisitionEvent[]
+  acquisitionSuggestions        AcquisitionSuggestion[]
+  groupMembers                  LiaWhatsAppGroupMember[]
+  groupEvents                   LiaWhatsAppGroupEvent[]
 }
 
 enum TenantRole {
@@ -104,9 +118,10 @@ model Channel {
   createdAt                DateTime          @default(now())
   updatedAt                DateTime          @updatedAt
 
-  publications     Publication[]
-  autopilotConfigs AutopilotChannelConfig[]
-  autopilotAudits  AutopilotAudit[]
+  publications      Publication[]
+  autopilotConfigs  AutopilotChannelConfig[]
+  autopilotAudits   AutopilotAudit[]
+  liaWhatsAppGroups LiaWhatsAppGroup[]
 
   @@unique([tenantId, provider, externalChatId])
 }
@@ -1119,6 +1134,10 @@ enum AdminAlertType {
   HIGH_VALUE_SALE
   CRITICAL_ERROR
   DAILY_SUMMARY
+  CPA_ABOVE_TARGET
+  GROUP_NEAR_CAPACITY
+  GROUP_ROUTING_SWITCH_REQUIRED
+  GROUP_PROVISION_REQUIRED
 }
 
 enum AdminAlertDeliveryStatus {
@@ -1212,4 +1231,359 @@ model AdminAlertDelivery {
 
   @@unique([alertId, recipientId])
   @@index([recipientId, status])
+}
+
+// Meta member-acquisition is intentionally isolated from the legacy sponsored
+// Ads domain above. All write/provisioning switches default to false.
+enum MetaConnectionStatus {
+  NOT_CONFIGURED
+  CONNECTED
+  EXPIRED
+  NEEDS_REAUTH
+  ERROR
+}
+
+enum AcquisitionCampaignStatus {
+  DRAFT
+  READY_FOR_REVIEW
+  APPROVED
+  EXECUTING
+  ACTIVE
+  PAUSED
+  FAILED
+  ARCHIVED
+}
+
+enum AcquisitionCampaignObjective {
+  MEMBER_ACQUISITION
+}
+
+enum AcquisitionCreativeStatus {
+  DRAFT
+  READY_FOR_REVIEW
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum AcquisitionCreativeConcept {
+  AI_VALUE
+  SAVE_MONEY
+  URGENCY
+  EXCLUSIVITY
+  COMMUNITY
+  PRICE_ALERT
+}
+
+enum AcquisitionCreativeFormat {
+  SQUARE
+  PORTRAIT
+  STORY
+}
+
+enum AcquisitionAudienceStrategyType {
+  BROAD
+  INTEREST_BASED
+  RETARGETING
+  LOOKALIKE
+}
+
+enum AcquisitionSuggestionStatus {
+  OPEN
+  APPROVED
+  REJECTED
+  APPLIED
+  EXPIRED
+}
+
+enum AcquisitionSuggestionType {
+  PAUSE_UNDERPERFORMER
+  SHIFT_BUDGET
+  INCREASE_BUDGET
+  TEST_NEW_CREATIVE
+  TEST_NEW_AUDIENCE
+  REFRESH_CREATIVE
+  GROUP_CAPACITY_WARNING
+}
+
+enum AcquisitionEventType {
+  LANDING_VIEW
+  JOIN_CTA_CLICK
+  WHATSAPP_REDIRECT
+  CONFIRMED_GROUP_JOIN
+}
+
+enum LiaWhatsAppGroupStatus {
+  PREPARING
+  ACTIVE
+  NEAR_CAPACITY
+  FULL
+  INACTIVE
+  ERROR
+}
+
+enum LiaWhatsAppGroupEventType {
+  JOIN
+  LEAVE
+  REMOVE
+}
+
+enum AcquisitionGroupProvisioningMode {
+  SHADOW
+}
+
+model MetaAcquisitionConfig {
+  id                              String                           @id @default(uuid())
+  tenantId                        String                           @unique
+  tenant                          Tenant                           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  liaAdsEnabled                   Boolean                          @default(true)
+  liaAdsMetaEnabled               Boolean                          @default(false)
+  liaAdsMetaWriteEnabled          Boolean                          @default(false)
+  liaAdsGroupRoutingEnabled       Boolean                          @default(false)
+  liaAdsGroupAutoProvisionEnabled Boolean                          @default(false)
+  liaAdsAlertsEnabled             Boolean                          @default(false)
+  targetCostPerJoinCents          Int                              @default(100)
+  minimumSpendBeforeAlertCents    Int                              @default(500)
+  minimumJoinIntentsBeforeAlert   Int                              @default(10)
+  groupCapacityDefault            Int                              @default(1024)
+  groupPrepareThreshold           Int                              @default(900)
+  groupRoutingThreshold           Int                              @default(1000)
+  groupProvisioningMode           AcquisitionGroupProvisioningMode @default(SHADOW)
+  createdAt                       DateTime                         @default(now())
+  updatedAt                       DateTime                         @updatedAt
+}
+
+model MetaConnection {
+  id                   String               @id @default(uuid())
+  tenantId             String               @unique
+  tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  status               MetaConnectionStatus @default(NOT_CONFIGURED)
+  businessId           String?
+  adAccountId          String?
+  pageId               String?
+  instagramAccountId   String?
+  encryptedAccessToken String?
+  tokenIv              String?
+  tokenAuthTag         String?
+  tokenExpiresAt       DateTime?
+  permissions          Json?
+  lastValidatedAt      DateTime?
+  lastError            String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+}
+
+model LiaWhatsAppGroup {
+  id                       String                 @id @default(uuid())
+  tenantId                 String
+  tenant                   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channelId                String?
+  channel                  Channel?               @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  externalGroupJid         String
+  name                     String
+  sequenceNumber           Int
+  status                   LiaWhatsAppGroupStatus @default(PREPARING)
+  capacity                 Int                    @default(1024)
+  memberCount              Int                    @default(0)
+  externalMemberCount      Int?
+  inviteCodeHash           String?
+  inviteUrl                String?
+  isRoutingActive          Boolean                @default(false)
+  isPublicationActive      Boolean                @default(false)
+  provisionedAutomatically Boolean                @default(false)
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+  lastReconciledAt         DateTime?
+
+  members           LiaWhatsAppGroupMember[]
+  events            LiaWhatsAppGroupEvent[]
+  acquisitionEvents AcquisitionEvent[]
+
+  @@unique([tenantId, externalGroupJid])
+  @@unique([tenantId, sequenceNumber])
+  @@index([tenantId, status, isRoutingActive])
+}
+
+model LiaWhatsAppGroupMember {
+  id              String           @id @default(uuid())
+  tenantId        String
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  groupId         String
+  group           LiaWhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  participantHash String
+  isActive        Boolean          @default(true)
+  joinedAt        DateTime?
+  leftAt          DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([groupId, participantHash])
+  @@index([tenantId, isActive])
+}
+
+model LiaWhatsAppGroupEvent {
+  id              String                    @id @default(uuid())
+  tenantId        String
+  tenant          Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  groupId         String
+  group           LiaWhatsAppGroup          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  eventId         String                    @unique
+  type            LiaWhatsAppGroupEventType
+  participantHash String
+  occurredAt      DateTime
+  metadata        Json?
+  createdAt       DateTime                  @default(now())
+
+  @@index([tenantId, type, occurredAt])
+  @@index([groupId, occurredAt])
+}
+
+model AcquisitionAudienceStrategy {
+  id         String                          @id @default(uuid())
+  tenantId   String
+  tenant     Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaignId String?
+  campaign   AcquisitionCampaign?            @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  type       AcquisitionAudienceStrategyType
+  name       String
+  rationale  String
+  parameters Json?
+  createdAt  DateTime                        @default(now())
+  updatedAt  DateTime                        @updatedAt
+
+  trackingLinks AcquisitionTrackingLink[]
+
+  @@index([tenantId, type])
+}
+
+model AcquisitionCampaign {
+  id                     String                       @id @default(uuid())
+  tenantId               String
+  tenant                 Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                   String
+  objective              AcquisitionCampaignObjective @default(MEMBER_ACQUISITION)
+  status                 AcquisitionCampaignStatus    @default(DRAFT)
+  dailyBudgetCents       Int
+  totalBudgetCents       Int?
+  targetCostPerJoinCents Int                          @default(100)
+  startAt                DateTime?
+  endAt                  DateTime?
+  country                String                       @default("BR")
+  destinationGroupPool   String                       @default("LIA_ACHOU")
+  metaCampaignId         String?
+  metaAdSetId            String?
+  createdByAdminUserId   String
+  createdBy              AdminUser                    @relation("AcquisitionCampaignCreatedBy", fields: [createdByAdminUserId], references: [id], onDelete: Restrict)
+  approvedByAdminUserId  String?
+  approvedBy             AdminUser?                   @relation("AcquisitionCampaignApprovedBy", fields: [approvedByAdminUserId], references: [id], onDelete: SetNull)
+  approvedAt             DateTime?
+  publishedAt            DateTime?
+  createdAt              DateTime                     @default(now())
+  updatedAt              DateTime                     @updatedAt
+
+  audienceStrategies AcquisitionAudienceStrategy[]
+  creatives          AcquisitionCreative[]
+  trackingLinks      AcquisitionTrackingLink[]
+  events             AcquisitionEvent[]
+  suggestions        AcquisitionSuggestion[]
+
+  @@index([tenantId, status])
+}
+
+model AcquisitionCreative {
+  id                    String                     @id @default(uuid())
+  tenantId              String
+  tenant                Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaignId            String?
+  campaign              AcquisitionCampaign?       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  concept               AcquisitionCreativeConcept
+  format                AcquisitionCreativeFormat
+  headline              String
+  primaryText           String
+  description           String?
+  cta                   String
+  imagePrompt           String?
+  assetUrl              String?
+  status                AcquisitionCreativeStatus  @default(DRAFT)
+  approvedByAdminUserId String?
+  approvedBy            AdminUser?                 @relation("AcquisitionCreativeApprovedBy", fields: [approvedByAdminUserId], references: [id], onDelete: SetNull)
+  approvedAt            DateTime?
+  rejectionReason       String?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+
+  trackingLinks AcquisitionTrackingLink[]
+  events        AcquisitionEvent[]
+
+  @@index([tenantId, status])
+}
+
+model AcquisitionTrackingLink {
+  id                   String                       @id @default(uuid())
+  tenantId             String
+  tenant               Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  token                String                       @unique
+  campaignId           String?
+  campaign             AcquisitionCampaign?         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  creativeId           String?
+  creative             AcquisitionCreative?         @relation(fields: [creativeId], references: [id], onDelete: SetNull)
+  audienceStrategyId   String?
+  audienceStrategy     AcquisitionAudienceStrategy? @relation(fields: [audienceStrategyId], references: [id], onDelete: SetNull)
+  destinationGroupPool String                       @default("LIA_ACHOU")
+  active               Boolean                      @default(true)
+  expiresAt            DateTime?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+
+  events AcquisitionEvent[]
+
+  @@index([tenantId, active])
+}
+
+model AcquisitionEvent {
+  id             String                   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  eventId        String                   @unique
+  type           AcquisitionEventType
+  trackingLinkId String?
+  trackingLink   AcquisitionTrackingLink? @relation(fields: [trackingLinkId], references: [id], onDelete: SetNull)
+  campaignId     String?
+  campaign       AcquisitionCampaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  creativeId     String?
+  creative       AcquisitionCreative?     @relation(fields: [creativeId], references: [id], onDelete: SetNull)
+  groupId        String?
+  group          LiaWhatsAppGroup?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  visitorHash    String?
+  sessionHash    String?
+  referrer       String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmContent     String?
+  deviceClass    String?
+  createdAt      DateTime                 @default(now())
+
+  @@index([tenantId, type, createdAt])
+  @@index([trackingLinkId, type, createdAt])
+}
+
+model AcquisitionSuggestion {
+  id             String                      @id @default(uuid())
+  tenantId       String
+  tenant         Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaignId     String?
+  campaign       AcquisitionCampaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  type           AcquisitionSuggestionType
+  title          String
+  explanation    String
+  dataUsed       Json
+  confidence     Decimal?
+  expectedImpact String?
+  actionPayload  Json?
+  status         AcquisitionSuggestionStatus @default(OPEN)
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  @@index([tenantId, status, createdAt])
 }

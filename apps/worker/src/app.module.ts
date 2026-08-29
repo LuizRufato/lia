@@ -28,6 +28,7 @@ import { WhatsAppSafetyGovernor } from './publisher/whatsapp-safety-governor';
 import { AdminAlertsProcessor } from './admin-alerts/admin-alerts.processor';
 import { AdminAlertEventsService } from './admin-alerts/admin-alert-events.service';
 import { AdminAlertsScheduler } from './admin-alerts/admin-alerts.scheduler';
+import { GroupGrowthService } from './group-growth/group-growth.service';
 
 @Module({
   imports: [
@@ -119,6 +120,7 @@ import { AdminAlertsScheduler } from './admin-alerts/admin-alerts.scheduler';
     AdminAlertsProcessor,
     AdminAlertEventsService,
     AdminAlertsScheduler,
+    GroupGrowthService,
   ],
 })
 export class AppModule {}

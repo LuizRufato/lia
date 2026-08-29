@@ -5,6 +5,9 @@ export function proxy(request: NextRequest) {
   const token = request.cookies.get("Authentication")?.value;
 
   const isPublicLanding = request.nextUrl.pathname === "/";
+  const isPublicGroupLanding =
+    request.nextUrl.pathname === "/grupo" ||
+    request.nextUrl.pathname.startsWith("/grupo/");
   const isPublicBrandAsset = request.nextUrl.pathname.startsWith("/brand/");
   const isPublicSeoFile = ["/robots.txt", "/sitemap.xml"].includes(
     request.nextUrl.pathname,
@@ -12,6 +15,7 @@ export function proxy(request: NextRequest) {
   if (
     !token &&
     !isPublicLanding &&
+    !isPublicGroupLanding &&
     !isPublicBrandAsset &&
     !isPublicSeoFile &&
     !request.nextUrl.pathname.startsWith("/login")

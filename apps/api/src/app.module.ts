@@ -23,6 +23,7 @@ import { TemplatesModule } from './templates/templates.module';
 import { PublicationsModule } from './publications/publications.module';
 import { PublicSearchModule } from './public-search/public-search.module';
 import { AdsModule } from './ads/ads.module';
+import { MetaAcquisitionModule } from './meta-acquisition/meta-acquisition.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { AdsModule } from './ads/ads.module';
     PublicationsModule,
     PublicSearchModule,
     AdsModule,
+    MetaAcquisitionModule,
   ],
   controllers: [AppController],
   providers: [

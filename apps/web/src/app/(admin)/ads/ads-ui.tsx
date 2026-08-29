@@ -10,6 +10,9 @@ export function money(cents: number | null | undefined) {
 export function statusLabel(status: string) {
   return status
     .replace("PENDING_REVIEW", "AGUARDANDO REVISÃO")
+    .replace("READY_FOR_REVIEW", "AGUARDANDO REVISÃO")
+    .replace("MEMBER_ACQUISITION", "AQUISIÇÃO DE MEMBROS")
+    .replace("NOT_CONFIGURED", "NÃO CONFIGURADA")
     .replace("ACTIVE", "ATIVA")
     .replace("PAUSED", "PAUSADA")
     .replace("DRAFT", "RASCUNHO")
@@ -21,11 +24,12 @@ export function AdsNav() {
   return (
     <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-4">
       {[
-        ["Dashboard", "/ads"],
+        ["Visão Geral", "/ads"],
         ["Campanhas", "/ads/campaigns"],
-        ["Anunciantes", "/ads/advertisers"],
-        ["Financeiro", "/ads/financial"],
-        ["Configurações", "/ads/settings"],
+        ["Criativos", "/ads/creatives"],
+        ["Analytics", "/ads/analytics"],
+        ["Sugestões", "/ads/suggestions"],
+        ["Meta", "/ads/meta"],
       ].map(([label, href]) => (
         <a
           key={href}
