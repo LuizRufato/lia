@@ -6,6 +6,11 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma.service';
+import {
+  decryptSecret,
+  getEncryptionKey,
+  WhatsAppEvolutionProvider,
+} from '@lia/integrations';
 
 const DEFAULT_CONFIG = {
   liaAdsEnabled: true,
@@ -76,9 +81,102 @@ function maskId(value: string | null | undefined): string | null {
     : `${value.slice(0, 3)}••••${value.slice(-3)}`;
 }
 
+function maskGroupJid(value: string): string {
+  const [localPart, domain] = value.split('@');
+  if (!localPart || !domain) return '••••';
+  return `${localPart.slice(0, 3)}••••${localPart.slice(-4)}@${domain}`;
+}
+
 @Injectable()
 export class MetaAcquisitionService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async discoverEvolutionGroups(tenantId: string, role: string) {
+    assertAdmin(role);
+
+    const integration = await this.prisma.channelIntegration.findUnique({
+      where: { tenantId_provider: { tenantId, provider: 'WHATSAPP' } },
+      select: {
+        transport: true,
+        externalInstanceName: true,
+        encryptedAccessToken: true,
+        tokenIv: true,
+        tokenAuthTag: true,
+      },
+    });
+
+    if (
+      !integration ||
+      integration.transport !== 'WEB_UNOFFICIAL' ||
+      !integration.externalInstanceName ||
+      !integration.encryptedAccessToken ||
+      !integration.tokenIv ||
+      !integration.tokenAuthTag
+    ) {
+      throw new BadRequestException(
+        'Evolution API integration not found or incomplete.',
+      );
+    }
+
+    let token: string;
+    try {
+      token = decryptSecret(
+        integration.encryptedAccessToken,
+        integration.tokenIv,
+        integration.tokenAuthTag,
+        getEncryptionKey(),
+      );
+    } catch {
+      throw new BadRequestException(
+        'As credenciais da Evolution estão inválidas ou indisponíveis.',
+      );
+    }
+
+    const provider = new WhatsAppEvolutionProvider();
+    const state = await provider.getConnectionState(
+      integration.externalInstanceName,
+      token,
+    );
+    if (state !== 'open') {
+      throw new BadRequestException(
+        `Evolution API is not connected. State: ${state}`,
+      );
+    }
+
+    const [groups, channels, registeredGroups] = await Promise.all([
+      provider.fetchGroups(integration.externalInstanceName, token),
+      this.prisma.channel.findMany({
+        where: { tenantId, provider: 'WHATSAPP' },
+        select: { id: true, externalChatId: true, enabled: true },
+      }),
+      this.prisma.liaWhatsAppGroup.findMany({
+        where: { tenantId },
+        select: { externalGroupJid: true },
+      }),
+    ]);
+
+    const channelByJid = new Map(
+      channels.map((channel) => [channel.externalChatId, channel]),
+    );
+    const registeredJids = new Set(
+      registeredGroups.map((group) => group.externalGroupJid),
+    );
+
+    return {
+      connected: true,
+      groups: groups.map((group) => {
+        const channel = channelByJid.get(group.id);
+        return {
+          externalGroupJid: maskGroupJid(group.id),
+          subject: group.subject,
+          participantCount: group.participants,
+          matchedChannelId: channel?.id || null,
+          channelEnabled: channel?.enabled ?? false,
+          alreadyRegistered: registeredJids.has(group.id),
+        };
+      }),
+    };
+  }
 
   async config(tenantId: string) {
     const config = await this.prisma.metaAcquisitionConfig.findUnique({

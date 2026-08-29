@@ -4,6 +4,18 @@ import {
   MetaAcquisitionService,
 } from './meta-acquisition.service';
 
+const mockGetConnectionState = jest.fn();
+const mockFetchGroups = jest.fn();
+
+jest.mock('@lia/integrations', () => ({
+  decryptSecret: jest.fn(() => 'instance-token'),
+  getEncryptionKey: jest.fn(() => 'encryption-key'),
+  WhatsAppEvolutionProvider: jest.fn().mockImplementation(() => ({
+    getConnectionState: mockGetConnectionState,
+    fetchGroups: mockFetchGroups,
+  })),
+}));
+
 describe('Meta acquisition foundation', () => {
   it('keeps provisioning in shadow mode', async () => {
     const result = await new GroupProvisioningService().plan(
@@ -64,6 +76,64 @@ describe('Meta acquisition foundation', () => {
       reason: 'NO_ELIGIBLE_GROUP',
       pool: 'LIA_ACHOU',
     });
+  });
+
+  it('discovers Evolution groups without writing Prisma data or exposing secrets', async () => {
+    mockGetConnectionState.mockResolvedValue('open');
+    mockFetchGroups.mockResolvedValue([
+      {
+        id: '120363409141589024@g.us',
+        subject: 'LIA ACHOU! 🔥 | Ofertas',
+        participants: 300,
+      },
+    ]);
+    const prisma = {
+      channelIntegration: {
+        findUnique: jest.fn().mockResolvedValue({
+          transport: 'WEB_UNOFFICIAL',
+          externalInstanceName: 'lia-instance',
+          encryptedAccessToken: 'ciphertext',
+          tokenIv: 'iv',
+          tokenAuthTag: 'tag',
+        }),
+      },
+      channel: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'channel-1',
+            externalChatId: '120363409141589024@g.us',
+            enabled: false,
+          },
+        ]),
+      },
+      liaWhatsAppGroup: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    } as any;
+
+    const result = await new MetaAcquisitionService(
+      prisma,
+    ).discoverEvolutionGroups('tenant-1', 'ADMIN');
+
+    expect(result).toEqual({
+      connected: true,
+      groups: [
+        {
+          externalGroupJid: '120••••9024@g.us',
+          subject: 'LIA ACHOU! 🔥 | Ofertas',
+          participantCount: 300,
+          matchedChannelId: 'channel-1',
+          channelEnabled: false,
+          alreadyRegistered: false,
+        },
+      ],
+    });
+    expect(result).not.toHaveProperty('token');
+    expect(prisma.channelIntegration.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.channel.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.liaWhatsAppGroup.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.channel).not.toHaveProperty('update');
+    expect(prisma.liaWhatsAppGroup).not.toHaveProperty('create');
   });
 
   it('creates and consumes a CSRF-protected Meta OAuth state without exposing a token', () => {

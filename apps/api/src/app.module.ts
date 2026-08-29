@@ -24,6 +24,7 @@ import { PublicationsModule } from './publications/publications.module';
 import { PublicSearchModule } from './public-search/public-search.module';
 import { AdsModule } from './ads/ads.module';
 import { MetaAcquisitionModule } from './meta-acquisition/meta-acquisition.module';
+import { EvolutionWebhookController } from './webhooks/evolution.controller';
 
 @Module({
   imports: [
@@ -69,6 +70,9 @@ import { MetaAcquisitionModule } from './meta-acquisition/meta-acquisition.modul
       }),
       inject: [ConfigService],
     }),
+    BullModule.registerQueue({
+      name: 'evolution-group-events',
+    }),
     ThrottlerModule.forRoot([
       {
         name: 'default',
@@ -92,7 +96,7 @@ import { MetaAcquisitionModule } from './meta-acquisition/meta-acquisition.modul
     AdsModule,
     MetaAcquisitionModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, EvolutionWebhookController],
   providers: [
     AppService,
     {

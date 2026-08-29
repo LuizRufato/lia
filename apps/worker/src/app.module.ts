@@ -29,6 +29,7 @@ import { AdminAlertsProcessor } from './admin-alerts/admin-alerts.processor';
 import { AdminAlertEventsService } from './admin-alerts/admin-alert-events.service';
 import { AdminAlertsScheduler } from './admin-alerts/admin-alerts.scheduler';
 import { GroupGrowthService } from './group-growth/group-growth.service';
+import { EvolutionGroupEventProcessor } from './group-growth/evolution-group-event.processor';
 
 @Module({
   imports: [
@@ -81,6 +82,9 @@ import { GroupGrowthService } from './group-growth/group-growth.service';
       name: 'whatsapp-webhooks',
     }),
     BullModule.registerQueue({
+      name: 'evolution-group-events',
+    }),
+    BullModule.registerQueue({
       name: 'shopee-conversions-queue',
       defaultJobOptions: {
         attempts: 3,
@@ -121,6 +125,7 @@ import { GroupGrowthService } from './group-growth/group-growth.service';
     AdminAlertEventsService,
     AdminAlertsScheduler,
     GroupGrowthService,
+    EvolutionGroupEventProcessor,
   ],
 })
 export class AppModule {}

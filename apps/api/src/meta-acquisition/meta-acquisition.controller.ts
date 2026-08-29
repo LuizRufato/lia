@@ -36,6 +36,14 @@ export class MetaAcquisitionController {
     return this.service.groups(req.user.tenantId);
   }
 
+  @Get('groups/discovery')
+  discoverGroups(@Req() req: any) {
+    return this.service.discoverEvolutionGroups(
+      req.user.tenantId,
+      req.user.role,
+    );
+  }
+
   @Post('campaigns')
   createCampaign(@Req() req: any, @Body() body: any) {
     return this.service.createCampaign(

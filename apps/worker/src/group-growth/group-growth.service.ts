@@ -2,20 +2,35 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { createHmac } from 'node:crypto';
 import { PrismaService } from '../prisma.service';
+import {
+  decryptSecret,
+  getEncryptionKey,
+  WhatsAppEvolutionProvider,
+} from '@lia/integrations';
 
 type ParticipantUpdate = {
   tenantId: string;
   groupJid: string;
   eventId: string;
   action: 'JOIN' | 'LEAVE' | 'REMOVE';
-  participant: string;
+  participant?: string;
+  participantHash?: string;
   occurredAt?: Date;
 };
+
+const CAPACITY = 1024;
+const PREPARE_THRESHOLD = 900;
 
 function participantHash(value: string) {
   const secret =
     process.env.INTEGRATION_ENCRYPTION_KEY || 'lia-group-analytics';
   return createHmac('sha256', secret).update(value).digest('hex');
+}
+
+export function capacityStatus(memberCount: number) {
+  if (memberCount >= CAPACITY) return 'FULL' as const;
+  if (memberCount >= PREPARE_THRESHOLD) return 'NEAR_CAPACITY' as const;
+  return 'ACTIVE' as const;
 }
 
 @Injectable()
@@ -25,110 +40,190 @@ export class GroupGrowthService {
   constructor(private readonly prisma: PrismaService) {}
 
   async ingestParticipantUpdate(update: ParticipantUpdate) {
-    const group = await this.prisma.liaWhatsAppGroup.findFirst({
-      where: { tenantId: update.tenantId, externalGroupJid: update.groupJid },
-    });
-    if (!group) return { accepted: false, reason: 'UNREGISTERED_GROUP' };
-    if (group.name.trim().toLowerCase() === 'teste') {
-      return { accepted: false, reason: 'TEST_GROUP_EXCLUDED' };
+    try {
+      return await this.prisma.$transaction(async (tx: any) => {
+        const group = await tx.liaWhatsAppGroup.findFirst({
+          where: {
+            tenantId: update.tenantId,
+            externalGroupJid: update.groupJid,
+          },
+        });
+        if (!group) return { accepted: false, reason: 'UNREGISTERED_GROUP' };
+        if (group.name.trim().toLowerCase() === 'teste') {
+          return { accepted: false, reason: 'TEST_GROUP_EXCLUDED' };
+        }
+
+        const existingEvent = await tx.liaWhatsAppGroupEvent.findUnique({
+          where: { eventId: update.eventId },
+        });
+        if (existingEvent) {
+          return { accepted: false, reason: 'DUPLICATE_EVENT' };
+        }
+
+        const occurredAt = update.occurredAt || new Date();
+        const hash =
+          update.participantHash ||
+          (update.participant ? participantHash(update.participant) : null);
+        if (!hash) return { accepted: false, reason: 'INVALID_PARTICIPANT' };
+        await tx.liaWhatsAppGroupEvent.create({
+          data: {
+            tenantId: update.tenantId,
+            groupId: group.id,
+            eventId: update.eventId,
+            type: update.action,
+            participantHash: hash,
+            occurredAt,
+          },
+        });
+
+        const member = await tx.liaWhatsAppGroupMember.findUnique({
+          where: {
+            groupId_participantHash: {
+              groupId: group.id,
+              participantHash: hash,
+            },
+          },
+        });
+        const isJoin = update.action === 'JOIN';
+        const wasActive = member?.isActive === true;
+        const delta = isJoin
+          ? wasActive
+            ? 0
+            : 1
+          : member
+            ? wasActive
+              ? -1
+              : 0
+            : -1;
+        const nextCount = Math.max(0, Number(group.memberCount || 0) + delta);
+
+        await tx.liaWhatsAppGroupMember.upsert({
+          where: {
+            groupId_participantHash: {
+              groupId: group.id,
+              participantHash: hash,
+            },
+          },
+          create: {
+            tenantId: update.tenantId,
+            groupId: group.id,
+            participantHash: hash,
+            isActive: isJoin,
+            joinedAt: isJoin ? occurredAt : undefined,
+            leftAt: isJoin ? undefined : occurredAt,
+          },
+          update: {
+            isActive: isJoin,
+            joinedAt: isJoin ? occurredAt : undefined,
+            leftAt: isJoin ? null : occurredAt,
+          },
+        });
+
+        await tx.liaWhatsAppGroup.update({
+          where: { id: group.id },
+          data: {
+            memberCount: nextCount,
+            externalMemberCount:
+              group.externalMemberCount === null
+                ? undefined
+                : Math.max(0, Number(group.externalMemberCount) + delta),
+            status: capacityStatus(nextCount),
+            lastReconciledAt: occurredAt,
+          },
+        });
+
+        return {
+          accepted: true,
+          eventId: update.eventId,
+          memberCount: nextCount,
+        };
+      });
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        return { accepted: false, reason: 'DUPLICATE_EVENT' };
+      }
+      throw error;
     }
-
-    const occurredAt = update.occurredAt || new Date();
-    const hash = participantHash(update.participant);
-    const event = await this.prisma.liaWhatsAppGroupEvent.upsert({
-      where: { eventId: update.eventId },
-      create: {
-        tenantId: update.tenantId,
-        groupId: group.id,
-        eventId: update.eventId,
-        type: update.action,
-        participantHash: hash,
-        occurredAt,
-      },
-      update: {},
-    });
-
-    await this.prisma.liaWhatsAppGroupMember.upsert({
-      where: {
-        groupId_participantHash: { groupId: group.id, participantHash: hash },
-      },
-      create: {
-        tenantId: update.tenantId,
-        groupId: group.id,
-        participantHash: hash,
-        isActive: update.action === 'JOIN',
-        joinedAt: update.action === 'JOIN' ? occurredAt : undefined,
-        leftAt: update.action === 'JOIN' ? undefined : occurredAt,
-      },
-      update: {
-        isActive: update.action === 'JOIN',
-        joinedAt: update.action === 'JOIN' ? occurredAt : undefined,
-        leftAt: update.action === 'JOIN' ? null : occurredAt,
-      },
-    });
-    await this.refreshGroup(group.id, update.tenantId);
-    return { accepted: true, eventId: event.eventId };
   }
 
   @Cron('*/15 * * * *')
   async reconcileRegisteredGroups() {
     const groups = await this.prisma.liaWhatsAppGroup.findMany({
       where: {
-        isPublicationActive: true,
-        status: { not: 'INACTIVE' },
         NOT: { name: 'Teste' },
+        status: { not: 'INACTIVE' },
       },
-      select: { id: true, tenantId: true, externalMemberCount: true },
+      select: {
+        id: true,
+        tenantId: true,
+        externalGroupJid: true,
+      },
     });
-    for (const group of groups) {
-      // The Evolution adapter/webhook remains the source of external counts.
-      // Never invent a count when no reconciliation payload is available.
-      if (group.externalMemberCount === null) continue;
-      await this.prisma.liaWhatsAppGroup.update({
-        where: { id: group.id },
-        data: {
-          memberCount: Math.max(0, group.externalMemberCount),
-          lastReconciledAt: new Date(),
-        },
-      });
-      await this.refreshGroup(group.id, group.tenantId);
-    }
-  }
+    if (!groups.length) return;
 
-  private async refreshGroup(groupId: string, tenantId: string) {
-    const [group, activeMembers, config] = await Promise.all([
-      this.prisma.liaWhatsAppGroup.findFirst({
-        where: { id: groupId, tenantId },
-      }),
-      this.prisma.liaWhatsAppGroupMember.count({
-        where: { groupId, tenantId, isActive: true },
-      }),
-      this.prisma.metaAcquisitionConfig.findUnique({ where: { tenantId } }),
-    ]);
-    if (!group) return;
-    const prepareThreshold = config?.groupPrepareThreshold ?? 900;
-    const routingThreshold = config?.groupRoutingThreshold ?? 1000;
-    const status =
-      activeMembers >= group.capacity
-        ? 'FULL'
-        : activeMembers >= routingThreshold
-          ? 'NEAR_CAPACITY'
-          : group.status === 'PREPARING'
-            ? 'PREPARING'
-            : 'ACTIVE';
-    await this.prisma.liaWhatsAppGroup.update({
-      where: { id: groupId },
-      data: {
-        memberCount: activeMembers,
-        status,
-        isRoutingActive: activeMembers < routingThreshold,
-        lastReconciledAt: new Date(),
+    const provider = new WhatsAppEvolutionProvider();
+    const key = getEncryptionKey();
+    const integrations = await this.prisma.channelIntegration.findMany({
+      where: {
+        provider: 'WHATSAPP',
+        transport: 'WEB_UNOFFICIAL',
+        externalInstanceName: { not: null },
+        encryptedAccessToken: { not: null },
+        tokenIv: { not: null },
+        tokenAuthTag: { not: null },
+      },
+      select: {
+        tenantId: true,
+        externalInstanceName: true,
+        encryptedAccessToken: true,
+        tokenIv: true,
+        tokenAuthTag: true,
       },
     });
-    if (activeMembers >= prepareThreshold) {
-      this.logger.debug(
-        `Group ${groupId} reached the shadow preparation threshold.`,
-      );
+    const integrationsByTenant = new Map(
+      integrations.map((integration) => [integration.tenantId, integration]),
+    );
+
+    for (const group of groups) {
+      const integration = integrationsByTenant.get(group.tenantId);
+      if (!integration || !integration.externalInstanceName) continue;
+
+      try {
+        const token = decryptSecret(
+          integration.encryptedAccessToken!,
+          integration.tokenIv!,
+          integration.tokenAuthTag!,
+          key,
+        );
+        const state = await provider.getConnectionState(
+          integration.externalInstanceName,
+          token,
+        );
+        if (state !== 'open') continue;
+
+        const remoteGroups = await provider.fetchGroups(
+          integration.externalInstanceName,
+          token,
+        );
+        const remoteGroup = remoteGroups.find(
+          (candidate) => candidate.id === group.externalGroupJid,
+        );
+        if (!remoteGroup) continue;
+
+        await this.prisma.liaWhatsAppGroup.update({
+          where: { id: group.id },
+          data: {
+            externalMemberCount: remoteGroup.participants,
+            memberCount: remoteGroup.participants,
+            status: capacityStatus(remoteGroup.participants),
+            lastReconciledAt: new Date(),
+          },
+        });
+      } catch (error: any) {
+        this.logger.warn(
+          `Group reconciliation unavailable for registered group ${group.id}: ${error.message}`,
+        );
+      }
     }
   }
 }
