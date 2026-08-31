@@ -18,10 +18,65 @@ export interface EvolutionGroup {
   participants: number;
 }
 
+export interface EvolutionWebhookConfig {
+  enabled: boolean;
+  url: string | null;
+  events: string[];
+  headerNames: string[];
+  headersPresent: boolean;
+  webhookByEvents: boolean;
+  webhookBase64: boolean;
+}
+
+export type EvolutionWebhookHealth = "HEALTHY" | "DRIFTED" | "NOT_CONFIGURED";
+
+export interface EvolutionWebhookExpectation {
+  url: string;
+  event: string;
+  headerName: string;
+  webhookByEvents?: boolean;
+}
+
 export interface EvolutionImageMessage {
   mediaUrl: string;
   caption: string;
   fileName?: string;
+}
+
+function normalizeWebhookEventName(value: string) {
+  return value.trim().toLowerCase().replace(/[.-]/g, "_");
+}
+
+export function checkEvolutionWebhookHealth(
+  config: EvolutionWebhookConfig,
+  expected: EvolutionWebhookExpectation,
+): EvolutionWebhookHealth {
+  if (!config.enabled || !config.url || !config.events.length) {
+    return "NOT_CONFIGURED";
+  }
+
+  const eventConfigured = config.events.some(
+    (event) =>
+      normalizeWebhookEventName(event) ===
+      normalizeWebhookEventName(expected.event),
+  );
+  const headerConfigured = config.headerNames.some(
+    (header) => header.toLowerCase() === expected.headerName.toLowerCase(),
+  );
+  const byEventsMatches =
+    expected.webhookByEvents === undefined ||
+    config.webhookByEvents === expected.webhookByEvents;
+
+  if (
+    config.url !== expected.url ||
+    !eventConfigured ||
+    !headerConfigured ||
+    !byEventsMatches
+  ) {
+    return "DRIFTED";
+  }
+
+  return "HEALTHY";
 }
 
 export class WhatsAppEvolutionProvider {
@@ -280,6 +335,105 @@ export class WhatsAppEvolutionProvider {
       throw new Error(
         `Failed to fetch groups from Evolution API: ${error.message}`,
       );
+    }
+  }
+
+  async getWebhookConfig(
+    instanceName: string,
+    token: string,
+  ): Promise<EvolutionWebhookConfig> {
+    try {
+      const response = await this.api.get(
+        `/webhook/find/${encodeURIComponent(instanceName)}`,
+        { headers: { apikey: token } },
+      );
+      const raw = response.data?.webhook || response.data || {};
+      const rawHeaders =
+        raw.headers && typeof raw.headers === "object" ? raw.headers : {};
+      const rawEvents = Array.isArray(raw.events) ? raw.events : [];
+      const events = rawEvents.map(String);
+      const url = typeof raw.url === "string" && raw.url ? raw.url : null;
+
+      return {
+        enabled:
+          raw.enabled === true ||
+          raw.configured === true ||
+          Boolean(url && events.length),
+        url,
+        events,
+        headerNames: Object.keys(rawHeaders).map((header) =>
+          header.toLowerCase(),
+        ),
+        headersPresent: Object.keys(rawHeaders).length > 0,
+        webhookByEvents: Boolean(
+          raw.webhookByEvents ?? raw.webhook_by_events ?? raw.byEvents,
+        ),
+        webhookBase64: Boolean(raw.base64 ?? raw.webhookBase64),
+      };
+    } catch {
+      throw new Error("Failed to read Evolution webhook configuration");
+    }
+  }
+
+  async checkEvolutionWebhookHealth(
+    instanceName: string,
+    token: string,
+    expected: EvolutionWebhookExpectation,
+  ): Promise<EvolutionWebhookHealth> {
+    const config = await this.getWebhookConfig(instanceName, token);
+    return checkEvolutionWebhookHealth(config, expected);
+  }
+
+  async fetchGroupInviteCode(
+    instanceName: string,
+    token: string,
+    groupJid: string,
+  ): Promise<{ inviteCode: string; inviteUrl: string }> {
+    try {
+      const response = await this.api.get(
+        `/group/inviteCode/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(groupJid)}`,
+        { headers: { apikey: token } },
+      );
+      const data = response.data || {};
+      const rawInviteUrl =
+        typeof data.inviteUrl === "string" ? data.inviteUrl : "";
+      const inviteCode =
+        typeof data.inviteCode === "string" ? data.inviteCode.trim() : "";
+      const parsedUrl = rawInviteUrl ? new URL(rawInviteUrl) : null;
+      const urlCode =
+        parsedUrl &&
+        parsedUrl.protocol === "https:" &&
+        parsedUrl.hostname === "chat.whatsapp.com" &&
+        parsedUrl.pathname.split("/").filter(Boolean).length === 1 &&
+        !parsedUrl.search &&
+        !parsedUrl.hash
+          ? parsedUrl.pathname.split("/").filter(Boolean)[0]
+          : "";
+      const resolvedCode = inviteCode || urlCode;
+      const inviteUrl =
+        rawInviteUrl || `https://chat.whatsapp.com/${resolvedCode}`;
+
+      if (!resolvedCode || (inviteCode && urlCode && inviteCode !== urlCode)) {
+        throw new Error("Evolution returned an invalid group invite");
+      }
+
+      const validUrl = new URL(inviteUrl);
+      if (
+        validUrl.protocol !== "https:" ||
+        validUrl.hostname !== "chat.whatsapp.com" ||
+        validUrl.pathname !== `/${resolvedCode}` ||
+        validUrl.search ||
+        validUrl.hash
+      ) {
+        throw new Error("Evolution returned an invalid group invite");
+      }
+
+      return { inviteCode: resolvedCode, inviteUrl };
+    } catch (error: any) {
+      if (error?.message === "Evolution returned an invalid group invite") {
+        throw error;
+      }
+      throw new Error("Failed to read group invite from Evolution");
     }
   }
 

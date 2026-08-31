@@ -8,7 +8,8 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { getEncryptionKey } from '@lia/integrations';
 import { PrismaService } from '../prisma.service';
 import { Public } from '../auth/public.decorator';
 
@@ -19,17 +20,16 @@ type NormalizedParticipantEvent = {
   eventId: string;
   action: 'JOIN' | 'LEAVE' | 'REMOVE';
   participantHash: string;
+  occurredAt: Date;
 };
 
 function hashParticipant(value: string) {
-  const secret =
-    process.env.INTEGRATION_ENCRYPTION_KEY || 'lia-group-analytics';
-  return createHmac('sha256', secret).update(value).digest('hex');
+  return createHmac('sha256', getEncryptionKey()).update(value).digest('hex');
 }
 
-function normalizeAction(
-  value: unknown,
-): NormalizedParticipantEvent['action'] | null {
+type NormalizedAction = NormalizedParticipantEvent['action'] | 'IGNORED';
+
+function normalizeAction(value: unknown): NormalizedAction | null {
   const action = String(value || '')
     .trim()
     .toLowerCase();
@@ -41,6 +41,7 @@ function normalizeAction(
     )
   )
     return 'REMOVE';
+  if (['promote', 'demote'].includes(action)) return 'IGNORED';
   return null;
 }
 
@@ -55,7 +56,7 @@ function normalizeParticipant(value: unknown): string | null {
 function normalizeGroupEvent(
   body: Record<string, any>,
   tenantId: string,
-): NormalizedParticipantEvent[] | null {
+): NormalizedParticipantEvent[] | { ignored: true; reason: string } | null {
   const eventName = String(body.event || body.eventType || body.type || '')
     .trim()
     .toUpperCase()
@@ -73,37 +74,58 @@ function normalizeGroupEvent(
   const normalizedParticipants: Array<string | null> =
     participants.map(normalizeParticipant);
   const action = normalizeAction(data.action || data.operation || body.action);
-  const eventId = String(
-    body.eventId || data.eventId || data.idempotencyKey || body.id || '',
-  ).trim();
+  const dateTime = String(body.date_time || data.date_time || '').trim();
+  const parsedDateTime = dateTime ? new Date(dateTime) : null;
 
   if (
     !instanceName ||
     !groupJid.endsWith('@g.us') ||
     !normalizedParticipants.length ||
     normalizedParticipants.some((participant) => !participant) ||
-    !action ||
-    !eventId
+    !action
   ) {
     return null;
   }
 
-  return normalizedParticipants.map(
-    (participant: string | null, index: number) => {
-      const participantHash = hashParticipant(participant!);
-      return {
-        tenantId,
-        instanceName,
-        groupJid,
-        eventId:
-          normalizedParticipants.length === 1
-            ? eventId
-            : `${eventId}:${participantHash.slice(0, 16)}:${index}`,
-        action,
-        participantHash,
-      };
-    },
-  );
+  if (action === 'IGNORED') {
+    return { ignored: true, reason: 'IGNORED_PARTICIPANT_ACTION' };
+  }
+
+  if (!parsedDateTime || Number.isNaN(parsedDateTime.getTime())) return null;
+
+  const occurredAt = parsedDateTime;
+  const explicitEventId = String(
+    body.eventId || data.eventId || data.idempotencyKey || '',
+  ).trim();
+
+  return normalizedParticipants.map((participant: string | null) => {
+    const participantHash = hashParticipant(participant!);
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify([
+          instanceName,
+          eventName,
+          occurredAt.toISOString(),
+          groupJid,
+          action,
+          participantHash,
+          explicitEventId || null,
+        ]),
+      )
+      .digest('hex');
+    return {
+      tenantId,
+      instanceName,
+      groupJid,
+      eventId:
+        explicitEventId && normalizedParticipants.length === 1
+          ? explicitEventId
+          : `evo-group:${fingerprint}`,
+      action,
+      participantHash,
+      occurredAt,
+    };
+  });
 }
 
 function isValidSecret(
@@ -160,6 +182,10 @@ export class EvolutionWebhookController {
     const events = normalizeGroupEvent(body, integration.tenantId);
     if (!events) {
       throw new BadRequestException('Evento de grupo Evolution inválido.');
+    }
+
+    if ('ignored' in events) {
+      return { accepted: false, reason: events.reason };
     }
 
     for (const event of events) {

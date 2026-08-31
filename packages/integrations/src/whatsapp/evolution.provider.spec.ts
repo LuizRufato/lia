@@ -1,5 +1,8 @@
 import axios from "axios";
-import { WhatsAppEvolutionProvider } from "./WhatsAppEvolutionProvider";
+import {
+  checkEvolutionWebhookHealth,
+  WhatsAppEvolutionProvider,
+} from "./WhatsAppEvolutionProvider";
 
 jest.mock("axios", () => {
   const create = jest.fn();
@@ -245,5 +248,181 @@ describe("WhatsAppEvolutionProvider lifecycle safety", () => {
       "/group/fetchAllGroups/lia-tenant?getParticipants=true",
       { headers: { apikey: "instance-key" } },
     );
+  });
+
+  it("reads the webhook configuration without exposing header values", async () => {
+    api.get.mockResolvedValueOnce({
+      data: {
+        webhook: {
+          enabled: true,
+          url: "https://api.example/webhooks/evolution",
+          events: ["group-participants.update"],
+          headers: {
+            "x-evolution-webhook-secret": "must-not-leak",
+          },
+          webhookByEvents: true,
+          base64: false,
+        },
+      },
+    });
+
+    const result = await new WhatsAppEvolutionProvider().getWebhookConfig(
+      "lia-tenant",
+      "instance-key",
+    );
+
+    expect(result).toEqual({
+      enabled: true,
+      url: "https://api.example/webhooks/evolution",
+      events: ["group-participants.update"],
+      headerNames: ["x-evolution-webhook-secret"],
+      headersPresent: true,
+      webhookByEvents: true,
+      webhookBase64: false,
+    });
+    expect(JSON.stringify(result)).not.toContain("must-not-leak");
+    expect(api.get).toHaveBeenCalledWith("/webhook/find/lia-tenant", {
+      headers: { apikey: "instance-key" },
+    });
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
+  });
+
+  it("classifies webhook configuration without writing it", async () => {
+    api.get.mockResolvedValueOnce({
+      data: {
+        enabled: true,
+        url: "https://api.example/webhooks/evolution",
+        events: ["GROUP_PARTICIPANTS_UPDATE"],
+        headers: { "x-evolution-webhook-secret": "secret" },
+        webhookByEvents: true,
+      },
+    });
+
+    await expect(
+      new WhatsAppEvolutionProvider().checkEvolutionWebhookHealth(
+        "lia-tenant",
+        "instance-key",
+        {
+          url: "https://api.example/webhooks/evolution",
+          event: "group-participants.update",
+          headerName: "x-evolution-webhook-secret",
+          webhookByEvents: true,
+        },
+      ),
+    ).resolves.toBe("HEALTHY");
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
+  });
+
+  it("classifies absent or drifted webhook configuration", () => {
+    const expected = {
+      url: "https://api.example/webhooks/evolution",
+      event: "group-participants.update",
+      headerName: "x-evolution-webhook-secret",
+    };
+    expect(
+      checkEvolutionWebhookHealth(
+        {
+          enabled: false,
+          url: null,
+          events: [],
+          headerNames: [],
+          headersPresent: false,
+          webhookByEvents: false,
+          webhookBase64: false,
+        },
+        expected,
+      ),
+    ).toBe("NOT_CONFIGURED");
+    expect(
+      checkEvolutionWebhookHealth(
+        {
+          enabled: true,
+          url: "https://wrong.example/webhook",
+          events: ["group-participants.update"],
+          headerNames: [],
+          headersPresent: false,
+          webhookByEvents: false,
+          webhookBase64: false,
+        },
+        expected,
+      ),
+    ).toBe("DRIFTED");
+  });
+
+  it("reads a group invite with GET only and validates the URL", async () => {
+    api.get.mockResolvedValueOnce({
+      data: {
+        inviteCode: "AbC123",
+        inviteUrl: "https://chat.whatsapp.com/AbC123",
+      },
+    });
+
+    await expect(
+      new WhatsAppEvolutionProvider().fetchGroupInviteCode(
+        "lia tenant",
+        "instance-key",
+        "120@g.us",
+      ),
+    ).resolves.toEqual({
+      inviteCode: "AbC123",
+      inviteUrl: "https://chat.whatsapp.com/AbC123",
+    });
+    expect(api.get).toHaveBeenCalledWith(
+      "/group/inviteCode/lia%20tenant?groupJid=120%40g.us",
+      { headers: { apikey: "instance-key" } },
+    );
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsafe invite URL without any write operation", async () => {
+    api.get.mockResolvedValueOnce({
+      data: { inviteUrl: "http://chat.whatsapp.com/AbC123" },
+    });
+
+    await expect(
+      new WhatsAppEvolutionProvider().fetchGroupInviteCode(
+        "lia-tenant",
+        "instance-key",
+        "120@g.us",
+      ),
+    ).rejects.toThrow("Evolution returned an invalid group invite");
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
+  });
+
+  it("keeps repeated invite reads stable", async () => {
+    api.get
+      .mockResolvedValueOnce({
+        data: {
+          inviteCode: "StableCode",
+          inviteUrl: "https://chat.whatsapp.com/StableCode",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          inviteCode: "StableCode",
+          inviteUrl: "https://chat.whatsapp.com/StableCode",
+        },
+      });
+
+    const provider = new WhatsAppEvolutionProvider();
+    const first = await provider.fetchGroupInviteCode(
+      "lia-tenant",
+      "instance-key",
+      "120@g.us",
+    );
+    const second = await provider.fetchGroupInviteCode(
+      "lia-tenant",
+      "instance-key",
+      "120@g.us",
+    );
+
+    expect(first).toEqual(second);
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
   });
 });

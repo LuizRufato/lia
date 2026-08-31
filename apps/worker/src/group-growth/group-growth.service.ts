@@ -15,16 +15,14 @@ type ParticipantUpdate = {
   action: 'JOIN' | 'LEAVE' | 'REMOVE';
   participant?: string;
   participantHash?: string;
-  occurredAt?: Date;
+  occurredAt?: Date | string;
 };
 
 const CAPACITY = 1024;
 const PREPARE_THRESHOLD = 900;
 
 function participantHash(value: string) {
-  const secret =
-    process.env.INTEGRATION_ENCRYPTION_KEY || 'lia-group-analytics';
-  return createHmac('sha256', secret).update(value).digest('hex');
+  return createHmac('sha256', getEncryptionKey()).update(value).digest('hex');
 }
 
 export function capacityStatus(memberCount: number) {
@@ -60,7 +58,12 @@ export class GroupGrowthService {
           return { accepted: false, reason: 'DUPLICATE_EVENT' };
         }
 
-        const occurredAt = update.occurredAt || new Date();
+        const occurredAt = update.occurredAt
+          ? new Date(update.occurredAt)
+          : new Date();
+        if (Number.isNaN(occurredAt.getTime())) {
+          return { accepted: false, reason: 'INVALID_OCCURRED_AT' };
+        }
         const hash =
           update.participantHash ||
           (update.participant ? participantHash(update.participant) : null);
