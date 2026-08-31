@@ -87,12 +87,12 @@ export class PublisherProcessor extends WorkerHost {
       where: {
         id: channelId,
         tenantId: offer.tenantId,
-        enabled: true,
         provider: { in: ['TELEGRAM', 'WHATSAPP'] },
       },
       include: { tenant: { include: { channelIntegrations: true } } },
     });
     const isConfigured = Boolean(
+      channel?.enabled &&
       config &&
       config.mode === 'AUTO' &&
       config.enabledChannels.some((item) => item.channelId === channelId) &&
@@ -101,10 +101,51 @@ export class PublisherProcessor extends WorkerHost {
       ),
     );
     if (!channel || !isConfigured) {
-      await this.prisma.publicationCandidate.update({
-        where: { id: candidateId },
-        data: { status: 'SKIPPED' },
-      });
+      const fanoutChannelIds = (job.data as any)?.fanoutChannelIds || [];
+      if (fanoutChannelIds.length > 1 && channel) {
+        try {
+          await this.prisma.publication.create({
+            data: {
+              candidateId,
+              channelId,
+              status: 'FAILED',
+              errorReason: 'AUTOPILOT_AUTHORIZATION_REVOKED',
+            },
+          });
+        } catch (error: any) {
+          if (error.code !== 'P2002') throw error;
+        }
+        await this.prisma.autopilotAudit.create({
+          data: {
+            tenantId: offer.tenantId,
+            candidateId,
+            evaluationId: candidate.evaluation.id,
+            channelId,
+            decision: 'REJECTED_CHANNEL_POLICY',
+            liaScore: candidate.evaluation.score || 0,
+            details:
+              'Canal revogado após o agendamento; nenhum envio externo foi tentado.',
+          },
+        });
+        await this.refreshCandidateStatus(candidateId, fanoutChannelIds.length);
+      } else if (!channel) {
+        await this.prisma.autopilotAudit.create({
+          data: {
+            tenantId: offer.tenantId,
+            candidateId,
+            evaluationId: candidate.evaluation.id,
+            decision: 'REJECTED_CHANNEL_POLICY',
+            liaScore: candidate.evaluation.score || 0,
+            details:
+              'Canal não encontrado após o agendamento; nenhum envio externo foi tentado.',
+          },
+        });
+      } else {
+        await this.prisma.publicationCandidate.update({
+          where: { id: candidateId },
+          data: { status: 'SKIPPED' },
+        });
+      }
       return { skipped: true, reason: 'AUTOPILOT_AUTHORIZATION_REVOKED' };
     }
 
@@ -733,20 +774,29 @@ export class PublisherProcessor extends WorkerHost {
       });
       return;
     }
-    const allPublished =
-      publications.length > 0 &&
-      publications.every((item) => item.status === 'PUBLISHED');
     const hasPendingWork = publications.some((item) =>
       ['PENDING', 'PUBLISHING', 'RETRYABLE', 'WAITING_CONNECTION'].includes(
         item.status,
       ),
     );
+    const hasPublished = publications.some(
+      (item) => item.status === 'PUBLISHED',
+    );
+    const hasDeliveryUnknown = publications.some(
+      (item) => item.status === 'DELIVERY_UNKNOWN',
+    );
     await this.prisma.publicationCandidate.updateMany({
       where: { id: candidateId, status: { in: ['QUEUED', 'PUBLISHING'] } },
-      data: allPublished
-        ? { status: 'PUBLISHED', deferredReason: null, retryAt: null }
-        : hasPendingWork
-          ? { status: 'PUBLISHING' }
+      data: hasPendingWork
+        ? { status: 'PUBLISHING' }
+        : hasPublished
+          ? {
+              status: 'PUBLISHED',
+              deferredReason: hasDeliveryUnknown
+                ? 'DELIVERY_UNKNOWN_ON_SIBLING_CHANNEL'
+                : null,
+              retryAt: null,
+            }
           : { status: 'FAILED' },
     });
   }
@@ -814,8 +864,12 @@ export class PublisherProcessor extends WorkerHost {
         minSendIntervalMinutes: true,
         maxSendIntervalMinutes: true,
         intervalMinutes: true,
+        nextEligibleSendAt: true,
       },
     });
+    if (config?.nextEligibleSendAt && config.nextEligibleSendAt > sentAt) {
+      return;
+    }
     let nextEligibleSendAt: Date | null = null;
     if (
       config?.minSendIntervalMinutes != null &&

@@ -254,7 +254,9 @@ export class AutopilotSchedulerService
       });
       // maxDailyPosts is an offer-slot limit. A fan-out to several channels
       // must not consume several daily slots for the same candidate.
-      const postsToday = postsTodayRows.length;
+      const postsToday = new Set(
+        postsTodayRows.map((publication: any) => publication.candidateId),
+      ).size;
 
       // 3. channelStatus & integrations
       const channelStatus: Record<
@@ -323,8 +325,12 @@ export class AutopilotSchedulerService
           decision.channelIds ||
           (decision.channelId ? [decision.channelId] : []);
         const publishableChannelIds: string[] = [];
-        let firstBlockedGuard:
-          { reason: string; details: string; retryAt: Date } | undefined;
+        const blockedGuards: Array<{
+          channelId: string;
+          reason: string;
+          details: string;
+          retryAt: Date;
+        }> = [];
         for (const channelId of decisionChannelIds) {
           const guard = await this.evaluateCatalogPublicationGuards(
             tenantId,
@@ -340,31 +346,40 @@ export class AutopilotSchedulerService
             now,
           );
           if (guard.allowed) publishableChannelIds.push(channelId);
-          else if (!firstBlockedGuard) firstBlockedGuard = guard;
+          else blockedGuards.push({ channelId, ...guard });
+        }
+        for (const blocked of blockedGuards) {
+          await this.createAudit(
+            tenantId,
+            candidate,
+            eligibleEvaluation.id,
+            blocked.reason,
+            offer.score,
+            blocked.channelId,
+            blocked.details,
+          );
         }
         if (!publishableChannelIds.length) {
-          if (firstBlockedGuard) {
-            if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
-              await this.createAudit(
-                tenantId,
-                candidate,
-                eligibleEvaluation.id,
-                firstBlockedGuard.reason,
-                offer.score,
-                undefined,
-                firstBlockedGuard.details,
-              );
-              return;
-            }
-            await this.deferCandidate(
-              dbConfig,
-              candidate,
-              firstBlockedGuard.reason,
-              firstBlockedGuard.retryAt,
-              firstBlockedGuard.details,
-              eligibleEvaluation.id,
-              offer.score,
+          if (blockedGuards.length) {
+            const retryAt = blockedGuards.reduce(
+              (earliest, blocked) =>
+                blocked.retryAt < earliest ? blocked.retryAt : earliest,
+              blockedGuards[0].retryAt,
             );
+            if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+              continue;
+            }
+            await this.prisma.publicationCandidate.updateMany({
+              where: {
+                id: candidate.id,
+                status: { in: ['PENDING', 'DEFERRED'] },
+              },
+              data: {
+                status: 'DEFERRED',
+                deferredReason: blockedGuards[0].reason,
+                retryAt,
+              },
+            });
           }
           continue;
         }
