@@ -1,7 +1,11 @@
 export interface PublishCandidateJobData {
   candidateId: string;
-  /** The only channel authorized by the Autopilot decision for this job. */
+  /** The channel authorized by the Autopilot decision for this job. */
   channelId: string;
+  /** One global offer slot may fan out to these independent channel jobs. */
+  fanoutChannelIds?: string[];
+  offerSlotId?: string;
+  pacingLeader?: boolean;
 }
 
 export interface PublishClickJobData {
@@ -17,8 +21,5 @@ export interface PublishClickJobData {
   deviceType?: string | null;
   referrer?: string | null;
   intelligenceClass?:
-    | "HUMAN"
-    | "BOT"
-    | "PREVIEW_CRAWLER"
-    | "SUSPECTED_AUTOMATION";
+    "HUMAN" | "BOT" | "PREVIEW_CRAWLER" | "SUSPECTED_AUTOMATION";
 }

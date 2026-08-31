@@ -149,9 +149,28 @@ export class AutopilotSchedulerService
       ),
     };
 
-    // Select a due candidate before schedule checks so temporary blockers are
-    // persisted as DEFERRED instead of silently disappearing.
-    const eligibleEvaluation = await this.prisma.offerEvaluation.findFirst({
+    const currentMinute = getMinutesSinceMidnight(now, configSnapshot.timezone);
+    const withinSchedule =
+      configSnapshot.allowedStartMinute <= configSnapshot.allowedEndMinute
+        ? currentMinute >= configSnapshot.allowedStartMinute &&
+          currentMinute <= configSnapshot.allowedEndMinute
+        : currentMinute >= configSnapshot.allowedStartMinute ||
+          currentMinute <= configSnapshot.allowedEndMinute;
+
+    // These are tenant-wide gates. Evaluate them before loading candidates so
+    // a pacing or schedule blocker cannot churn the same candidate every tick.
+    if (!withinSchedule) return;
+    if (
+      configSnapshot.mode === AutopilotMode.AUTO &&
+      dbConfig.nextEligibleSendAt &&
+      dbConfig.nextEligibleSendAt > now
+    ) {
+      return;
+    }
+
+    // Scan a bounded, deterministic batch so a locally blocked high-score
+    // candidate cannot starve a publishable candidate behind it.
+    const eligibleEvaluations = await this.prisma.offerEvaluation.findMany({
       where: {
         observation: {
           offer: {
@@ -168,7 +187,8 @@ export class AutopilotSchedulerService
           },
         },
       },
-      orderBy: { score: 'desc' },
+      orderBy: [{ score: 'desc' }, { id: 'asc' }],
+      take: 50,
       include: {
         candidate: true,
         observation: {
@@ -179,218 +199,196 @@ export class AutopilotSchedulerService
       },
     });
 
-    if (!eligibleEvaluation) return;
-    const candidate = eligibleEvaluation.candidate!;
+    if (!eligibleEvaluations.length) return;
 
-    const clock: Clock = {
-      now: () => now,
-      getMinutesSinceMidnight: (tz: string) => getMinutesSinceMidnight(now, tz),
-    };
+    for (const eligibleEvaluation of eligibleEvaluations) {
+      const candidate = eligibleEvaluation.candidate!;
 
-    const currentMinute = clock.getMinutesSinceMidnight(
-      configSnapshot.timezone,
-    );
-    let withinSchedule = false;
-    if (configSnapshot.allowedStartMinute <= configSnapshot.allowedEndMinute) {
-      withinSchedule =
-        currentMinute >= configSnapshot.allowedStartMinute &&
-        currentMinute <= configSnapshot.allowedEndMinute;
-    } else {
-      withinSchedule =
-        currentMinute >= configSnapshot.allowedStartMinute ||
-        currentMinute <= configSnapshot.allowedEndMinute;
-    }
+      const clock: Clock = {
+        now: () => now,
+        getMinutesSinceMidnight: (tz: string) =>
+          getMinutesSinceMidnight(now, tz),
+      };
 
-    if (!withinSchedule) {
-      if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
-        await this.createAudit(
-          tenantId,
+      const catalogPolicy = this.getCatalogPolicy(dbConfig.catalogPolicy);
+      const catalogSignals = this.getCatalogSignals(
+        eligibleEvaluation.observation,
+      );
+      const catalogDecision = evaluateCatalogPolicy(
+        catalogPolicy,
+        catalogSignals,
+      );
+      if (!catalogDecision.allowed) {
+        await this.rejectCatalogCandidate(
+          dbConfig,
           candidate,
           eligibleEvaluation.id,
-          'DEFERRED_OUTSIDE_SCHEDULE',
-          eligibleEvaluation.score ? eligibleEvaluation.score.toNumber() : 0,
-          undefined,
-          'Fora da janela de publicação do tenant.',
+          eligibleEvaluation.score?.toNumber() ?? 0,
+          catalogDecision.reason,
+          catalogDecision.details,
         );
-        return;
+        continue;
       }
-      await this.deferCandidate(
-        dbConfig,
-        candidate,
-        'DEFERRED_OUTSIDE_SCHEDULE',
-        nextScheduleStart(
-          now,
-          configSnapshot.timezone,
-          configSnapshot.allowedStartMinute,
-          configSnapshot.allowedEndMinute,
-        ),
-        'Fora da janela de publicação do tenant.',
-        eligibleEvaluation.id,
-        0,
-      );
-      return;
-    }
 
-    if (
-      configSnapshot.mode === AutopilotMode.AUTO &&
-      dbConfig.nextEligibleSendAt &&
-      dbConfig.nextEligibleSendAt > now
-    ) {
-      await this.deferCandidate(
-        dbConfig,
-        candidate,
-        'DEFERRED_INTERVAL',
-        dbConfig.nextEligibleSendAt,
-        'Cadência variável de envio ainda não liberou uma nova publicação.',
-        eligibleEvaluation.id,
-        eligibleEvaluation.score?.toNumber() ?? 0,
-      );
-      return;
-    }
+      // Build context
+      // 1. lastPublicationAt. Unknown/in-flight delivery is conservative.
+      const lastPub = await this.prisma.publication.findFirst({
+        where: {
+          channel: { tenantId },
+          status: { in: ['PUBLISHED', 'PUBLISHING', 'DELIVERY_UNKNOWN'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { publishedAt: true, createdAt: true },
+      });
 
-    const catalogPolicy = this.getCatalogPolicy(dbConfig.catalogPolicy);
-    const catalogSignals = this.getCatalogSignals(
-      eligibleEvaluation.observation,
-    );
-    const catalogDecision = evaluateCatalogPolicy(
-      catalogPolicy,
-      catalogSignals,
-    );
-    if (!catalogDecision.allowed) {
-      await this.rejectCatalogCandidate(
-        dbConfig,
-        candidate,
-        eligibleEvaluation.id,
-        eligibleEvaluation.score?.toNumber() ?? 0,
-        catalogDecision.reason,
-        catalogDecision.details,
-      );
-      return;
-    }
+      // 2. postsToday, bounded by the tenant's local midnight.
+      const localDayStart = startOfLocalDay(now, configSnapshot.timezone);
+      const postsTodayRows = await this.prisma.publication.findMany({
+        where: {
+          channel: { tenantId },
+          status: { in: ['PUBLISHED', 'PUBLISHING', 'DELIVERY_UNKNOWN'] },
+          createdAt: { gte: localDayStart },
+        },
+        distinct: ['candidateId'],
+        select: { candidateId: true },
+      });
+      // maxDailyPosts is an offer-slot limit. A fan-out to several channels
+      // must not consume several daily slots for the same candidate.
+      const postsToday = postsTodayRows.length;
 
-    // Build context
-    // 1. lastPublicationAt. Unknown/in-flight delivery is conservative.
-    const lastPub = await this.prisma.publication.findFirst({
-      where: {
-        channel: { tenantId },
-        status: { in: ['PUBLISHED', 'PUBLISHING', 'DELIVERY_UNKNOWN'] },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { publishedAt: true, createdAt: true },
-    });
+      // 3. channelStatus & integrations
+      const channelStatus: Record<
+        string,
+        { enabled: boolean; visibility: any }
+      > = {};
+      for (const ec of dbConfig.enabledChannels) {
+        channelStatus[ec.channelId] = {
+          enabled: ec.channel.enabled,
+          visibility: ec.channel.visibility,
+        };
+      }
 
-    // 2. postsToday, bounded by the tenant's local midnight.
-    const localDayStart = startOfLocalDay(now, configSnapshot.timezone);
-    const postsToday = await this.prisma.publication.count({
-      where: {
-        channel: { tenantId },
-        status: { in: ['PUBLISHED', 'PUBLISHING', 'DELIVERY_UNKNOWN'] },
-        createdAt: { gte: localDayStart },
-      },
-    });
+      const integrations = await this.prisma.marketplaceIntegration.findMany({
+        where: { tenantId },
+      });
+      const integrationHealth: Record<string, IntegrationStatus> = {};
+      for (const intg of integrations) {
+        integrationHealth[intg.provider] = intg.status as IntegrationStatus;
+      }
 
-    // 3. channelStatus & integrations
-    const channelStatus: Record<string, { enabled: boolean; visibility: any }> =
-      {};
-    for (const ec of dbConfig.enabledChannels) {
-      channelStatus[ec.channelId] = {
-        enabled: ec.channel.enabled,
-        visibility: ec.channel.visibility,
+      const context: AutopilotRuntimeContext = {
+        postsToday,
+        lastPublicationAt: lastPub
+          ? (lastPub.publishedAt ?? lastPub.createdAt)
+          : undefined,
+        channelStatus,
+        integrationHealth,
       };
-    }
 
-    const integrations = await this.prisma.marketplaceIntegration.findMany({
-      where: { tenantId },
-    });
-    const integrationHealth: Record<string, IntegrationStatus> = {};
-    for (const intg of integrations) {
-      integrationHealth[intg.provider] = intg.status as IntegrationStatus;
-    }
+      const dbOffer = eligibleEvaluation.observation.offer;
+      const offer: ScoredOffer = {
+        id: dbOffer.id,
+        marketplaceId: dbOffer.marketplaceId,
+        marketplaceType: dbOffer.marketplace.type,
+        score: eligibleEvaluation.score
+          ? eligibleEvaluation.score.toNumber()
+          : 0,
+      };
 
-    const context: AutopilotRuntimeContext = {
-      postsToday,
-      lastPublicationAt: lastPub
-        ? (lastPub.publishedAt ?? lastPub.createdAt)
-        : undefined,
-      channelStatus,
-      integrationHealth,
-    };
+      let monCtx: MonetizationContext = {
+        status:
+          (dbOffer.monetization?.status as MonetizationStatus) ||
+          MonetizationStatus.UNAVAILABLE,
+        destinationUrl: dbOffer.monetization?.destinationUrl,
+        estimatedCommissionCents:
+          dbOffer.monetization?.commissionAmountCents ?? dbOffer.commission,
+      };
 
-    const dbOffer = eligibleEvaluation.observation.offer;
-    const offer: ScoredOffer = {
-      id: dbOffer.id,
-      marketplaceId: dbOffer.marketplaceId,
-      marketplaceType: dbOffer.marketplace.type,
-      score: eligibleEvaluation.score ? eligibleEvaluation.score.toNumber() : 0,
-    };
+      // In AUTO, generate/verify the Shopee affiliate link *before* the Brain
+      // applies its VERIFIED rule. DRY_RUN remains side-effect free.
+      if (configSnapshot.mode === AutopilotMode.AUTO) {
+        monCtx = await this.ensureVerifiedMonetization(dbOffer, monCtx);
+      }
 
-    let monCtx: MonetizationContext = {
-      status:
-        (dbOffer.monetization?.status as MonetizationStatus) ||
-        MonetizationStatus.UNAVAILABLE,
-      destinationUrl: dbOffer.monetization?.destinationUrl,
-      estimatedCommissionCents:
-        dbOffer.monetization?.commissionAmountCents ?? dbOffer.commission,
-    };
+      const decision = AutopilotBrain.evaluate(
+        offer,
+        configSnapshot,
+        monCtx,
+        context,
+        clock,
+      );
 
-    // In AUTO, generate/verify the Shopee affiliate link *before* the Brain
-    // applies its VERIFIED rule. DRY_RUN remains side-effect free.
-    if (configSnapshot.mode === AutopilotMode.AUTO) {
-      monCtx = await this.ensureVerifiedMonetization(dbOffer, monCtx);
-    }
-
-    const decision = AutopilotBrain.evaluate(
-      offer,
-      configSnapshot,
-      monCtx,
-      context,
-      clock,
-    );
-
-    if (decision.approved) {
-      if (decision.channelId) {
-        const guard = await this.evaluateCatalogPublicationGuards(
-          tenantId,
-          dbConfig.timezone,
-          decision.channelId,
-          dbOffer.externalId,
-          this.getProductIdentity(
-            dbOffer,
-            eligibleEvaluation.observation.canonicalPayload,
-          ),
-          catalogSignals.category,
-          catalogPolicy,
-          now,
-        );
-        if (!guard.allowed) {
-          if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
-            await this.createAudit(
-              tenantId,
-              candidate,
-              eligibleEvaluation.id,
-              guard.reason,
-              offer.score,
-              decision.channelId,
-              guard.details,
-            );
-          } else {
+      if (decision.approved) {
+        const decisionChannelIds =
+          decision.channelIds ||
+          (decision.channelId ? [decision.channelId] : []);
+        const publishableChannelIds: string[] = [];
+        let firstBlockedGuard:
+          { reason: string; details: string; retryAt: Date } | undefined;
+        for (const channelId of decisionChannelIds) {
+          const guard = await this.evaluateCatalogPublicationGuards(
+            tenantId,
+            dbConfig.timezone,
+            channelId,
+            dbOffer.externalId,
+            this.getProductIdentity(
+              dbOffer,
+              eligibleEvaluation.observation.canonicalPayload,
+            ),
+            catalogSignals.category,
+            catalogPolicy,
+            now,
+          );
+          if (guard.allowed) publishableChannelIds.push(channelId);
+          else if (!firstBlockedGuard) firstBlockedGuard = guard;
+        }
+        if (!publishableChannelIds.length) {
+          if (firstBlockedGuard) {
+            if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+              await this.createAudit(
+                tenantId,
+                candidate,
+                eligibleEvaluation.id,
+                firstBlockedGuard.reason,
+                offer.score,
+                undefined,
+                firstBlockedGuard.details,
+              );
+              return;
+            }
             await this.deferCandidate(
               dbConfig,
               candidate,
-              guard.reason,
-              guard.retryAt,
-              guard.details,
+              firstBlockedGuard.reason,
+              firstBlockedGuard.retryAt,
+              firstBlockedGuard.details,
               eligibleEvaluation.id,
               offer.score,
             );
           }
+          continue;
+        }
+
+        // DRY_RUN is intentionally read-only for candidates/publications and
+        // never verifies links or enqueues a publisher job.
+        if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+          await this.createAudit(
+            tenantId,
+            candidate,
+            eligibleEvaluation.id,
+            decision.reason,
+            offer.score,
+            decision.channelId,
+            decision.details,
+          );
           return;
         }
-      }
 
-      // DRY_RUN is intentionally read-only for candidates/publications and
-      // never verifies links or enqueues a publisher job.
-      if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+        const claimed = await this.prisma.publicationCandidate.updateMany({
+          where: { id: candidate.id, status: { in: ['PENDING', 'DEFERRED'] } },
+          data: { status: 'QUEUED', deferredReason: null, retryAt: null },
+        });
+        if (!claimed.count) return;
         await this.createAudit(
           tenantId,
           candidate,
@@ -400,79 +398,93 @@ export class AutopilotSchedulerService
           decision.channelId,
           decision.details,
         );
-        return;
-      }
-
-      const claimed = await this.prisma.publicationCandidate.updateMany({
-        where: { id: candidate.id, status: { in: ['PENDING', 'DEFERRED'] } },
-        data: { status: 'QUEUED', deferredReason: null, retryAt: null },
-      });
-      if (!claimed.count) return;
-      await this.createAudit(
-        tenantId,
-        candidate,
-        eligibleEvaluation.id,
-        decision.reason,
-        offer.score,
-        decision.channelId,
-        decision.details,
-      );
-      await this.publisherQueue.add(
-        'publish-candidate',
-        { candidateId: candidate.id, channelId: decision.channelId! },
-        { jobId: `publish-${candidate.id}` },
-      );
-    } else {
-      const temporary = new Set([
-        'REJECTED_DAILY_LIMIT',
-        'REJECTED_INTERVAL',
-        'REJECTED_OUTSIDE_SCHEDULE',
-        'REJECTED_INTEGRATION_UNHEALTHY',
-        'REJECTED_MONETIZATION',
-      ]);
-      if (temporary.has(decision.reason)) {
-        const retryAt =
-          decision.reason === 'REJECTED_DAILY_LIMIT'
-            ? nextLocalDay(now, configSnapshot.timezone)
-            : decision.reason === 'REJECTED_INTERVAL' && lastPub
-              ? new Date(
-                  (lastPub.publishedAt ?? lastPub.createdAt).getTime() +
-                    configSnapshot.intervalMinutes * 60_000,
-                )
-              : new Date(now.getTime() + 15 * 60_000);
-        const auditReason =
-          decision.reason === 'REJECTED_DAILY_LIMIT'
-            ? 'DEFERRED_DAILY_LIMIT'
-            : decision.reason === 'REJECTED_INTERVAL'
-              ? 'DEFERRED_INTERVAL'
-              : decision.reason === 'REJECTED_OUTSIDE_SCHEDULE'
-                ? 'DEFERRED_OUTSIDE_SCHEDULE'
-                : decision.reason === 'REJECTED_INTEGRATION_UNHEALTHY'
-                  ? 'DEFERRED_INTEGRATION_UNHEALTHY'
-                  : 'DEFERRED_MONETIZATION';
-        if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
-          await this.createAudit(
-            tenantId,
-            candidate,
-            eligibleEvaluation.id,
-            auditReason,
-            offer.score,
-            decision.channelId,
-            decision.details,
-          );
-        } else {
-          await this.deferCandidate(
-            dbConfig,
-            candidate,
-            auditReason,
-            retryAt,
-            decision.details,
-            eligibleEvaluation.id,
-            offer.score,
+        for (const [index, channelId] of publishableChannelIds.entries()) {
+          await this.publisherQueue.add(
+            'publish-candidate',
+            {
+              candidateId: candidate.id,
+              channelId,
+              offerSlotId: candidate.id,
+              pacingLeader: index === 0,
+              fanoutChannelIds: publishableChannelIds,
+            },
+            { jobId: `publish-${candidate.id}-${channelId}` },
           );
         }
+        return;
       } else {
-        if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+        const temporary = new Set([
+          'REJECTED_DAILY_LIMIT',
+          'REJECTED_INTERVAL',
+          'REJECTED_OUTSIDE_SCHEDULE',
+          'REJECTED_INTEGRATION_UNHEALTHY',
+          'REJECTED_MONETIZATION',
+        ]);
+        if (temporary.has(decision.reason)) {
+          const retryAt =
+            decision.reason === 'REJECTED_DAILY_LIMIT'
+              ? nextLocalDay(now, configSnapshot.timezone)
+              : decision.reason === 'REJECTED_INTERVAL' && lastPub
+                ? new Date(
+                    (lastPub.publishedAt ?? lastPub.createdAt).getTime() +
+                      configSnapshot.intervalMinutes * 60_000,
+                  )
+                : new Date(now.getTime() + 15 * 60_000);
+          const auditReason =
+            decision.reason === 'REJECTED_DAILY_LIMIT'
+              ? 'DEFERRED_DAILY_LIMIT'
+              : decision.reason === 'REJECTED_INTERVAL'
+                ? 'DEFERRED_INTERVAL'
+                : decision.reason === 'REJECTED_OUTSIDE_SCHEDULE'
+                  ? 'DEFERRED_OUTSIDE_SCHEDULE'
+                  : decision.reason === 'REJECTED_INTEGRATION_UNHEALTHY'
+                    ? 'DEFERRED_INTEGRATION_UNHEALTHY'
+                    : 'DEFERRED_MONETIZATION';
+          if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+            await this.createAudit(
+              tenantId,
+              candidate,
+              eligibleEvaluation.id,
+              auditReason,
+              offer.score,
+              decision.channelId,
+              decision.details,
+            );
+          } else {
+            await this.deferCandidate(
+              dbConfig,
+              candidate,
+              auditReason,
+              retryAt,
+              decision.details,
+              eligibleEvaluation.id,
+              offer.score,
+            );
+          }
+        } else {
+          if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
+            await this.createAudit(
+              tenantId,
+              candidate,
+              eligibleEvaluation.id,
+              'SKIPPED_PERMANENT_POLICY',
+              offer.score,
+              decision.channelId,
+              `${decision.reason}: ${decision.details || ''}`,
+            );
+            continue;
+          }
+          await this.prisma.publicationCandidate.updateMany({
+            where: {
+              id: candidate.id,
+              status: { in: ['PENDING', 'DEFERRED'] },
+            },
+            data: {
+              status: 'SKIPPED',
+              deferredReason: decision.reason,
+              retryAt: null,
+            },
+          });
           await this.createAudit(
             tenantId,
             candidate,
@@ -482,25 +494,7 @@ export class AutopilotSchedulerService
             decision.channelId,
             `${decision.reason}: ${decision.details || ''}`,
           );
-          return;
         }
-        await this.prisma.publicationCandidate.updateMany({
-          where: { id: candidate.id, status: { in: ['PENDING', 'DEFERRED'] } },
-          data: {
-            status: 'SKIPPED',
-            deferredReason: decision.reason,
-            retryAt: null,
-          },
-        });
-        await this.createAudit(
-          tenantId,
-          candidate,
-          eligibleEvaluation.id,
-          'SKIPPED_PERMANENT_POLICY',
-          offer.score,
-          decision.channelId,
-          `${decision.reason}: ${decision.details || ''}`,
-        );
       }
     }
   }

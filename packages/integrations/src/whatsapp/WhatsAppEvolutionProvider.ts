@@ -529,11 +529,13 @@ export class WhatsAppEvolutionProvider {
     text: string,
   ): Promise<string | null> {
     try {
+      const linkPreview = /https:\/\/[^\s]+/i.test(text);
       const response = await this.api.post(
         `/message/sendText/${instanceName}`,
         {
           number,
           text,
+          linkPreview,
         },
         { headers: { apikey: token } },
       );

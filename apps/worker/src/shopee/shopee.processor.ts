@@ -124,8 +124,11 @@ export class ShopeeProcessor extends WorkerHost {
         where: { id: integration.id },
         data: {
           lastSyncAt: new Date(),
+          lastDiscoveryAt: new Date(),
           lastSyncProcessedCount: processed,
+          lastDiscoveryFoundCount: processed,
           lastError: null,
+          lastDiscoveryError: null,
           status: 'CONNECTED',
         },
       });

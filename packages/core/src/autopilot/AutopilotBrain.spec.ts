@@ -119,6 +119,27 @@ describe("AutopilotBrain", () => {
     expect(decision.reason).toBe(AutopilotDecisionReason.REJECTED_MONETIZATION);
   });
 
+  it("returns every selected channel that is compatible and enabled", () => {
+    const decision = AutopilotBrain.evaluate(
+      defaultOffer,
+      { ...defaultConfig, enabledChannelIds: ["channel-1", "channel-2"] },
+      defaultMonetization,
+      {
+        ...defaultContext,
+        channelStatus: {
+          "channel-1": { enabled: true, visibility: "PRIVATE" },
+          "channel-2": { enabled: true, visibility: "PRIVATE" },
+        },
+      },
+      dummyClock,
+    );
+    expect(decision).toMatchObject({
+      approved: true,
+      channelId: "channel-1",
+      channelIds: ["channel-1", "channel-2"],
+    });
+  });
+
   it("rejeita comissão abaixo do mínimo", () => {
     const decision = AutopilotBrain.evaluate(
       defaultOffer,

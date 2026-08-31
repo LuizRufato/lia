@@ -111,7 +111,7 @@ export class PublisherProcessor extends WorkerHost {
     // Claim the candidate atomically. A retried/concurrent job must not enter
     // affiliate-link creation or an external provider call twice.
     const claimed = await this.prisma.publicationCandidate.updateMany({
-      where: { id: candidateId, status: 'QUEUED' },
+      where: { id: candidateId, status: { in: ['QUEUED', 'PUBLISHING'] } },
       data: { status: 'PUBLISHING' },
     });
     if (!claimed.count) {
@@ -120,50 +120,58 @@ export class PublisherProcessor extends WorkerHost {
 
     let result: any;
     try {
-      result = await this.processChannel(job, candidate, offer, channel);
+      result = await this.processChannel(
+        job,
+        candidate,
+        offer,
+        channel,
+        (job.data as any)?.pacingLeader !== false,
+        config?.timezone,
+      );
     } catch (error: any) {
       if (error instanceof DelayedError) {
-        await this.prisma.publicationCandidate.update({
-          where: { id: candidateId },
-          data: {
-            status: 'DEFERRED',
-            deferredReason: 'RATE_LIMIT',
-            retryAt: new Date(Date.now() + 60_000),
-          },
-        });
+        await this.refreshCandidateStatus(
+          candidateId,
+          (job.data as any)?.fanoutChannelIds?.length,
+        );
       } else {
-        await this.prisma.publicationCandidate.update({
-          where: { id: candidateId },
-          data: { status: 'FAILED', deferredReason: error.message },
-        });
+        await this.refreshCandidateStatus(
+          candidateId,
+          (job.data as any)?.fanoutChannelIds?.length,
+        );
       }
       throw error;
     }
 
     if (result.failed) {
-      await this.prisma.publicationCandidate.update({
-        where: { id: candidateId },
-        data:
-          result.reason === 'REJECTED_MONETIZATION' ||
-          result.reason === 'SAFETY_GOVERNOR'
-            ? {
-                status: 'DEFERRED',
-                deferredReason: result.deferredReason || result.reason,
-                retryAt: result.retryAt || new Date(Date.now() + 15 * 60_000),
-              }
-            : { status: 'FAILED', deferredReason: result.reason || null },
-      });
-      if (
-        result.reason !== 'REJECTED_MONETIZATION' &&
-        result.reason !== 'SAFETY_GOVERNOR'
-      ) {
-        await this.reportPublicationFailure(job, offer, channel, result.reason);
+      const fanoutChannelIds = (job.data as any)?.fanoutChannelIds || [];
+      const retryableBeforePublication =
+        result.reason === 'REJECTED_MONETIZATION' ||
+        result.reason === 'SAFETY_GOVERNOR';
+      if (retryableBeforePublication && fanoutChannelIds.length > 1) {
+        await this.refreshCandidateStatus(candidateId, fanoutChannelIds.length);
+        const retryAt = result.retryAt || new Date(Date.now() + 15 * 60_000);
+        await job.moveToDelayed(retryAt.getTime(), job.token!);
+        throw new DelayedError();
       }
+      if (retryableBeforePublication) {
+        await this.prisma.publicationCandidate.update({
+          where: { id: candidateId },
+          data: {
+            status: 'DEFERRED',
+            deferredReason: result.deferredReason || result.reason,
+            retryAt: result.retryAt || new Date(Date.now() + 15 * 60_000),
+          },
+        });
+        return { results: [result] };
+      }
+      await this.refreshCandidateStatus(candidateId, fanoutChannelIds.length);
+      await this.reportPublicationFailure(job, offer, channel, result.reason);
     } else if (result.published) {
-      await this.prisma.publicationCandidate.update({
-        where: { id: candidateId },
-        data: { status: 'PUBLISHED' },
-      });
+      await this.refreshCandidateStatus(
+        candidateId,
+        (job.data as any)?.fanoutChannelIds?.length,
+      );
     }
 
     return { results: [result] };
@@ -291,7 +299,14 @@ export class PublisherProcessor extends WorkerHost {
 
     let result: any;
     try {
-      result = await this.processChannel(job, candidate, offer, channel);
+      result = await this.processChannel(
+        job,
+        candidate,
+        offer,
+        channel,
+        true,
+        config?.timezone,
+      );
     } catch (error: any) {
       await this.prisma.publicationCandidate.update({
         where: { id: candidateId },
@@ -356,6 +371,8 @@ export class PublisherProcessor extends WorkerHost {
     candidate: any,
     offer: any,
     channel: any,
+    manageGlobalPacing = true,
+    timezone?: string,
   ) {
     const existing = await this.prisma.publication.findUnique({
       where: {
@@ -364,7 +381,12 @@ export class PublisherProcessor extends WorkerHost {
           channelId: channel.id,
         },
       },
-      select: { id: true, status: true, externalMessageId: true },
+      select: {
+        id: true,
+        status: true,
+        externalMessageId: true,
+        trackedLink: { select: { id: true, slug: true, destinationUrl: true } },
+      },
     });
     if (existing) {
       // No external retry is safe once a provider call may have happened.
@@ -378,10 +400,9 @@ export class PublisherProcessor extends WorkerHost {
       if (existing.status === 'DELIVERY_UNKNOWN') {
         return { failed: true, reason: 'DELIVERY_UNKNOWN' };
       }
-      return {
-        skipped: true,
-        reason: 'PUBLICATION_ALREADY_EXISTS',
-      };
+      if (existing.status !== 'PENDING' && existing.status !== 'RETRYABLE') {
+        return { skipped: true, reason: 'PUBLICATION_ALREADY_EXISTS' };
+      }
     }
 
     // 2.5 Every WhatsApp send must pass the Safety Governor immediately before
@@ -404,6 +425,7 @@ export class PublisherProcessor extends WorkerHost {
         sellerId:
           (candidate.evaluation.observation.canonicalPayload as any)?.seller
             ?.externalId || null,
+        timezone,
       });
       if (!safety.allowed) {
         return {
@@ -451,18 +473,20 @@ export class PublisherProcessor extends WorkerHost {
       );
     }
 
-    const sendLease = await this.claimSendLease(
-      offer.tenantId,
-      channel.id,
-      new Date(),
-    );
-    if (!sendLease.acquired) {
-      return {
-        failed: true,
-        reason: 'SAFETY_GOVERNOR',
-        deferredReason: 'SEND_PACING',
-        retryAt: sendLease.retryAt,
-      };
+    if (manageGlobalPacing) {
+      const sendLease = await this.claimSendLease(
+        offer.tenantId,
+        channel.id,
+        new Date(),
+      );
+      if (!sendLease.acquired) {
+        return {
+          failed: true,
+          reason: 'SAFETY_GOVERNOR',
+          deferredReason: 'SEND_PACING',
+          retryAt: sendLease.retryAt,
+        };
+      }
     }
 
     const productCooldown = await this.findProductCooldown(
@@ -472,7 +496,7 @@ export class PublisherProcessor extends WorkerHost {
       new Date(),
     );
     if (productCooldown.active) {
-      await this.releaseSendLease(offer.tenantId);
+      if (manageGlobalPacing) await this.releaseSendLease(offer.tenantId);
       return {
         failed: true,
         reason: 'SAFETY_GOVERNOR',
@@ -482,32 +506,33 @@ export class PublisherProcessor extends WorkerHost {
     }
 
     // 3. Idempotent Publication Creation
-    let publication;
-    try {
-      publication = await this.prisma.publication.create({
-        data: {
-          candidateId: candidate.id,
-          channelId: channel.id,
-          status: 'PUBLISHING',
-        },
-      });
-    } catch (error: any) {
-      if (error.code === 'P2002') {
-        this.logger.warn(
-          `Publication already exists for candidate ${candidate.id} and channel ${channel.id}. Skipping to prevent duplication.`,
-        );
-        await this.releaseSendLease(offer.tenantId);
-        return { skipped: true, reason: 'Duplicate' };
+    let publication: any = existing;
+    if (!publication)
+      try {
+        publication = await this.prisma.publication.create({
+          data: {
+            candidateId: candidate.id,
+            channelId: channel.id,
+            status: 'PUBLISHING',
+          },
+        });
+      } catch (error: any) {
+        if (error.code === 'P2002') {
+          this.logger.warn(
+            `Publication already exists for candidate ${candidate.id} and channel ${channel.id}. Skipping to prevent duplication.`,
+          );
+          if (manageGlobalPacing) await this.releaseSendLease(offer.tenantId);
+          return { skipped: true, reason: 'Duplicate' };
+        }
+        throw error;
       }
-      throw error;
-    }
 
     // 4. Create TrackedLink
     // Slug generation with retry on collision (P2002)
-    let slug = '';
-    let linkId = '';
+    let slug = publication.trackedLink?.slug || '';
+    let linkId = publication.trackedLink?.id || '';
     let retryCount = 0;
-    while (retryCount < 3) {
+    while (!linkId && retryCount < 3) {
       slug = randomBytes(5).toString('hex');
       try {
         const link = await this.prisma.trackedLink.create({
@@ -616,7 +641,7 @@ export class PublisherProcessor extends WorkerHost {
               'Provider não retornou messageId; entrega desconhecida.',
           },
         });
-        await this.releaseSendLease(offer.tenantId);
+        if (manageGlobalPacing) await this.releaseSendLease(offer.tenantId);
         return { failed: true, reason: 'DELIVERY_UNKNOWN' };
       }
 
@@ -631,6 +656,9 @@ export class PublisherProcessor extends WorkerHost {
         },
       });
 
+      // Any successful fan-out channel may close the single offer-slot
+      // pacing lease. The conditional update in completeSendLease makes this
+      // idempotent, so only the first successful channel sets the next slot.
       await this.completeSendLease(offer.tenantId, sentAt);
 
       if (channel.provider === 'WHATSAPP') {
@@ -643,7 +671,7 @@ export class PublisherProcessor extends WorkerHost {
       if (channel.provider === 'WHATSAPP') {
         await this.whatsappSafetyGovernor.recordFailure(channel.tenantId);
       }
-      await this.releaseSendLease(offer.tenantId);
+      if (manageGlobalPacing) await this.releaseSendLease(offer.tenantId);
       const isRateLimit = error.status === 429;
       const isNetworkTimeout =
         error.code === 'ECONNABORTED' || (error.request && !error.response);
@@ -685,6 +713,42 @@ export class PublisherProcessor extends WorkerHost {
         return { failed: true, reason: error.message };
       }
     }
+  }
+
+  private async refreshCandidateStatus(
+    candidateId: string,
+    expectedPublicationCount?: number,
+  ) {
+    const publications = await this.prisma.publication.findMany({
+      where: { candidateId },
+      select: { status: true },
+    });
+    if (
+      expectedPublicationCount &&
+      publications.length < expectedPublicationCount
+    ) {
+      await this.prisma.publicationCandidate.updateMany({
+        where: { id: candidateId, status: { in: ['QUEUED', 'PUBLISHING'] } },
+        data: { status: 'PUBLISHING' },
+      });
+      return;
+    }
+    const allPublished =
+      publications.length > 0 &&
+      publications.every((item) => item.status === 'PUBLISHED');
+    const hasPendingWork = publications.some((item) =>
+      ['PENDING', 'PUBLISHING', 'RETRYABLE', 'WAITING_CONNECTION'].includes(
+        item.status,
+      ),
+    );
+    await this.prisma.publicationCandidate.updateMany({
+      where: { id: candidateId, status: { in: ['QUEUED', 'PUBLISHING'] } },
+      data: allPublished
+        ? { status: 'PUBLISHED', deferredReason: null, retryAt: null }
+        : hasPendingWork
+          ? { status: 'PUBLISHING' }
+          : { status: 'FAILED' },
+    });
   }
 
   private async claimSendLease(tenantId: string, channelId: string, now: Date) {
@@ -770,7 +834,13 @@ export class PublisherProcessor extends WorkerHost {
       );
     }
     await this.prisma.autopilotConfig.updateMany({
-      where: { tenantId },
+      where: {
+        tenantId,
+        OR: [
+          { nextEligibleSendAt: null },
+          { nextEligibleSendAt: { lte: sentAt } },
+        ],
+      },
       data: { nextEligibleSendAt, sendLeaseUntil: null },
     });
   }

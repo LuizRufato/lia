@@ -17,6 +17,7 @@ import type {
   ShopeeConversionResponse,
 } from '@lia/integrations';
 import Decimal from 'decimal.js';
+import { createHash } from 'crypto';
 import {
   deriveCommissionStatus,
   normalizeOrderStatus,
@@ -101,6 +102,8 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       scrollId,
       pageCount = 0,
     } = job.data;
+    const syncStartedAt = new Date();
+    const syncRunId = job.data.syncRunId || `job-${job.id}`;
     const masterKey = this.configService.get<string>(
       'INTEGRATION_ENCRYPTION_KEY',
     );
@@ -120,6 +123,24 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       !integration.iv ||
       !integration.authTag
     ) {
+      this.logger.log(
+        JSON.stringify({
+          event: 'SHOPEE_CONVERSION_SYNC',
+          tenantId,
+          syncRunId,
+          syncStartedAt: syncStartedAt.toISOString(),
+          syncFinishedAt: new Date().toISOString(),
+          purchaseTimeStart,
+          purchaseTimeEnd,
+          pageCount: 0,
+          processedCount: 0,
+          newConversionCount: 0,
+          updatedConversionCount: 0,
+          attributedCount: 0,
+          unattributedCount: 0,
+          errorClass: 'NOT_CONNECTED',
+        }),
+      );
       return { skipped: true, reason: 'Not connected' };
     }
 
@@ -156,6 +177,11 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       let currentPage = pageCount;
       let totalProcessedCount = 0;
       let totalAttributedCount = 0;
+      let totalNewConversionCount = 0;
+      let totalUpdatedConversionCount = 0;
+      let totalUnattributedCount = 0;
+      let oldestPurchaseTimeSeen: Date | null = null;
+      let newestPurchaseTimeSeen: Date | null = null;
 
       // Acquire the complete cursor chain before touching PostgreSQL. The
       // array is bounded by the page guard and stores response objects by
@@ -207,6 +233,23 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         );
         totalProcessedCount += pageResult.processedCount;
         totalAttributedCount += pageResult.attributedCount;
+        totalNewConversionCount += pageResult.newConversionCount;
+        totalUpdatedConversionCount += pageResult.updatedConversionCount;
+        totalUnattributedCount += pageResult.unattributedCount;
+        if (
+          pageResult.oldestPurchaseTimeSeen &&
+          (!oldestPurchaseTimeSeen ||
+            pageResult.oldestPurchaseTimeSeen < oldestPurchaseTimeSeen)
+        ) {
+          oldestPurchaseTimeSeen = pageResult.oldestPurchaseTimeSeen;
+        }
+        if (
+          pageResult.newestPurchaseTimeSeen &&
+          (!newestPurchaseTimeSeen ||
+            pageResult.newestPurchaseTimeSeen > newestPurchaseTimeSeen)
+        ) {
+          newestPurchaseTimeSeen = pageResult.newestPurchaseTimeSeen;
+        }
 
         this.logger.log(
           `Page ${currentPage} synced for ${tenantId}. Processed: ${pageResult.processedCount}, Attributed: ${pageResult.attributedCount}`,
@@ -222,6 +265,27 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         },
       });
 
+      this.logger.log(
+        JSON.stringify({
+          event: 'SHOPEE_CONVERSION_SYNC',
+          tenantId,
+          syncRunId,
+          syncStartedAt: syncStartedAt.toISOString(),
+          syncFinishedAt: new Date().toISOString(),
+          purchaseTimeStart,
+          purchaseTimeEnd,
+          pageCount: pages.length,
+          processedCount: totalProcessedCount,
+          newConversionCount: totalNewConversionCount,
+          updatedConversionCount: totalUpdatedConversionCount,
+          attributedCount: totalAttributedCount,
+          unattributedCount: totalUnattributedCount,
+          oldestPurchaseTimeSeen: oldestPurchaseTimeSeen?.toISOString() || null,
+          newestPurchaseTimeSeen: newestPurchaseTimeSeen?.toISOString() || null,
+          errorClass: null,
+        }),
+      );
+
       return {
         success: true,
         processedCount: totalProcessedCount,
@@ -229,8 +293,27 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         hasMore: false,
       };
     } catch (error: any) {
+      const syncFinishedAt = new Date();
       this.logger.error(
         `Shopee Conversion Sync failed for tenant ${tenantId}: ${error.message}`,
+      );
+      this.logger.error(
+        JSON.stringify({
+          event: 'SHOPEE_CONVERSION_SYNC',
+          tenantId,
+          syncRunId,
+          syncStartedAt: syncStartedAt.toISOString(),
+          syncFinishedAt: syncFinishedAt.toISOString(),
+          purchaseTimeStart,
+          purchaseTimeEnd,
+          pageCount,
+          processedCount: 0,
+          newConversionCount: 0,
+          updatedConversionCount: 0,
+          attributedCount: 0,
+          unattributedCount: 0,
+          errorClass: error?.constructor?.name || 'ShopeeConversionSyncError',
+        }),
       );
 
       // Legacy queued child jobs may still contain a cursor. Make their next
@@ -294,9 +377,22 @@ export class ShopeeConversionsProcessor extends WorkerHost {
   private async persistConversionPage(
     tenantId: string,
     nodes: ShopeeConversionNode[],
-  ): Promise<{ processedCount: number; attributedCount: number }> {
+  ): Promise<{
+    processedCount: number;
+    attributedCount: number;
+    newConversionCount: number;
+    updatedConversionCount: number;
+    unattributedCount: number;
+    oldestPurchaseTimeSeen: Date | null;
+    newestPurchaseTimeSeen: Date | null;
+  }> {
     let processedCount = 0;
     let attributedCount = 0;
+    let newConversionCount = 0;
+    let updatedConversionCount = 0;
+    let unattributedCount = 0;
+    let oldestPurchaseTimeSeen: Date | null = null;
+    let newestPurchaseTimeSeen: Date | null = null;
 
     for (const node of nodes) {
       processedCount++;
@@ -315,8 +411,11 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             attributionStatus: true,
             affiliateLinkId: true,
             offerId: true,
+            createdAt: true,
           },
         });
+      if (existingConversion) updatedConversionCount++;
+      else newConversionCount++;
 
       // 1. Attribution. Once attributed, a later report page must not
       // regress it to UNATTRIBUTED.
@@ -424,6 +523,36 @@ export class ShopeeConversionsProcessor extends WorkerHost {
             : {}),
         },
       });
+      const purchaseTime = new Date(node.purchaseTime * 1000);
+      if (!oldestPurchaseTimeSeen || purchaseTime < oldestPurchaseTimeSeen) {
+        oldestPurchaseTimeSeen = purchaseTime;
+      }
+      if (!newestPurchaseTimeSeen || purchaseTime > newestPurchaseTimeSeen) {
+        newestPurchaseTimeSeen = purchaseTime;
+      }
+      if (finalAttributionStatus === 'UNATTRIBUTED') unattributedCount++;
+      const firstSeenAt =
+        conversion.createdAt instanceof Date
+          ? conversion.createdAt
+          : new Date();
+      if (!existingConversion) {
+        const observedLagSeconds = Math.round(
+          (firstSeenAt.getTime() - purchaseTime.getTime()) / 1000,
+        );
+        this.logger.log(
+          JSON.stringify({
+            event: 'conversion first seen',
+            externalConversionIdHash: createHash('sha256')
+              .update(String(node.conversionId))
+              .digest('hex')
+              .slice(0, 16),
+            purchaseTime: purchaseTime.toISOString(),
+            firstSeenAt: firstSeenAt.toISOString(),
+            observedLagSeconds,
+            measurement: 'OBSERVED_PURCHASE_TO_LIA_LAG',
+          }),
+        );
+      }
 
       // 4. Process Orders & Items
       for (const order of node.orders || []) {
@@ -520,10 +649,19 @@ export class ShopeeConversionsProcessor extends WorkerHost {
         netCents,
         foundAttributionKey,
         offerId,
+        firstSeenAt,
       );
     }
 
-    return { processedCount, attributedCount };
+    return {
+      processedCount,
+      attributedCount,
+      newConversionCount,
+      updatedConversionCount,
+      unattributedCount,
+      oldestPurchaseTimeSeen,
+      newestPurchaseTimeSeen,
+    };
   }
 
   private async ensureNewShopeeSaleAlert(
@@ -535,6 +673,7 @@ export class ShopeeConversionsProcessor extends WorkerHost {
     netCommissionCents: number,
     attributionKey: string | null,
     offerId: string | null,
+    firstSeenAt: Date,
   ): Promise<void> {
     const externalEventId = String(node.conversionId);
     const dedupeKey = `${tenantId}:NEW_SHOPEE_SALE:SHOPEE:${externalEventId}`;
@@ -585,6 +724,30 @@ export class ShopeeConversionsProcessor extends WorkerHost {
       });
 
       await this.enqueueAdminAlert(tenantId, alert);
+      const alertCreatedAt =
+        alert.createdAt instanceof Date ? alert.createdAt : new Date();
+      const delivery = await (
+        this.prisma as any
+      ).adminAlertDelivery?.findFirst?.({
+        where: { alertId: alert.id, status: 'SENT' },
+        orderBy: { sentAt: 'asc' },
+        select: { sentAt: true },
+      });
+      this.logger.log(
+        JSON.stringify({
+          event: 'ADMIN_ALERT_LATENCY',
+          tenantId,
+          alertId: alert.id,
+          conversionIdHash: createHash('sha256')
+            .update(externalEventId)
+            .digest('hex')
+            .slice(0, 16),
+          firstSeenAt: firstSeenAt.toISOString(),
+          alertCreatedAt: alertCreatedAt.toISOString(),
+          deliverySentAt: delivery?.sentAt?.toISOString?.() || null,
+          measurements: ['LIA_PERSISTENCE_TO_ALERT', 'ALERT_TO_WHATSAPP'],
+        }),
+      );
     } catch (error: any) {
       const alertError = new Error(
         `Admin alert persistence failed: ${error?.message || error}`,

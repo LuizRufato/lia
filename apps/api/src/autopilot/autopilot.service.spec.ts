@@ -257,7 +257,7 @@ describe('AutopilotService controlled one-shot', () => {
       marketplaceIntegration: {
         findMany: jest.fn().mockResolvedValue([{ provider: 'SHOPEE' }]),
         findFirst: jest.fn().mockResolvedValue({
-          lastSyncAt: lastShopeeDiscoveryAt,
+          lastDiscoveryAt: lastShopeeDiscoveryAt,
         }),
       },
       offerEvaluation: {

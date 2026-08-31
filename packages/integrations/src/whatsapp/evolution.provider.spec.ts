@@ -91,7 +91,7 @@ describe("WhatsAppEvolutionProvider lifecycle safety", () => {
     ).resolves.toBeNull();
     expect(api.post).toHaveBeenCalledWith(
       "/message/sendText/lia-tenant",
-      { number: "group@g.us", text: "test" },
+      { number: "group@g.us", text: "test", linkPreview: false },
       { headers: { apikey: "key" } },
     );
   });
@@ -110,7 +110,11 @@ describe("WhatsAppEvolutionProvider lifecycle safety", () => {
     ).resolves.toBe("private-message-id");
     expect(api.post).toHaveBeenCalledWith(
       "/message/sendText/lia-tenant",
-      { number: "5511999991234", text: "✅ Teste de alertas LIA" },
+      {
+        number: "5511999991234",
+        text: "✅ Teste de alertas LIA",
+        linkPreview: false,
+      },
       { headers: { apikey: "instance-key" } },
     );
   });
@@ -127,7 +131,30 @@ describe("WhatsAppEvolutionProvider lifecycle safety", () => {
     ).resolves.toBe("evo-message-id");
     expect(api.post).toHaveBeenCalledWith(
       "/message/sendText/lia-tenant",
-      { number: "120@g.us", text: "Oferta teste" },
+      { number: "120@g.us", text: "Oferta teste", linkPreview: false },
+      { headers: { apikey: "instance-key" } },
+    );
+  });
+
+  it("enables the native preview only for an HTTPS URL in text messages", async () => {
+    api.post.mockResolvedValueOnce({
+      data: { key: { id: "preview-message-id" } },
+    });
+    await expect(
+      new WhatsAppEvolutionProvider().sendGroupMessage(
+        "lia-tenant",
+        "instance-key",
+        "120@g.us",
+        "Oferta https://go.botlia.com.br/abc123",
+      ),
+    ).resolves.toBe("preview-message-id");
+    expect(api.post).toHaveBeenCalledWith(
+      "/message/sendText/lia-tenant",
+      {
+        number: "120@g.us",
+        text: "Oferta https://go.botlia.com.br/abc123",
+        linkPreview: true,
+      },
       { headers: { apikey: "instance-key" } },
     );
   });

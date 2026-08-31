@@ -183,7 +183,7 @@ export class AutopilotService {
     ] = await Promise.all([
       this.prisma.marketplaceIntegration.findFirst({
         where: { tenantId, provider: 'SHOPEE' },
-        select: { lastSyncAt: true },
+        select: { lastDiscoveryAt: true },
       }),
       this.prisma.offerEvaluation.count({
         where: {
@@ -258,7 +258,7 @@ export class AutopilotService {
       },
       operationalStatus: {
         worker: workerHeartbeat,
-        lastShopeeDiscoveryAt: shopeeIntegration?.lastSyncAt || null,
+        lastShopeeDiscoveryAt: shopeeIntegration?.lastDiscoveryAt || null,
         eligibleCandidates,
         lastEvaluationAt: lastEvaluation?.evaluatedAt || null,
         lastDecisionAt: feedRaw[0]?.createdAt || null,

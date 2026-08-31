@@ -202,6 +202,8 @@ const TITLE_RULES: Array<{
       "escritório",
       "escritorio",
       "agenda",
+      "livro",
+      "livros",
     ],
   },
   {

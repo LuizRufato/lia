@@ -93,6 +93,7 @@ export interface AutopilotDecision {
   reason: AutopilotDecisionReason;
   approved: boolean;
   channelId?: string;
+  channelIds?: string[];
   details?: string;
 }
 
@@ -210,24 +211,18 @@ export class AutopilotBrain {
       }
     }
 
-    let selectedChannelId: string | undefined;
-
-    for (const channelId of config.enabledChannelIds) {
+    const selectedChannelIds = config.enabledChannelIds.filter((channelId) => {
       const channel = context.channelStatus[channelId];
-      if (channel && channel.enabled) {
-        if (
-          MarketplacePublicationPolicy.canPublish(
-            offer.marketplaceType,
-            channel.visibility,
-          )
-        ) {
-          selectedChannelId = channelId;
-          break;
-        }
-      }
-    }
+      return Boolean(
+        channel?.enabled &&
+        MarketplacePublicationPolicy.canPublish(
+          offer.marketplaceType,
+          channel.visibility,
+        ),
+      );
+    });
 
-    if (!selectedChannelId) {
+    if (!selectedChannelIds.length) {
       return {
         reason: AutopilotDecisionReason.REJECTED_CHANNEL_POLICY,
         approved: false,
@@ -239,7 +234,8 @@ export class AutopilotBrain {
       return {
         reason: AutopilotDecisionReason.DRY_RUN_APPROVED,
         approved: true,
-        channelId: selectedChannelId,
+        channelId: selectedChannelIds[0],
+        channelIds: selectedChannelIds,
         details:
           monetization.status !== MonetizationStatus.VERIFIED
             ? "Não seria publicada: link afiliado não verificado."
@@ -250,7 +246,8 @@ export class AutopilotBrain {
     return {
       reason: AutopilotDecisionReason.APPROVED,
       approved: true,
-      channelId: selectedChannelId,
+      channelId: selectedChannelIds[0],
+      channelIds: selectedChannelIds,
     };
   }
 }
