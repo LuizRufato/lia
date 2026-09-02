@@ -1,7 +1,11 @@
 name: Validate Evolution preview image
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - fix/autopilot-safety-circuit
+    paths:
+      - ".github/workflows/validate-evolution-preview.yml"
 
 permissions:
   contents: read
