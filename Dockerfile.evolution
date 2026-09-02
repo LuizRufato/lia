@@ -16,8 +16,8 @@ RUN git init . && \
 
 COPY vendor/evolution/patches/2.3.7-preview-required.patch /tmp/2.3.7-preview-required.patch
 
-RUN git apply --unidiff-zero --check /tmp/2.3.7-preview-required.patch && \
-    git apply --unidiff-zero /tmp/2.3.7-preview-required.patch && \
+RUN git apply --check /tmp/2.3.7-preview-required.patch && \
+    git apply /tmp/2.3.7-preview-required.patch && \
     node -e "const v=require('./package.json').version; if(v!=='2.3.7'){console.error('Unexpected Evolution version: '+v); process.exit(1)}"
 
 # The upstream lockfile pins RC9. Update only that dependency before the

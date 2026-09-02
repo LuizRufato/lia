@@ -6,6 +6,8 @@ on:
       - fix/autopilot-safety-circuit
     paths:
       - ".github/workflows/validate-evolution-preview.yml"
+      - "Dockerfile.evolution"
+      - "vendor/evolution/patches/2.3.7-preview-required.patch"
 
 permissions:
   contents: read

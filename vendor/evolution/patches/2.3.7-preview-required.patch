@@ -1,17 +1,44 @@
 diff --git a/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts b/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
-index 60e857f..8321e19 100644
+index 60e857f..256d7b7 100644
 --- a/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
 +++ b/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
-@@ -92,0 +93 @@ import axios from 'axios';
+@@ -90,6 +90,7 @@ import useMultiFileAuthStatePrisma from '@utils/use-multi-file-auth-state-prisma
+ import { AuthStateProvider } from '@utils/use-multi-file-auth-state-provider-files';
+ import { useMultiFileAuthStateRedisDb } from '@utils/use-multi-file-auth-state-redis-db';
+ import axios from 'axios';
 +import { lookup } from 'dns/promises';
-@@ -112,0 +114,2 @@ import makeWASocket, {
+ import makeWASocket, {
+   AnyMessageContent,
+   BufferedEventData,
+@@ -110,6 +111,8 @@ import makeWASocket, {
+   getContentType,
+   getDevice,
+   GroupMetadata,
 +  extractUrlFromText,
 +  getUrlInfo,
-@@ -133,0 +137 @@ import makeWASocket, {
+   isJidBroadcast,
+   isJidGroup,
+   isJidNewsletter,
+@@ -131,6 +134,7 @@ import makeWASocket, {
+   WAPresence,
+   WASocket,
+ } from 'baileys';
 +import type { WAUrlInfo } from 'baileys';
-@@ -151,0 +156 @@ import sharp from 'sharp';
+ import { Label } from 'baileys/lib/Types/Label';
+ import { LabelAssociation } from 'baileys/lib/Types/LabelAssociation';
+ import { spawn } from 'child_process';
+@@ -149,6 +153,7 @@ import P from 'pino';
+ import qrcode, { QRCodeToDataURLOptions } from 'qrcode';
+ import qrcodeTerminal from 'qrcode-terminal';
+ import sharp from 'sharp';
 +import { BlockList, isIP } from 'net';
-@@ -166,0 +172,49 @@ const groupMetadataCache = new CacheService(new CacheEngine(configService, 'grou
+ import { PassThrough, Readable } from 'stream';
+ import { v4 } from 'uuid';
+ 
+@@ -164,6 +169,55 @@ export interface ExtendedIMessageKey extends proto.IMessageKey {
+ 
+ const groupMetadataCache = new CacheService(new CacheEngine(configService, 'groups').getEngine());
+ 
 +const REQUIRED_PREVIEW_HOST = 'go.botlia.com.br';
 +const REQUIRED_PREVIEW_TIMEOUT_MS = 5_000;
 +const REQUIRED_PREVIEW_MAX_BYTES = 2_000_000;
@@ -61,7 +88,13 @@ index 60e857f..8321e19 100644
 +  return error;
 +}
 +
-@@ -2129,0 +2184,67 @@ export class BaileysStartupService extends ChannelStartupService {
+ // Adicione a função getVideoDuration no início do arquivo
+ async function getVideoDuration(input: Buffer | string | Readable): Promise<number> {
+   const MediaInfoFactory = (await import('mediainfo.js')).default;
+@@ -2127,6 +2181,76 @@ export class BaileysStartupService extends ChannelStartupService {
+     }
+   }
+ 
 +  private async getRequiredLinkPreview(text: string): Promise<WAUrlInfo> {
 +    try {
 +      const matchedText = extractUrlFromText(text)?.replace(/[),.;!?]+$/g, '');
@@ -132,7 +165,13 @@ index 60e857f..8321e19 100644
 +    }
 +  }
 +
-@@ -2197,0 +2319,9 @@ export class BaileysStartupService extends ChannelStartupService {
+   private async sendMessage(
+     sender: string,
+     message: any,
+@@ -2195,6 +2319,15 @@ export class BaileysStartupService extends ChannelStartupService {
+     }
+ 
+     if (message['conversation']) {
 +      if (linkPreview && typeof linkPreview === 'object') {
 +        this.logger.info(
 +          JSON.stringify({
@@ -142,7 +181,13 @@ index 60e857f..8321e19 100644
 +          }),
 +        );
 +      }
-@@ -2341 +2471,6 @@ export class BaileysStartupService extends ChannelStartupService {
+       return await this.client.sendMessage(
+         sender,
+         {
+@@ -2338,7 +2471,12 @@ export class BaileysStartupService extends ChannelStartupService {
+         }
+       }
+ 
 -      const linkPreview = options?.linkPreview != false ? undefined : false;
 +      let linkPreview: any;
 +      if (options?.linkPreview === true && typeof (message as any)?.conversation === 'string') {
@@ -150,3 +195,6 @@ index 60e857f..8321e19 100644
 +      } else {
 +        linkPreview = options?.linkPreview === false ? false : undefined;
 +      }
+ 
+       let quoted: WAMessage;
+ 
