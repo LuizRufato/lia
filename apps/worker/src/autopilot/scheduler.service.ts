@@ -423,7 +423,11 @@ export class AutopilotSchedulerService
               pacingLeader: index === 0,
               fanoutChannelIds: publishableChannelIds,
             },
-            { jobId: `publish-${candidate.id}-${channelId}` },
+            {
+              jobId: `publish-${candidate.id}-${channelId}`,
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 20_000 },
+            },
           );
         }
         return;

@@ -1,6 +1,7 @@
 import axios from "axios";
 import {
   checkEvolutionWebhookHealth,
+  WHATSAPP_PREVIEW_UNAVAILABLE,
   WhatsAppEvolutionProvider,
 } from "./WhatsAppEvolutionProvider";
 
@@ -250,6 +251,27 @@ describe("WhatsAppEvolutionProvider lifecycle safety", () => {
       ),
     ).rejects.toThrow("WhatsApp provider response ambiguous");
     expect(api.post).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps the Evolution preview gate failure to a pre-send typed error", async () => {
+    api.post.mockRejectedValueOnce({
+      response: {
+        status: 422,
+        data: { message: "LINK_PREVIEW_REQUIRED_UNAVAILABLE" },
+      },
+    });
+
+    await expect(
+      new WhatsAppEvolutionProvider().sendGroupMessage(
+        "lia-tenant",
+        "key",
+        "group@g.us",
+        "Oferta https://go.botlia.com.br/slug",
+      ),
+    ).rejects.toMatchObject({
+      code: WHATSAPP_PREVIEW_UNAVAILABLE,
+      preSend: true,
+    });
   });
 
   it("normalizes the current Evolution group response shape", async () => {

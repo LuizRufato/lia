@@ -43,6 +43,18 @@ export interface EvolutionImageMessage {
   fileName?: string;
 }
 
+export const WHATSAPP_PREVIEW_UNAVAILABLE = "WHATSAPP_PREVIEW_UNAVAILABLE";
+
+export class WhatsAppPreviewUnavailableError extends Error {
+  readonly code = WHATSAPP_PREVIEW_UNAVAILABLE;
+  readonly preSend = true;
+
+  constructor() {
+    super(WHATSAPP_PREVIEW_UNAVAILABLE);
+    this.name = "WhatsAppPreviewUnavailableError";
+  }
+}
+
 function normalizeWebhookEventName(value: string) {
   return value.trim().toLowerCase().replace(/[.-]/g, "_");
 }
@@ -542,6 +554,19 @@ export class WhatsAppEvolutionProvider {
       return response.data?.key?.id || response.data?.message?.key?.id || null;
     } catch (error: any) {
       const status = error.response?.status;
+      const providerPayload = error.response?.data;
+      const providerText = [
+        providerPayload?.code,
+        providerPayload?.error,
+        providerPayload?.message,
+      ]
+        .flatMap((value) => (Array.isArray(value) ? value : [value]))
+        .filter(Boolean)
+        .map(String)
+        .join(" ");
+      if (providerText.includes("LINK_PREVIEW_REQUIRED_UNAVAILABLE")) {
+        throw new WhatsAppPreviewUnavailableError();
+      }
       if (!status || status >= 500 || error.code === "ECONNABORTED") {
         throw new Error("WhatsApp provider response ambiguous");
       }

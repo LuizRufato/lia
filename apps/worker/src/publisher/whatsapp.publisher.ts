@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma.service';
 import {
   WhatsAppCloudProvider,
@@ -11,6 +12,12 @@ import {
   DEFAULT_PUBLICATION_TEMPLATES,
   PublicationCopyContext,
 } from '@lia/core';
+
+type PreviewGateContext = {
+  publicationId?: string;
+  candidateId?: string;
+  channelHash?: string;
+};
 
 @Injectable()
 export class WhatsAppPublisher {
@@ -36,6 +43,7 @@ export class WhatsAppPublisher {
       PublicationCopyContext,
       'title' | 'priceCents' | 'finalLink'
     >,
+    previewContext?: PreviewGateContext,
   ): Promise<string | null> {
     // 1. Load Channel Integration and Configuration
     const channel = await this.prisma.channel.findUnique({
@@ -134,6 +142,20 @@ export class WhatsAppPublisher {
           offerId,
           publicationId,
           provider: 'EVOLUTION',
+        }),
+      );
+      const channelHash = createHash('sha256')
+        .update(channel.id)
+        .digest('hex')
+        .slice(0, 16);
+      this.logger.log(
+        JSON.stringify({
+          event: 'PREVIEW_GATE_REQUESTED',
+          publicationId,
+          candidateId: previewContext?.candidateId ?? null,
+          channelHash: previewContext?.channelHash ?? channelHash,
+          previewRequired: true,
+          providerSendStarted: false,
         }),
       );
       const messageId = await this.evolutionProvider.sendGroupMessage(

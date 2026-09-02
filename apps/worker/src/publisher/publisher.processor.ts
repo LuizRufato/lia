@@ -3,7 +3,8 @@ import { Job, UnrecoverableError, DelayedError } from 'bullmq';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
+import { WhatsAppPreviewUnavailableError } from '@lia/integrations';
 import {
   PublishCandidateJobData,
   findProductCooldown,
@@ -666,6 +667,14 @@ export class PublisherProcessor extends WorkerHost {
               offer.marketplace?.name || offer.marketplace?.type || 'Shopee',
             category: candidate.evaluation.observation.category,
           },
+          {
+            publicationId: publication.id,
+            candidateId: candidate.id,
+            channelHash: createHash('sha256')
+              .update(channel.id)
+              .digest('hex')
+              .slice(0, 16),
+          },
         );
       } else {
         throw new Error(`Provider ${channel.provider} not supported`);
@@ -709,10 +718,30 @@ export class PublisherProcessor extends WorkerHost {
       return { success: true, published: true, messageId };
     } catch (error: any) {
       // 7. Error Handling
-      if (channel.provider === 'WHATSAPP') {
+      const isPreviewUnavailable =
+        error instanceof WhatsAppPreviewUnavailableError ||
+        error?.code === 'WHATSAPP_PREVIEW_UNAVAILABLE';
+      if (channel.provider === 'WHATSAPP' && !isPreviewUnavailable) {
         await this.whatsappSafetyGovernor.recordFailure(channel.tenantId);
       }
       if (manageGlobalPacing) await this.releaseSendLease(offer.tenantId);
+      if (isPreviewUnavailable) {
+        await this.prisma.publication.update({
+          where: { id: publication.id },
+          data: {
+            status: 'RETRYABLE',
+            errorReason: 'WHATSAPP_PREVIEW_UNAVAILABLE',
+          },
+        });
+
+        const attempts = Number(job.opts?.attempts || 1);
+        if ((job.attemptsMade || 0) + 1 < attempts) {
+          await job.moveToDelayed(Date.now() + 20_000, job.token!);
+          throw new DelayedError();
+        }
+
+        return { failed: true, reason: 'WHATSAPP_PREVIEW_UNAVAILABLE' };
+      }
       const isRateLimit = error.status === 429;
       const isNetworkTimeout =
         error.code === 'ECONNABORTED' || (error.request && !error.response);

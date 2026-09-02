@@ -1,4 +1,5 @@
 import { PublisherProcessor } from './publisher.processor';
+import { DelayedError } from 'bullmq';
 
 describe('PublisherProcessor send cadence state', () => {
   const makeProcessor = (prisma: any) =>
@@ -229,6 +230,91 @@ describe('PublisherProcessor send cadence state', () => {
       ),
     ).resolves.toMatchObject({ published: true, messageId: 'message-2' });
     expect(retrySender.sendOfferMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a preview-gated publication retryable without an external message id', async () => {
+    const prisma = {
+      publication: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'publication-1' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      trackedLink: {
+        create: jest.fn().mockResolvedValue({ id: 'tracked-1' }),
+      },
+      autopilotConfig: {
+        findUnique: jest.fn(),
+        updateMany: jest.fn(),
+      },
+    };
+    const whatsappPublisher = {
+      publish: jest.fn().mockRejectedValue({
+        code: 'WHATSAPP_PREVIEW_UNAVAILABLE',
+      }),
+    };
+    const safetyGovernor = {
+      evaluate: jest.fn().mockResolvedValue({ allowed: true }),
+      recordFailure: jest.fn(),
+      recordSuccess: jest.fn(),
+    };
+    const processor = new PublisherProcessor(
+      prisma as any,
+      {} as any,
+      whatsappPublisher as any,
+      safetyGovernor as any,
+    );
+    jest
+      .spyOn(processor as any, 'ensureVerifiedAffiliateLink')
+      .mockResolvedValue('https://shopee.test/affiliate');
+    jest
+      .spyOn(processor as any, 'findProductCooldown')
+      .mockResolvedValue({ active: false, until: null });
+
+    const job = {
+      opts: { attempts: 3 },
+      attemptsMade: 0,
+      token: 'token-1',
+      moveToDelayed: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const candidate = {
+      id: 'candidate-1',
+      evaluation: {
+        score: 80,
+        observation: {
+          observedAt: new Date('2026-08-31T20:00:00.000Z'),
+          category: 'Eletrônicos',
+          canonicalPayload: {},
+        },
+      },
+    };
+    const offer = {
+      id: 'offer-1',
+      tenantId: 'tenant-1',
+      title: 'Produto',
+      price: 1000,
+      marketplace: { type: 'SHOPEE' },
+      priceHistories: [],
+    };
+    const channel = {
+      id: 'channel-1',
+      provider: 'WHATSAPP',
+      externalChatId: 'group@g.us',
+      tenant: { channelIntegrations: [] },
+    };
+
+    await expect(
+      (processor as any).processChannel(job, candidate, offer, channel, false),
+    ).rejects.toBeInstanceOf(DelayedError);
+
+    expect(prisma.publication.update).toHaveBeenCalledWith({
+      where: { id: 'publication-1' },
+      data: {
+        status: 'RETRYABLE',
+        errorReason: 'WHATSAPP_PREVIEW_UNAVAILABLE',
+      },
+    });
+    expect(job.moveToDelayed).toHaveBeenCalledTimes(1);
+    expect(safetyGovernor.recordFailure).not.toHaveBeenCalled();
   });
 
   it('publishes two fan-out channels independently without duplicating either one', async () => {

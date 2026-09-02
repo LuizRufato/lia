@@ -1,0 +1,149 @@
+diff --git a/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts b/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
+index 60e857f..8321e19 100644
+--- a/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
++++ b/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts
+@@ -92,0 +93 @@ import axios from 'axios';
++import { lookup } from 'dns/promises';
+@@ -112,0 +114,2 @@ import makeWASocket, {
++  extractUrlFromText,
++  getUrlInfo,
+@@ -133,0 +137 @@ import makeWASocket, {
++import type { WAUrlInfo } from 'baileys';
+@@ -151,0 +156 @@ import sharp from 'sharp';
++import { BlockList, isIP } from 'net';
+@@ -166,0 +172,49 @@ const groupMetadataCache = new CacheService(new CacheEngine(configService, 'grou
++const REQUIRED_PREVIEW_HOST = 'go.botlia.com.br';
++const REQUIRED_PREVIEW_TIMEOUT_MS = 5_000;
++const REQUIRED_PREVIEW_MAX_BYTES = 2_000_000;
++const REQUIRED_PREVIEW_ERROR = 'LINK_PREVIEW_REQUIRED_UNAVAILABLE';
++
++const privatePreviewNetworks = new BlockList();
++const privatePreviewIpv4Subnets: Array<[string, number]> = [
++  ['0.0.0.0', 8],
++  ['10.0.0.0', 8],
++  ['100.64.0.0', 10],
++  ['127.0.0.0', 8],
++  ['169.254.0.0', 16],
++  ['172.16.0.0', 12],
++  ['192.0.0.0', 24],
++  ['192.0.2.0', 24],
++  ['192.168.0.0', 16],
++  ['198.18.0.0', 15],
++  ['198.51.100.0', 24],
++  ['203.0.113.0', 24],
++  ['224.0.0.0', 4],
++  ['240.0.0.0', 4],
++];
++privatePreviewIpv4Subnets.forEach(([address, prefix]) => privatePreviewNetworks.addSubnet(address, prefix, 'ipv4'));
++const privatePreviewIpv6Subnets: Array<[string, number]> = [
++  ['::', 128],
++  ['::1', 128],
++  ['fc00::', 7],
++  ['fe80::', 10],
++  ['ff00::', 8],
++  ['2001:db8::', 32],
++];
++privatePreviewIpv6Subnets.forEach(([address, prefix]) => privatePreviewNetworks.addSubnet(address, prefix, 'ipv6'));
++
++function isPrivatePreviewAddress(address: string) {
++  const mappedIpv4 = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)?.[1];
++  const normalized = mappedIpv4 || address;
++  const family = isIP(normalized);
++  if (family === 4) return privatePreviewNetworks.check(normalized, 'ipv4');
++  if (family === 6) return privatePreviewNetworks.check(normalized, 'ipv6');
++  return true;
++}
++
++function previewFailure(reason: string) {
++  const error = new Error(REQUIRED_PREVIEW_ERROR);
++  (error as any).code = REQUIRED_PREVIEW_ERROR;
++  (error as any).previewReason = reason;
++  return error;
++}
++
+@@ -2129,0 +2184,67 @@ export class BaileysStartupService extends ChannelStartupService {
++  private async getRequiredLinkPreview(text: string): Promise<WAUrlInfo> {
++    try {
++      const matchedText = extractUrlFromText(text)?.replace(/[),.;!?]+$/g, '');
++      if (!matchedText) throw previewFailure('URL_MISSING');
++
++      let parsedUrl: URL;
++      try {
++        parsedUrl = new URL(matchedText);
++      } catch {
++        throw previewFailure('URL_INVALID');
++      }
++      if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== REQUIRED_PREVIEW_HOST) {
++        throw previewFailure('HOST_NOT_ALLOWED');
++      }
++
++      const addresses = await lookup(parsedUrl.hostname, { all: true, verbatim: true });
++      if (!addresses.length || addresses.some(({ address }) => isPrivatePreviewAddress(address))) {
++        throw previewFailure('PRIVATE_ADDRESS');
++      }
++
++      const preview = await getUrlInfo(parsedUrl.toString(), {
++        thumbnailWidth: 192,
++        fetchOpts: {
++          timeout: REQUIRED_PREVIEW_TIMEOUT_MS,
++          maxContentLength: REQUIRED_PREVIEW_MAX_BYTES,
++        } as any,
++        uploadImage: this.client.waUploadToServer,
++      });
++      if (!preview || !preview.title?.trim() || !Buffer.isBuffer(preview.jpegThumbnail)) {
++        throw previewFailure('PREVIEW_METADATA_INCOMPLETE');
++      }
++      if (preview.jpegThumbnail.length === 0 || preview.jpegThumbnail.length > REQUIRED_PREVIEW_MAX_BYTES) {
++        throw previewFailure('THUMBNAIL_INVALID');
++      }
++
++      const canonicalUrl = new URL(preview['canonical-url']);
++      if (canonicalUrl.protocol !== 'https:' || canonicalUrl.hostname !== REQUIRED_PREVIEW_HOST) {
++        throw previewFailure('CANONICAL_HOST_NOT_ALLOWED');
++      }
++      if (!preview['matched-text']) throw previewFailure('MATCHED_URL_MISSING');
++
++      this.logger.info(
++        JSON.stringify({
++          event: 'PREVIEW_GATE_READY',
++          previewRequired: true,
++          hasTitle: true,
++          hasThumbnail: true,
++          thumbnailBytes: preview.jpegThumbnail.length,
++          providerSendStarted: false,
++        }),
++      );
++      return preview;
++    } catch (error) {
++      const reason = (error as any)?.previewReason || 'HELPER_FAILED';
++      this.logger.warn(
++        JSON.stringify({
++          event: 'PREVIEW_GATE_FAILED',
++          previewRequired: true,
++          reason,
++          providerSendStarted: false,
++        }),
++      );
++      if ((error as any)?.code === REQUIRED_PREVIEW_ERROR) throw error;
++      throw previewFailure(reason);
++    }
++  }
++
+@@ -2197,0 +2319,9 @@ export class BaileysStartupService extends ChannelStartupService {
++      if (linkPreview && typeof linkPreview === 'object') {
++        this.logger.info(
++          JSON.stringify({
++            event: 'PROVIDER_SEND_WITH_PREVIEW',
++            previewRequired: true,
++            providerSendStarted: true,
++          }),
++        );
++      }
+@@ -2341 +2471,6 @@ export class BaileysStartupService extends ChannelStartupService {
+-      const linkPreview = options?.linkPreview != false ? undefined : false;
++      let linkPreview: any;
++      if (options?.linkPreview === true && typeof (message as any)?.conversation === 'string') {
++        linkPreview = await this.getRequiredLinkPreview((message as any).conversation);
++      } else {
++        linkPreview = options?.linkPreview === false ? false : undefined;
++      }
