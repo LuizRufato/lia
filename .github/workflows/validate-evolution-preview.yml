@@ -1,0 +1,72 @@
+name: Validate Evolution preview image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout target code
+        uses: actions/checkout@v4
+        with:
+          ref: 4e19f01dbee87ac245a9871d6e708c954810b311
+          fetch-depth: 1
+
+      - name: Verify target checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "4e19f01dbee87ac245a9871d6e708c954810b311"
+          test -f Dockerfile.evolution
+          test -f vendor/evolution/patches/2.3.7-preview-required.patch
+
+      - name: Build candidate image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --progress=plain \
+            -f Dockerfile.evolution \
+            -t lia-evolution:preview-validation-4e19f01 \
+            .
+
+      - name: Validate image versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='lia-evolution:preview-validation-4e19f01'
+          test "$(docker run --rm --entrypoint node "$image" -p "require('/evolution/package.json').version")" = "2.3.7"
+          test "$(docker run --rm --entrypoint node "$image" -p "require('/evolution/node_modules/baileys/package.json').version")" = "7.0.0-rc13"
+          test "$(docker run --rm --entrypoint node "$image" -p "require('/evolution/node_modules/whatsapp-rust-bridge/package.json').version")" = "0.5.4"
+
+      - name: Validate compiled preview gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='lia-evolution:preview-validation-4e19f01'
+          for needle in \
+            'LINK_PREVIEW_REQUIRED_UNAVAILABLE' \
+            'PREVIEW_GATE_READY' \
+            'PREVIEW_GATE_FAILED' \
+            'PROVIDER_SEND_WITH_PREVIEW' \
+            'go.botlia.com.br' \
+            'WhatsApp/2.0 LIA-Preview/1.0'; do
+            docker run --rm --entrypoint sh "$image" -c "grep -R -F -- '$needle' /evolution/dist"
+          done
+          docker run --rm --entrypoint sh "$image" -c "grep -R -E -- '5[ _-]?000|5000|5s' /evolution/dist"
+
+      - name: Run preview gate contract test
+        shell: bash
+        run: node vendor/evolution/preview-gate.contract.test.cjs
+
+      - name: Record candidate image metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image inspect lia-evolution:preview-validation-4e19f01 \
+            --format 'id={{.Id}} created={{.Created}} architecture={{.Architecture}} os={{.Os}}'
