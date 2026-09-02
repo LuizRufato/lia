@@ -19,14 +19,14 @@ jobs:
       - name: Checkout target code
         uses: actions/checkout@v4
         with:
-          ref: 4e19f01dbee87ac245a9871d6e708c954810b311
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Verify target checkout
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "4e19f01dbee87ac245a9871d6e708c954810b311"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -f Dockerfile.evolution
           test -f vendor/evolution/patches/2.3.7-preview-required.patch
 

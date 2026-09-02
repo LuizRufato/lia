@@ -18,7 +18,7 @@ COPY vendor/evolution/patches/2.3.7-preview-required.patch /tmp/2.3.7-preview-re
 
 RUN git apply --unidiff-zero --check /tmp/2.3.7-preview-required.patch && \
     git apply --unidiff-zero /tmp/2.3.7-preview-required.patch && \
-    test "$(node -p \"require('./package.json').version\")" = "2.3.7"
+    node -e "const v=require('./package.json').version; if(v!=='2.3.7'){console.error('Unexpected Evolution version: '+v); process.exit(1)}"
 
 # The upstream lockfile pins RC9. Update only that dependency before the
 # official install/build so the compiler and runtime artifacts use RC13.
