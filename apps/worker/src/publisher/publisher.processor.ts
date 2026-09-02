@@ -726,18 +726,19 @@ export class PublisherProcessor extends WorkerHost {
       }
       if (manageGlobalPacing) await this.releaseSendLease(offer.tenantId);
       if (isPreviewUnavailable) {
+        const currentAttempt = (job.attemptsMade || 0) + 1;
+        const maxAttempts = Number(job.opts?.attempts || 1);
+        const status = currentAttempt < maxAttempts ? 'RETRYABLE' : 'FAILED';
         await this.prisma.publication.update({
           where: { id: publication.id },
           data: {
-            status: 'RETRYABLE',
+            status,
             errorReason: 'WHATSAPP_PREVIEW_UNAVAILABLE',
           },
         });
 
-        const attempts = Number(job.opts?.attempts || 1);
-        if ((job.attemptsMade || 0) + 1 < attempts) {
-          await job.moveToDelayed(Date.now() + 20_000, job.token!);
-          throw new DelayedError();
+        if (currentAttempt < maxAttempts) {
+          throw error;
         }
 
         return { failed: true, reason: 'WHATSAPP_PREVIEW_UNAVAILABLE' };

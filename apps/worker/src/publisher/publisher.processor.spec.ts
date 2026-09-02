@@ -1,5 +1,4 @@
 import { PublisherProcessor } from './publisher.processor';
-import { DelayedError } from 'bullmq';
 
 describe('PublisherProcessor send cadence state', () => {
   const makeProcessor = (prisma: any) =>
@@ -232,7 +231,7 @@ describe('PublisherProcessor send cadence state', () => {
     expect(retrySender.sendOfferMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('marks a preview-gated publication retryable without an external message id', async () => {
+  it('lets BullMQ retry a preview-gated publication without manual delay handling', async () => {
     const prisma = {
       publication: {
         findUnique: jest.fn().mockResolvedValue(null),
@@ -247,10 +246,11 @@ describe('PublisherProcessor send cadence state', () => {
         updateMany: jest.fn(),
       },
     };
+    const previewError = {
+      code: 'WHATSAPP_PREVIEW_UNAVAILABLE',
+    };
     const whatsappPublisher = {
-      publish: jest.fn().mockRejectedValue({
-        code: 'WHATSAPP_PREVIEW_UNAVAILABLE',
-      }),
+      publish: jest.fn().mockRejectedValue(previewError),
     };
     const safetyGovernor = {
       evaluate: jest.fn().mockResolvedValue({ allowed: true }),
@@ -273,7 +273,6 @@ describe('PublisherProcessor send cadence state', () => {
     const job = {
       opts: { attempts: 3 },
       attemptsMade: 0,
-      token: 'token-1',
       moveToDelayed: jest.fn().mockResolvedValue(undefined),
     } as any;
     const candidate = {
@@ -304,7 +303,7 @@ describe('PublisherProcessor send cadence state', () => {
 
     await expect(
       (processor as any).processChannel(job, candidate, offer, channel, false),
-    ).rejects.toBeInstanceOf(DelayedError);
+    ).rejects.toBe(previewError);
 
     expect(prisma.publication.update).toHaveBeenCalledWith({
       where: { id: 'publication-1' },
@@ -313,7 +312,164 @@ describe('PublisherProcessor send cadence state', () => {
         errorReason: 'WHATSAPP_PREVIEW_UNAVAILABLE',
       },
     });
-    expect(job.moveToDelayed).toHaveBeenCalledTimes(1);
+    expect(job.moveToDelayed).not.toHaveBeenCalled();
+    expect(safetyGovernor.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('keeps a preview-gated publication retryable on the second BullMQ attempt', async () => {
+    const prisma = {
+      publication: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'publication-2' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      trackedLink: { create: jest.fn().mockResolvedValue({ id: 'tracked-2' }) },
+      autopilotConfig: { findUnique: jest.fn(), updateMany: jest.fn() },
+    };
+    const previewError = { code: 'WHATSAPP_PREVIEW_UNAVAILABLE' };
+    const whatsappPublisher = {
+      publish: jest.fn().mockRejectedValue(previewError),
+    };
+    const safetyGovernor = {
+      evaluate: jest.fn().mockResolvedValue({ allowed: true }),
+      recordFailure: jest.fn(),
+      recordSuccess: jest.fn(),
+    };
+    const processor = new PublisherProcessor(
+      prisma as any,
+      {} as any,
+      whatsappPublisher as any,
+      safetyGovernor as any,
+    );
+    jest
+      .spyOn(processor as any, 'ensureVerifiedAffiliateLink')
+      .mockResolvedValue('https://shopee.test/affiliate');
+    jest
+      .spyOn(processor as any, 'findProductCooldown')
+      .mockResolvedValue({ active: false, until: null });
+
+    const job = {
+      opts: { attempts: 3 },
+      attemptsMade: 1,
+      moveToDelayed: jest.fn(),
+    } as any;
+    const candidate = {
+      id: 'candidate-2',
+      evaluation: {
+        score: 80,
+        observation: {
+          observedAt: new Date('2026-08-31T20:00:00.000Z'),
+          category: 'Eletrônicos',
+          canonicalPayload: {},
+        },
+      },
+    };
+    const offer = {
+      id: 'offer-2',
+      tenantId: 'tenant-1',
+      title: 'Produto',
+      price: 1000,
+      marketplace: { type: 'SHOPEE' },
+      priceHistories: [],
+    };
+    const channel = {
+      id: 'channel-2',
+      provider: 'WHATSAPP',
+      externalChatId: 'group@g.us',
+      tenant: { channelIntegrations: [] },
+    };
+
+    await expect(
+      (processor as any).processChannel(job, candidate, offer, channel, false),
+    ).rejects.toBe(previewError);
+    expect(prisma.publication.update).toHaveBeenCalledWith({
+      where: { id: 'publication-2' },
+      data: {
+        status: 'RETRYABLE',
+        errorReason: 'WHATSAPP_PREVIEW_UNAVAILABLE',
+      },
+    });
+    expect(job.moveToDelayed).not.toHaveBeenCalled();
+    expect(safetyGovernor.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('fails the publication on the final preview attempt without an external id', async () => {
+    const prisma = {
+      publication: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'publication-3' }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      trackedLink: { create: jest.fn().mockResolvedValue({ id: 'tracked-3' }) },
+      autopilotConfig: { findUnique: jest.fn(), updateMany: jest.fn() },
+    };
+    const previewError = { code: 'WHATSAPP_PREVIEW_UNAVAILABLE' };
+    const whatsappPublisher = {
+      publish: jest.fn().mockRejectedValue(previewError),
+    };
+    const safetyGovernor = {
+      evaluate: jest.fn().mockResolvedValue({ allowed: true }),
+      recordFailure: jest.fn(),
+      recordSuccess: jest.fn(),
+    };
+    const processor = new PublisherProcessor(
+      prisma as any,
+      {} as any,
+      whatsappPublisher as any,
+      safetyGovernor as any,
+    );
+    jest
+      .spyOn(processor as any, 'ensureVerifiedAffiliateLink')
+      .mockResolvedValue('https://shopee.test/affiliate');
+    jest
+      .spyOn(processor as any, 'findProductCooldown')
+      .mockResolvedValue({ active: false, until: null });
+
+    const job = {
+      opts: { attempts: 3 },
+      attemptsMade: 2,
+      moveToDelayed: jest.fn(),
+    } as any;
+    const candidate = {
+      id: 'candidate-3',
+      evaluation: {
+        score: 80,
+        observation: {
+          observedAt: new Date('2026-08-31T20:00:00.000Z'),
+          category: 'Eletrônicos',
+          canonicalPayload: {},
+        },
+      },
+    };
+    const offer = {
+      id: 'offer-3',
+      tenantId: 'tenant-1',
+      title: 'Produto',
+      price: 1000,
+      marketplace: { type: 'SHOPEE' },
+      priceHistories: [],
+    };
+    const channel = {
+      id: 'channel-3',
+      provider: 'WHATSAPP',
+      externalChatId: 'group@g.us',
+      tenant: { channelIntegrations: [] },
+    };
+
+    await expect(
+      (processor as any).processChannel(job, candidate, offer, channel, false),
+    ).resolves.toEqual({
+      failed: true,
+      reason: 'WHATSAPP_PREVIEW_UNAVAILABLE',
+    });
+    expect(prisma.publication.update).toHaveBeenCalledWith({
+      where: { id: 'publication-3' },
+      data: {
+        status: 'FAILED',
+        errorReason: 'WHATSAPP_PREVIEW_UNAVAILABLE',
+      },
+    });
+    expect(job.moveToDelayed).not.toHaveBeenCalled();
     expect(safetyGovernor.recordFailure).not.toHaveBeenCalled();
   });
 

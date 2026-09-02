@@ -87,6 +87,9 @@ index 60e857f..8321e19 100644
 +        fetchOpts: {
 +          timeout: REQUIRED_PREVIEW_TIMEOUT_MS,
 +          maxContentLength: REQUIRED_PREVIEW_MAX_BYTES,
++          headers: {
++            'User-Agent': 'WhatsApp/2.0 LIA-Preview/1.0',
++          },
 +        } as any,
 +        uploadImage: this.client.waUploadToServer,
 +      });

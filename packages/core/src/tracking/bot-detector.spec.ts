@@ -21,8 +21,9 @@ describe("Bot Detection", () => {
   });
 
   it("identifies common preview crawlers without treating them as human clicks", () => {
-    expect(isPreviewCrawler("WhatsApp/2.23 LinkPreview")).toBe(true);
-    expect(classifyClick("WhatsApp/2.23 LinkPreview").classification).toEqual(
+    const previewUserAgent = "WhatsApp/2.0 LIA-Preview/1.0";
+    expect(isPreviewCrawler(previewUserAgent)).toBe(true);
+    expect(classifyClick(previewUserAgent).classification).toEqual(
       "PREVIEW_BOT",
     );
     expect(intelligenceClassFor("PREVIEW_BOT")).toEqual("PREVIEW_CRAWLER");
