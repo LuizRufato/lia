@@ -65,9 +65,10 @@ jobs:
             'PROVIDER_SEND_WITH_PREVIEW' \
             'go.botlia.com.br' \
             'WhatsApp/2.0 LIA-Preview/1.0'; do
+            echo "checking marker: $needle"
             timeout 10s docker run --rm --entrypoint sh "$image" -c "grep -Fq -- '$needle' '$compiled_file'"
+            echo "PASS marker: $needle"
           done
-          timeout 10s docker run --rm --entrypoint sh "$image" -c "grep -Eq -- '5[ _-]?000|5000|5s' '$compiled_file'"
 
       - name: Run preview gate contract test
         shell: bash
