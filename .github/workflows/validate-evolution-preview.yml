@@ -55,6 +55,9 @@ jobs:
         run: |
           set -euo pipefail
           image='lia-evolution:preview-validation-4e19f01'
+          compiled_file="$(timeout 10s docker run --rm --entrypoint sh "$image" -c \
+            "find /evolution/dist -type f -name '*whatsapp.baileys.service*.js' -print -quit")"
+          test -n "$compiled_file"
           for needle in \
             'LINK_PREVIEW_REQUIRED_UNAVAILABLE' \
             'PREVIEW_GATE_READY' \
@@ -62,9 +65,9 @@ jobs:
             'PROVIDER_SEND_WITH_PREVIEW' \
             'go.botlia.com.br' \
             'WhatsApp/2.0 LIA-Preview/1.0'; do
-            docker run --rm --entrypoint sh "$image" -c "grep -R -F -- '$needle' /evolution/dist"
+            timeout 10s docker run --rm --entrypoint sh "$image" -c "grep -Fq -- '$needle' '$compiled_file'"
           done
-          docker run --rm --entrypoint sh "$image" -c "grep -R -E -- '5[ _-]?000|5000|5s' /evolution/dist"
+          timeout 10s docker run --rm --entrypoint sh "$image" -c "grep -Eq -- '5[ _-]?000|5000|5s' '$compiled_file'"
 
       - name: Run preview gate contract test
         shell: bash
