@@ -66,6 +66,10 @@ function formatDateTime(value: string | null | undefined) {
 
 export default function AutopilotDashboard() {
   const [data, setData] = useState<any>(null);
+  const [dashboardLoaded, setDashboardLoaded] = useState(false);
+  const [catalogCategories, setCatalogCategories] = useState<any[]>([]);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
+  const [categoriesError, setCategoriesError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -105,10 +109,8 @@ export default function AutopilotDashboard() {
       const res = await fetchAuth("/autopilot/dashboard");
       if (!res.ok) throw new Error("Failed to fetch");
       const json = await res.json();
-      setData((current: any) => ({
-        ...json,
-        catalogCategories: current?.catalogCategories || [],
-      }));
+      setData(json);
+      setDashboardLoaded(true);
 
       if (syncForm && json.config) {
         setForm({
@@ -135,6 +137,8 @@ export default function AutopilotDashboard() {
         });
       }
     } catch (err) {
+      setDashboardLoaded(false);
+      setData(null);
       setLoadError(
         "Não foi possível carregar as configurações do Piloto Automático.",
       );
@@ -144,16 +148,19 @@ export default function AutopilotDashboard() {
   };
 
   const fetchCategories = async () => {
+    setCategoriesError(false);
     try {
       const response = await fetchAuth("/autopilot/catalog/categories");
-      if (!response.ok) return;
+      if (!response.ok) throw new Error("Failed to fetch categories");
       const json = await response.json();
-      setData((current: any) => ({
-        ...(current || {}),
-        catalogCategories: json.categories || [],
-      }));
+      setCatalogCategories(
+        Array.isArray(json.categories) ? json.categories : [],
+      );
+      setCategoriesLoaded(true);
     } catch {
-      // Categories are secondary data and must not block the dashboard.
+      setCatalogCategories([]);
+      setCategoriesLoaded(false);
+      setCategoriesError(true);
     }
   };
 
@@ -224,7 +231,7 @@ export default function AutopilotDashboard() {
     );
 
   // A failed request must not let the page render fields from a null payload.
-  if (!data)
+  if (!dashboardLoaded || !data)
     return (
       <div className="p-8 max-w-xl mx-auto">
         <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
@@ -424,7 +431,9 @@ export default function AutopilotDashboard() {
               Candidatos elegíveis
             </p>
             <p className="mt-1 text-2xl font-bold text-gray-900">
-              {data.operationalStatus?.eligibleCandidates ?? 0}
+              {data.operationalStatus?.eligibleCandidates == null
+                ? "—"
+                : data.operationalStatus.eligibleCandidates}
             </p>
             <p className="text-xs text-gray-500">agora</p>
           </div>
@@ -885,27 +894,25 @@ export default function AutopilotDashboard() {
                       Categorias principais
                     </h5>
                     <div className="flex flex-wrap gap-2">
-                      {(data.catalogCategories || [])
-                        .slice(0, 9)
-                        .map((category: any) => {
-                          const id = category.slug;
-                          const label = category.label;
-                          const selected =
-                            form.catalogPolicy.allowedCategories.includes(id);
-                          const blocked =
-                            form.catalogPolicy.blockedCategories.includes(id);
-                          return (
-                            <button
-                              type="button"
-                              key={id}
-                              onClick={() => toggleCatalogCategory(id)}
-                              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
-                              title={`${label} · observadas: ${category.observedCount} · publicadas: ${category.publishedCount}`}
-                            >
-                              {label}
-                            </button>
-                          );
-                        })}
+                      {catalogCategories.slice(0, 9).map((category: any) => {
+                        const id = category.slug;
+                        const label = category.label;
+                        const selected =
+                          form.catalogPolicy.allowedCategories.includes(id);
+                        const blocked =
+                          form.catalogPolicy.blockedCategories.includes(id);
+                        return (
+                          <button
+                            type="button"
+                            key={id}
+                            onClick={() => toggleCatalogCategory(id)}
+                            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
+                            title={`${label} · observadas: ${category.observedCount} · publicadas: ${category.publishedCount}`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                   <div>
@@ -913,30 +920,33 @@ export default function AutopilotDashboard() {
                       Outras categorias
                     </h5>
                     <div className="flex flex-wrap gap-2">
-                      {(data.catalogCategories || [])
-                        .slice(9)
-                        .map((category: any) => {
-                          const id = category.slug;
-                          const label = category.label;
-                          const selected =
-                            form.catalogPolicy.allowedCategories.includes(id);
-                          const blocked =
-                            form.catalogPolicy.blockedCategories.includes(id);
-                          return (
-                            <button
-                              type="button"
-                              key={id}
-                              onClick={() => toggleCatalogCategory(id)}
-                              className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
-                              title={`${label} · observadas: ${category.observedCount} · publicadas: ${category.publishedCount}`}
-                            >
-                              {label}
-                            </button>
-                          );
-                        })}
+                      {catalogCategories.slice(9).map((category: any) => {
+                        const id = category.slug;
+                        const label = category.label;
+                        const selected =
+                          form.catalogPolicy.allowedCategories.includes(id);
+                        const blocked =
+                          form.catalogPolicy.blockedCategories.includes(id);
+                        return (
+                          <button
+                            type="button"
+                            key={id}
+                            onClick={() => toggleCatalogCategory(id)}
+                            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${blocked ? "border-red-200 bg-red-50 text-red-700 line-through" : selected ? "border-blue-200 bg-blue-100 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:border-blue-300"}`}
+                            title={`${label} · observadas: ${category.observedCount} · publicadas: ${category.publishedCount}`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                  {!data.catalogCategories?.length && (
+                  {categoriesError && (
+                    <span className="text-sm text-red-600">
+                      Não foi possível carregar as categorias.
+                    </span>
+                  )}
+                  {categoriesLoaded && !catalogCategories.length && (
                     <span className="text-sm text-gray-500">
                       Nenhuma categoria comercial observada.
                     </span>
@@ -945,7 +955,7 @@ export default function AutopilotDashboard() {
                 {/* Keep legacy values removable without exposing raw Shopee IDs. */}
                 {!!form.catalogPolicy.blockedCategories.filter(
                   (category) =>
-                    !data.catalogCategories?.some(
+                    !catalogCategories.some(
                       (item: any) => item.slug === category,
                     ),
                 ).length && (
@@ -1158,7 +1168,7 @@ export default function AutopilotDashboard() {
 
             <div className="mt-8 flex justify-end">
               <button
-                disabled={saving}
+                disabled={!dashboardLoaded || saving}
                 type="submit"
                 className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold shadow-sm transition-colors disabled:opacity-50"
               >
