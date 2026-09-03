@@ -78,7 +78,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.evolution
-    image: lia-evolution:v2.3.7-baileys-rc13
+    image: lia-evolution:v2.3.7-baileys-rc13-preview-f5e4467
     restart: unless-stopped
     depends_on:
       evolution-postgres:
