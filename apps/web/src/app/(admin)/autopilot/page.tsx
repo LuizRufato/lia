@@ -64,6 +64,35 @@ function formatDateTime(value: string | null | undefined) {
   return new Date(value).toLocaleString("pt-BR");
 }
 
+function isValidDashboardPayload(value: any) {
+  if (!value || typeof value !== "object" || typeof value.mode !== "string") {
+    return false;
+  }
+
+  const config = value.config;
+  if (
+    !config ||
+    !Array.isArray(config.channels) ||
+    !Array.isArray(config.marketplaces) ||
+    typeof config.timezone !== "string" ||
+    !config.timezone
+  ) {
+    return false;
+  }
+
+  return [
+    "minScore",
+    "minimumCommissionCents",
+    "maxDailyPosts",
+    "intervalMinutes",
+    "allowedStartMinute",
+    "allowedEndMinute",
+  ].every(
+    (field) =>
+      typeof config[field] === "number" && Number.isFinite(config[field]),
+  );
+}
+
 export default function AutopilotDashboard() {
   const [data, setData] = useState<any>(null);
   const [dashboardLoaded, setDashboardLoaded] = useState(false);
@@ -109,8 +138,9 @@ export default function AutopilotDashboard() {
       const res = await fetchAuth("/autopilot/dashboard");
       if (!res.ok) throw new Error("Failed to fetch");
       const json = await res.json();
-      setData(json);
-      setDashboardLoaded(true);
+      if (!isValidDashboardPayload(json)) {
+        throw new Error("Invalid dashboard payload");
+      }
 
       if (syncForm && json.config) {
         setForm({
@@ -136,6 +166,9 @@ export default function AutopilotDashboard() {
           },
         });
       }
+
+      setData(json);
+      setDashboardLoaded(true);
     } catch (err) {
       setDashboardLoaded(false);
       setData(null);
@@ -153,9 +186,10 @@ export default function AutopilotDashboard() {
       const response = await fetchAuth("/autopilot/catalog/categories");
       if (!response.ok) throw new Error("Failed to fetch categories");
       const json = await response.json();
-      setCatalogCategories(
-        Array.isArray(json.categories) ? json.categories : [],
-      );
+      if (!json || !Array.isArray(json.categories)) {
+        throw new Error("Invalid categories payload");
+      }
+      setCatalogCategories(json.categories);
       setCategoriesLoaded(true);
     } catch {
       setCatalogCategories([]);
