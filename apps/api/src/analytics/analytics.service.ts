@@ -761,14 +761,37 @@ export class AnalyticsService {
     conversions: any[],
     period: ResolvedPeriod,
   ) {
-    const isToday = period.key === 'today';
+    const isHourly = period.key === 'today' || period.key === 'yesterday';
     const buckets: Array<{ from: Date; to: Date; at: string }> = [];
-    if (isToday) {
+    if (isHourly) {
       const now = new Date();
-      for (let index = 11; index >= 0; index -= 1) {
-        const to = new Date(now.getTime() - index * 5 * 60_000);
-        const from = new Date(to.getTime() - 5 * 60_000);
-        buckets.push({ from, to, at: from.toISOString() });
+      const nowParts = getZonedDateParts(now, period.timezone);
+      const currentHour = zonedTimeToUtc(
+        nowParts.year,
+        nowParts.month,
+        nowParts.day,
+        nowParts.hour,
+        0,
+        period.timezone,
+      );
+      let cursor = period.from;
+      while (
+        cursor <= currentHour &&
+        cursor < period.to &&
+        buckets.length < 24
+      ) {
+        const parts = getZonedDateParts(cursor, period.timezone);
+        const to = zonedTimeToUtc(
+          parts.year,
+          parts.month,
+          parts.day,
+          parts.hour + 1,
+          0,
+          period.timezone,
+        );
+        if (to <= cursor) break;
+        buckets.push({ from: cursor, to, at: cursor.toISOString() });
+        cursor = to;
       }
     } else {
       let cursor = period.from;

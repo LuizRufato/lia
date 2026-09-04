@@ -13,6 +13,10 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
+import {
+  AnalyticsLineChart,
+  AnalyticsMetric,
+} from "@/components/AnalyticsLineChart";
 import { PeriodKey, PeriodSelector } from "@/components/PeriodSelector";
 import { fetchAuth } from "@/lib/api";
 
@@ -38,7 +42,7 @@ type Report = {
     sold: Array<{ name: string; qty: number }>;
     commission: Array<{ name: string; commissionCents: number }>;
   };
-  period: { timezone: string };
+  period: { key: PeriodKey; timezone: string };
 };
 
 const EMPTY: Report = {
@@ -53,7 +57,7 @@ const EMPTY: Report = {
   epcExpectedCents: null,
   history: [],
   topProducts: { clicked: [], sold: [], commission: [] },
-  period: { timezone: "America/Campo_Grande" },
+  period: { key: "today", timezone: "America/Campo_Grande" },
 };
 
 const currency = (cents: number | null | undefined) =>
@@ -68,6 +72,9 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<Report>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [metric, setMetric] = useState<AnalyticsMetric>("clicks");
+  const [focusedPoint, setFocusedPoint] = useState<number | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -91,6 +98,7 @@ export default function AnalyticsPage() {
             topProducts: next.topProducts || EMPTY.topProducts,
           });
           setError(false);
+          setLastUpdatedAt(new Date());
         }
       } catch {
         if (mounted) setError(true);
@@ -109,7 +117,6 @@ export default function AnalyticsPage() {
     };
   }, [period, dateFrom, dateTo]);
 
-  const maxChart = Math.max(1, ...data.history.map((item) => item.clicks));
   const kpis = [
     ["Cliques válidos", data.clicks, MousePointerClick],
     ["Cliques únicos", data.uniqueClicks, Users],
@@ -197,15 +204,37 @@ export default function AnalyticsPage() {
       </div>
 
       <section className="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
-        <div className="mb-6 flex items-center gap-2">
-          <BarChart3 className="h-5 w-5 text-blue-600" />
-          <div>
-            <h2 className="font-semibold text-gray-900">
-              Histórico do período
-            </h2>
-            <p className="text-xs text-gray-500">
-              Cliques válidos, vendas, valor vendido e comissão prevista.
-            </p>
+        <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-blue-600" />
+            <div>
+              <h2 className="font-semibold text-gray-900">
+                Histórico do período
+              </h2>
+              <p className="text-xs text-gray-500">
+                Cliques válidos, vendas, valor vendido e comissão prevista.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2" aria-label="Métrica do gráfico">
+            {(
+              [
+                ["clicks", "Cliques"],
+                ["sales", "Vendas"],
+                ["grossSalesCents", "Valor vendido"],
+                ["expectedCommissionCents", "Comissão prevista"],
+              ] as Array<[AnalyticsMetric, string]>
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={metric === value}
+                onClick={() => setMetric(value)}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${metric === value ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
         {data.history.length === 0 ? (
@@ -213,32 +242,23 @@ export default function AnalyticsPage() {
             Sem dados no período.
           </p>
         ) : (
-          <div className="flex h-56 items-end gap-2">
-            {data.history.map((item) => (
-              <div
-                key={item.at}
-                className="flex h-full flex-1 flex-col items-center justify-end gap-1"
-              >
-                <span className="text-[10px] text-gray-500">
-                  {item.clicks || ""}
-                </span>
-                <div
-                  className="w-full rounded-t bg-blue-500"
-                  style={{
-                    height: `${Math.max(4, (item.clicks / maxChart) * 100)}%`,
-                  }}
-                  title={`${item.clicks} clique(s), ${item.sales} venda(s)`}
-                />
-                <span className="text-[10px] text-gray-400">
-                  {new Date(item.at).toLocaleDateString("pt-BR", {
-                    day: "2-digit",
-                    month: "2-digit",
-                  })}
-                </span>
-              </div>
-            ))}
-          </div>
+          <AnalyticsLineChart
+            data={data.history}
+            metric={metric}
+            hourly={
+              data.period.key === "today" || data.period.key === "yesterday"
+            }
+            timezone={data.period.timezone}
+            focusedIndex={focusedPoint}
+            onPointFocus={setFocusedPoint}
+          />
         )}
+        <p className="mt-4 text-xs text-gray-400">
+          Atualização automática
+          {lastUpdatedAt
+            ? ` · atualizado às ${lastUpdatedAt.toLocaleTimeString("pt-BR")}`
+            : ""}
+        </p>
       </section>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

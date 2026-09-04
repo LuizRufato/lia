@@ -244,4 +244,112 @@ describe('AnalyticsService sales KPI', () => {
       sales: 0,
     });
   });
+
+  describe('hourly analytics history', () => {
+    const timezone = 'America/Campo_Grande';
+    const buildHistory = (
+      service: AnalyticsService,
+      period: { key: string; from: Date; to: Date; timezone: string },
+      clicks: unknown[] = [],
+      conversions: unknown[] = [],
+    ) => (service as any).buildHistory(clicks, conversions, period);
+
+    beforeEach(() => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-24T18:37:00.000Z'));
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('builds today from local midnight through the current local hour', () => {
+      const service = makeService([]);
+      const history = buildHistory(service, {
+        key: 'today',
+        from: new Date('2026-08-24T04:00:00.000Z'),
+        to: new Date('2026-08-25T04:00:00.000Z'),
+        timezone,
+      });
+
+      expect(history).toHaveLength(15);
+      expect(history[0].at).toBe('2026-08-24T04:00:00.000Z');
+      expect(history.at(-1).at).toBe('2026-08-24T18:00:00.000Z');
+    });
+
+    it('builds yesterday as the complete local day in chronological order', () => {
+      const service = makeService([]);
+      const history = buildHistory(service, {
+        key: 'yesterday',
+        from: new Date('2026-08-23T04:00:00.000Z'),
+        to: new Date('2026-08-24T04:00:00.000Z'),
+        timezone,
+      });
+
+      expect(history).toHaveLength(24);
+      expect(history[0].at).toBe('2026-08-23T04:00:00.000Z');
+      expect(history.at(-1).at).toBe('2026-08-24T03:00:00.000Z');
+      expect(history.map((item: any) => item.at)).toEqual(
+        [...history]
+          .sort((a: any, b: any) => a.at.localeCompare(b.at))
+          .map((item: any) => item.at),
+      );
+    });
+
+    it('places a click at exactly 10:00 in the 10h bucket', () => {
+      const service = makeService([]);
+      const history = buildHistory(
+        service,
+        {
+          key: 'today',
+          from: new Date('2026-08-24T04:00:00.000Z'),
+          to: new Date('2026-08-25T04:00:00.000Z'),
+          timezone,
+        },
+        [{ clickedAt: new Date('2026-08-24T14:00:00.000Z') }],
+      );
+
+      expect(history[9].clicks).toBe(0);
+      expect(history[10].clicks).toBe(1);
+    });
+
+    it('groups sales by purchaseTime rather than createdAt', () => {
+      const service = makeService([]);
+      const history = buildHistory(
+        service,
+        {
+          key: 'today',
+          from: new Date('2026-08-24T04:00:00.000Z'),
+          to: new Date('2026-08-25T04:00:00.000Z'),
+          timezone,
+        },
+        [],
+        [
+          {
+            purchaseTime: new Date('2026-08-24T14:00:00.000Z'),
+            createdAt: new Date('2026-08-24T04:30:00.000Z'),
+            attributionStatus: 'ATTRIBUTED',
+            commissionStatus: 'PENDING',
+            totalCommissionCents: 720,
+          },
+        ],
+      );
+
+      expect(history[10].sales).toBe(1);
+      expect(history[0].sales).toBe(0);
+    });
+
+    it('keeps long periods grouped daily', () => {
+      const service = makeService([]);
+      const history = buildHistory(service, {
+        key: '7d',
+        from: new Date('2026-08-18T04:00:00.000Z'),
+        to: new Date('2026-08-25T04:00:00.000Z'),
+        timezone,
+      });
+
+      expect(history).toHaveLength(7);
+      expect(history[0].at).toBe('2026-08-18T04:00:00.000Z');
+      expect(history.at(-1).at).toBe('2026-08-24T04:00:00.000Z');
+    });
+  });
 });
