@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
+
 export type AnalyticsMetric =
   "clicks" | "sales" | "grossSalesCents" | "expectedCommissionCents";
 
@@ -99,12 +101,27 @@ export function AnalyticsLineChart({
   onPointFocus,
   focusedIndex = null,
 }: AnalyticsLineChartProps) {
-  const width = 720;
-  const height = 280;
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(720);
+  useEffect(() => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+
+    const updateWidth = () => {
+      setWidth(Math.max(1, Math.round(container.clientWidth)));
+    };
+    updateWidth();
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const height = 224;
   const left = 46;
   const right = 18;
-  const top = 18;
-  const bottom = 44;
+  const top = 16;
+  const bottom = 38;
   const chartWidth = width - left - right;
   const chartHeight = height - top - bottom;
   const values = data.map((point) => valueFor(point, metric));
@@ -124,10 +141,10 @@ export function AnalyticsLineChart({
   const labelStep = Math.max(1, Math.ceil(data.length / (hourly ? 8 : 7)));
 
   return (
-    <div className="relative w-full min-w-0">
+    <div ref={chartContainerRef} className="relative h-56 w-full min-w-0">
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        className="h-auto min-h-[240px] w-full overflow-visible"
+        className="h-full w-full overflow-visible"
         role="img"
         aria-label={`Gráfico de linha de ${metricLabels[metric]}`}
       >
