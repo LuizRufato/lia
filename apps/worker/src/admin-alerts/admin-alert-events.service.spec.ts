@@ -61,8 +61,19 @@ describe('AdminAlertEventsService', () => {
     });
 
     await service.scheduleDailySummaries(now);
-    return prisma.adminAlert.upsert.mock.calls[0][0];
+    return prisma.adminAlert.upsert.mock.calls[
+      prisma.adminAlert.upsert.mock.calls.length - 1
+    ][0];
   };
+
+  const conversionsInWindow =
+    (rows: any[]) =>
+    ({ where }: any) =>
+      rows.filter(
+        (row) =>
+          row.createdAt > where.createdAt.gt &&
+          row.createdAt <= where.createdAt.lte,
+      );
 
   it('does not create a summary when the feature is disabled', async () => {
     prisma.adminAlertConfig.findMany.mockResolvedValue([]);
@@ -171,6 +182,7 @@ describe('AdminAlertEventsService', () => {
 
   it('includes a Shopee conversion that arrived late in the creation day summary', async () => {
     const lateConversion = {
+      createdAt: new Date('2026-08-28T14:15:00.696Z'),
       attributionStatus: 'ATTRIBUTED',
       totalCommissionCents: 1234,
       orders: [
@@ -195,38 +207,109 @@ describe('AdminAlertEventsService', () => {
     const conversionQuery =
       prisma.marketplaceConversion.findMany.mock.calls[0][0];
     expect(conversionQuery.where.createdAt).toEqual({
-      gte: new Date('2026-08-28T04:00:00.000Z'),
+      gt: new Date('2026-08-28T02:10:00.000Z'),
       lte: new Date('2026-08-29T02:10:00.000Z'),
     });
     expect(conversionQuery.where.purchaseTime).toBeUndefined();
   });
 
   it('does not count the same late conversion again on the following day', async () => {
-    const call = await runDailySummary(new Date('2026-08-30T02:10:00.000Z'));
+    const lateConversion = {
+      createdAt: new Date('2026-08-28T14:15:00.696Z'),
+      attributionStatus: 'ATTRIBUTED',
+      totalCommissionCents: 1234,
+      orders: [],
+    };
+    await runDailySummary(
+      new Date('2026-08-29T02:10:00.000Z'),
+      conversionsInWindow([lateConversion]),
+    );
+    const call = await runDailySummary(
+      new Date('2026-08-30T02:10:00.000Z'),
+      conversionsInWindow([lateConversion]),
+    );
 
     expect(call.create.payload).toEqual(
       expect.objectContaining({ period: '2026-08-29', sales: 0 }),
     );
     expect(
-      prisma.marketplaceConversion.findMany.mock.calls[0][0].where.createdAt,
+      prisma.marketplaceConversion.findMany.mock.calls[1][0].where.createdAt,
     ).toEqual({
-      gte: new Date('2026-08-29T04:00:00.000Z'),
+      gt: new Date('2026-08-29T02:10:00.000Z'),
       lte: new Date('2026-08-30T02:10:00.000Z'),
     });
   });
 
   it('counts a conversion created on the same local day', async () => {
-    const call = await runDailySummary(new Date('2026-08-29T02:10:00.000Z'), [
-      {
-        attributionStatus: 'UNATTRIBUTED',
-        totalCommissionCents: 999,
-        orders: [],
-      },
-    ]);
+    const first = await runDailySummary(
+      new Date('2026-08-29T02:10:00.000Z'),
+      conversionsInWindow([
+        {
+          createdAt: new Date('2026-08-28T20:00:00.000Z'),
+          attributionStatus: 'UNATTRIBUTED',
+          totalCommissionCents: 999,
+          orders: [],
+        },
+      ]),
+    );
+    const next = await runDailySummary(
+      new Date('2026-08-30T02:10:00.000Z'),
+      conversionsInWindow([
+        {
+          createdAt: new Date('2026-08-28T20:00:00.000Z'),
+          attributionStatus: 'UNATTRIBUTED',
+          totalCommissionCents: 999,
+          orders: [],
+        },
+      ]),
+    );
 
-    expect(call.create.payload).toEqual(
+    expect(first.create.payload).toEqual(
       expect.objectContaining({ period: '2026-08-28', sales: 1 }),
     );
+    expect(next.create.payload.sales).toBe(0);
+  });
+
+  it('moves an after-summary conversion into the next summary without a gap', async () => {
+    const conversion = {
+      createdAt: new Date('2026-08-29T02:35:00.000Z'),
+      attributionStatus: 'UNATTRIBUTED',
+      totalCommissionCents: 999,
+      orders: [],
+    };
+    const first = await runDailySummary(
+      new Date('2026-08-29T02:10:00.000Z'),
+      conversionsInWindow([conversion]),
+    );
+    const next = await runDailySummary(
+      new Date('2026-08-30T02:10:00.000Z'),
+      conversionsInWindow([conversion]),
+    );
+
+    expect(first.create.payload.sales).toBe(0);
+    expect(next.create.payload).toEqual(
+      expect.objectContaining({ period: '2026-08-29', sales: 1 }),
+    );
+  });
+
+  it('assigns an exact cutoff conversion to one summary only', async () => {
+    const conversion = {
+      createdAt: new Date('2026-08-29T02:10:00.000Z'),
+      attributionStatus: 'UNATTRIBUTED',
+      totalCommissionCents: 999,
+      orders: [],
+    };
+    const first = await runDailySummary(
+      new Date('2026-08-29T02:10:00.000Z'),
+      conversionsInWindow([conversion]),
+    );
+    const next = await runDailySummary(
+      new Date('2026-08-30T02:10:00.000Z'),
+      conversionsInWindow([conversion]),
+    );
+
+    expect(first.create.payload.sales).toBe(1);
+    expect(next.create.payload.sales).toBe(0);
   });
 
   it('keeps cancelled conversions out of the daily summary query', async () => {
@@ -257,9 +340,71 @@ describe('AdminAlertEventsService', () => {
 
     expect(call.create.payload.period).toBe('2026-08-28');
     expect(
+      prisma.marketplaceConversion.findMany.mock.calls[0][0].where.createdAt.gt,
+    ).toEqual(new Date('2026-08-28T02:10:00.000Z'));
+    expect(
       prisma.marketplaceConversion.findMany.mock.calls[0][0].where.createdAt
-        .gte,
-    ).toEqual(new Date('2026-08-28T04:00:00.000Z'));
+        .lte,
+    ).toEqual(new Date('2026-08-29T02:10:00.000Z'));
+  });
+
+  it('accounts for a multi-day sequence exactly once per conversion', async () => {
+    const conversions = [
+      {
+        id: 'd-21',
+        createdAt: new Date('2026-08-29T01:00:00.000Z'),
+        attributionStatus: 'UNATTRIBUTED',
+        totalCommissionCents: 0,
+        orders: [],
+      },
+      {
+        id: 'd-22-35',
+        createdAt: new Date('2026-08-29T02:35:00.000Z'),
+        attributionStatus: 'UNATTRIBUTED',
+        totalCommissionCents: 0,
+        orders: [],
+      },
+      {
+        id: 'd1-08',
+        createdAt: new Date('2026-08-29T12:00:00.000Z'),
+        attributionStatus: 'UNATTRIBUTED',
+        totalCommissionCents: 0,
+        orders: [],
+      },
+      {
+        id: 'd1-22-20',
+        createdAt: new Date('2026-08-30T02:20:00.000Z'),
+        attributionStatus: 'UNATTRIBUTED',
+        totalCommissionCents: 0,
+        orders: [],
+      },
+    ];
+    const seen: string[][] = [];
+    const selectForWindow = ({ where }: any) => {
+      const selected = conversionsInWindow(conversions)({ where });
+      seen.push(selected.map((conversion) => conversion.id));
+      return selected;
+    };
+
+    const first = await runDailySummary(
+      new Date('2026-08-29T02:10:00.000Z'),
+      selectForWindow,
+    );
+    const second = await runDailySummary(
+      new Date('2026-08-30T02:10:00.000Z'),
+      selectForWindow,
+    );
+    const third = await runDailySummary(
+      new Date('2026-08-31T02:10:00.000Z'),
+      selectForWindow,
+    );
+
+    expect([
+      first.create.payload.sales,
+      second.create.payload.sales,
+      third.create.payload.sales,
+    ]).toEqual([1, 2, 1]);
+    expect(seen.flat()).toEqual(['d-21', 'd-22-35', 'd1-08', 'd1-22-20']);
   });
 
   it('suppresses a repeated incident within its sixty-minute cooldown', async () => {

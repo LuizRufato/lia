@@ -5,7 +5,10 @@ import { generateAdminAlertRecipientHash } from '@lia/core';
 import { decryptSecret, getEncryptionKey } from '@lia/integrations';
 import { PrismaService } from '../prisma.service';
 import { buildAdminAlertJobId } from './admin-alert-job-id';
-import { getLocalDayWindow } from './daily-summary-time';
+import {
+  getDailySummaryConversionWindow,
+  getLocalDayWindow,
+} from './daily-summary-time';
 
 type AlertType = 'CRITICAL_ERROR' | 'DAILY_SUMMARY';
 type AlertInput = {
@@ -145,6 +148,7 @@ export class AdminAlertEventsService {
 
   async scheduleDailySummaries(now = new Date()) {
     const { localDate, start, end } = getLocalDayWindow(now);
+    const conversionWindow = getDailySummaryConversionWindow(now);
     const configs = await this.prisma.adminAlertConfig.findMany({
       where: { enabled: true, dailySummaryEnabled: true },
       select: { tenantId: true },
@@ -155,6 +159,8 @@ export class AdminAlertEventsService {
         config.tenantId,
         start,
         end,
+        conversionWindow.start,
+        conversionWindow.end,
       );
       const alert = await this.createAndQueue({
         tenantId: config.tenantId,
@@ -176,7 +182,13 @@ export class AdminAlertEventsService {
     }
   }
 
-  private async collectDailyMetrics(tenantId: string, start: Date, end: Date) {
+  private async collectDailyMetrics(
+    tenantId: string,
+    start: Date,
+    end: Date,
+    conversionStart: Date,
+    conversionEnd: Date,
+  ) {
     const [publications, clicks, conversions, failures] = await Promise.all([
       this.prisma.publication.count({
         where: {
@@ -196,7 +208,7 @@ export class AdminAlertEventsService {
         where: {
           tenantId,
           provider: 'SHOPEE',
-          createdAt: { gte: start, lte: end },
+          createdAt: { gt: conversionStart, lte: conversionEnd },
           commissionStatus: { not: 'CANCELLED' },
         },
         select: {

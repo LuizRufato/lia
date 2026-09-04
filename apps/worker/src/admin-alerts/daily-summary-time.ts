@@ -55,6 +55,20 @@ function getOffsetMinutes(date: Date): number {
   return match.groups.sign === '-' ? -minutes : minutes;
 }
 
+function getLocalDateTime(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+) {
+  const naiveUtc = Date.UTC(year, month - 1, day, hour, minute);
+  const firstPass = new Date(
+    naiveUtc - getOffsetMinutes(new Date(naiveUtc)) * 60_000,
+  );
+  return new Date(naiveUtc - getOffsetMinutes(firstPass) * 60_000);
+}
+
 export function getLocalDayWindow(now: Date) {
   const parts = getZonedParts(now);
   const localDate = [parts.year, parts.month, parts.day]
@@ -68,6 +82,28 @@ export function getLocalDayWindow(now: Date) {
   );
   const start = new Date(naiveUtc - getOffsetMinutes(firstPass) * 60_000);
   return { localDate, start, end: now };
+}
+
+export function getDailySummaryConversionWindow(now: Date) {
+  const parts = getZonedParts(now);
+  const previousDay = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day - 1),
+  );
+  const currentCutoff = getLocalDateTime(
+    parts.year,
+    parts.month,
+    parts.day,
+    DAILY_SUMMARY_HOUR,
+    DAILY_SUMMARY_MINUTE,
+  );
+  const previousCutoff = getLocalDateTime(
+    previousDay.getUTCFullYear(),
+    previousDay.getUTCMonth() + 1,
+    previousDay.getUTCDate(),
+    DAILY_SUMMARY_HOUR,
+    DAILY_SUMMARY_MINUTE,
+  );
+  return { start: previousCutoff, end: currentCutoff };
 }
 
 export function isDailySummaryTime(now: Date): boolean {
