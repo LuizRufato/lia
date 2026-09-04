@@ -90,6 +90,12 @@ describe('OfferService historical processing', () => {
           },
           publication: {
             count: jest.fn().mockResolvedValue(0),
+            findMany: jest.fn().mockResolvedValue([]),
+          },
+          autopilotCatalogPolicy: {
+            findFirst: jest.fn().mockResolvedValue({
+              productCooldownHours: 120,
+            }),
           },
           offerEvaluation: {
             upsert: jest.fn(async ({ create }: any) => {
@@ -106,6 +112,14 @@ describe('OfferService historical processing', () => {
             }),
           },
           publicationCandidate: {
+            findFirst: jest.fn(
+              async () =>
+                candidates.find((item) =>
+                  ['PENDING', 'DEFERRED', 'QUEUED', 'PUBLISHING'].includes(
+                    item.status,
+                  ),
+                ) || null,
+            ),
             upsert: jest.fn(async ({ create }: any) => {
               const existing = candidates.find(
                 (item) => item.evaluationId === create.evaluationId,
@@ -132,6 +146,7 @@ describe('OfferService historical processing', () => {
     const service = new OfferService(prisma);
     await service.processObservation('obs-1');
     await service.processObservation('obs-2');
+    candidates[0].status = 'FAILED';
     await service.processObservation('obs-3');
 
     expect(histories.map((item) => item.priceCents)).toEqual([1000, 990, 800]);
@@ -176,4 +191,233 @@ describe('OfferService historical processing', () => {
 
     expect(candidateUpsert).not.toHaveBeenCalled();
   });
+});
+
+const makeLifecycleHarness = (policyHours: number | null = 120) => {
+  const observations: any[] = [];
+  const histories: any[] = [];
+  const evaluations: any[] = [];
+  const candidates: any[] = [];
+  const publications: any[] = [];
+  const offer = { id: 'offer-1', tenantId: 'tenant-1', price: 1000 };
+  let now = new Date('2026-08-01T10:00:00.000Z');
+
+  const prisma: any = {
+    offerObservation: {
+      findUnique: jest.fn(({ where }: any) => {
+        const observation = observations.find((item) => item.id === where.id);
+        return observation ? { ...observation, offer } : null;
+      }),
+    },
+    $transaction: async (callback: (tx: any) => Promise<unknown>) =>
+      callback({
+        priceHistory: {
+          findMany: jest.fn(async () =>
+            [...histories].sort(
+              (a, b) => b.observedAt.getTime() - a.observedAt.getTime(),
+            ),
+          ),
+          upsert: jest.fn(async ({ create, update }: any) => {
+            const index = histories.findIndex(
+              (item) =>
+                item.observationId ===
+                (create.observationId ?? update.observationId),
+            );
+            const next = {
+              ...(index >= 0 ? histories[index] : {}),
+              ...(index >= 0 ? update : create),
+            };
+            if (index >= 0) histories[index] = next;
+            else histories.push(next);
+            return next;
+          }),
+        },
+        publication: {
+          count: jest.fn().mockResolvedValue(0),
+          findMany: jest.fn(async () => publications),
+        },
+        autopilotCatalogPolicy: {
+          findFirst: jest.fn().mockResolvedValue({
+            productCooldownHours: policyHours,
+          }),
+        },
+        offerEvaluation: {
+          upsert: jest.fn(async ({ create }: any) => {
+            const existing = evaluations.find(
+              (item) => item.observationId === create.observationId,
+            );
+            if (existing) return existing;
+            const evaluation = {
+              id: `evaluation-${evaluations.length + 1}`,
+              ...create,
+            };
+            evaluations.push(evaluation);
+            return evaluation;
+          }),
+        },
+        publicationCandidate: {
+          findFirst: jest.fn(
+            async () =>
+              candidates.find((item) =>
+                ['PENDING', 'DEFERRED', 'QUEUED', 'PUBLISHING'].includes(
+                  item.status,
+                ),
+              ) || null,
+          ),
+          findMany: jest.fn(async () => candidates),
+          upsert: jest.fn(async ({ create }: any) => {
+            const existing = candidates.find(
+              (item) => item.evaluationId === create.evaluationId,
+            );
+            if (existing) return existing;
+            const candidate = {
+              id: `candidate-${candidates.length + 1}`,
+              createdAt: now,
+              updatedAt: now,
+              ...create,
+            };
+            candidates.push(candidate);
+            return candidate;
+          }),
+        },
+        offer: {
+          update: jest.fn().mockResolvedValue({}),
+        },
+      }),
+  };
+
+  const service = new OfferService(prisma);
+  service.clock = () => now.getTime();
+
+  const addObservation = async (
+    id: string,
+    observedAt: Date,
+    payload = canonical(1000, observedAt.toISOString()),
+  ) => {
+    observations.push({
+      id,
+      offerId: 'offer-1',
+      observedAt,
+      canonicalPayload: payload,
+    });
+    now = observedAt;
+    return service.processObservation(id);
+  };
+
+  return {
+    addObservation,
+    candidates,
+    evaluations,
+    publications,
+    setNow: (value: Date) => {
+      now = value;
+    },
+  };
+};
+
+describe('OfferService lifecycle-aware reconsideration', () => {
+  it.each([
+    { label: 'higher price', price: 1100 },
+    { label: 'small drop', price: 990 },
+  ])('does not spam on a $label observation', async ({ price }) => {
+    const harness = makeLifecycleHarness();
+
+    await harness.addObservation('obs-1', new Date('2026-08-01T10:00:00Z'));
+    await harness.addObservation(
+      'obs-2',
+      new Date('2026-08-01T10:05:00Z'),
+      canonical(price, '2026-08-01T10:05:00Z'),
+    );
+
+    expect(harness.candidates).toHaveLength(1);
+    expect(harness.evaluations.at(-1).decision).toBe('REJECTED_DUPLICATE');
+  });
+
+  it('does not create duplicate live candidates for repeated observations', async () => {
+    const harness = makeLifecycleHarness();
+
+    await harness.addObservation('obs-1', new Date('2026-08-01T10:00:00Z'));
+    await harness.addObservation('obs-2', new Date('2026-08-01T10:05:00Z'));
+    await harness.addObservation('obs-3', new Date('2026-08-01T10:10:00Z'));
+
+    expect(harness.candidates).toHaveLength(1);
+    expect(harness.evaluations.map((item) => item.decision)).toEqual([
+      'ELIGIBLE',
+      'REJECTED_DUPLICATE',
+      'REJECTED_DUPLICATE',
+    ]);
+  });
+
+  it('blocks a republish during the configured cooldown and allows it after expiry', async () => {
+    const harness = makeLifecycleHarness(120);
+    const publishedAt = new Date('2026-08-01T10:00:00Z');
+
+    await harness.addObservation('obs-1', publishedAt);
+    harness.candidates[0].status = 'PUBLISHED';
+    harness.publications.push({
+      publishedAt,
+      createdAt: publishedAt,
+      status: 'PUBLISHED',
+    });
+
+    await harness.addObservation('obs-2', new Date('2026-08-06T09:00:00Z'));
+    expect(harness.candidates).toHaveLength(1);
+
+    await harness.addObservation('obs-3', new Date('2026-08-06T11:00:00Z'));
+    expect(harness.candidates).toHaveLength(2);
+    expect(harness.evaluations.at(-1).decision).toBe('ELIGIBLE');
+  });
+
+  it('permits a terminal candidate to be reconsidered after the bounded interval', async () => {
+    const harness = makeLifecycleHarness(null);
+
+    await harness.addObservation('obs-1', new Date('2026-08-01T10:00:00Z'));
+    harness.candidates[0].status = 'FAILED';
+    await harness.addObservation('obs-2', new Date('2026-08-02T11:00:00Z'));
+
+    expect(harness.candidates).toHaveLength(2);
+    expect(harness.evaluations.at(-1).decision).toBe('ELIGIBLE');
+  });
+
+  it('allows a later strong observation after an earlier below-score observation', async () => {
+    const harness = makeLifecycleHarness(null);
+    const weak = canonical(1000, '2026-08-01T10:00:00Z');
+    weak.commission = {
+      estimatedAmountCents: null,
+      rateBps: null,
+      source: 'UNAVAILABLE',
+    };
+    weak.pricing.discountBps = null;
+    weak.shipping = { isFree: null };
+    weak.seller = { isOfficial: null };
+    weak.metrics = {
+      rating: null,
+      reviewsCount: 0,
+      marketplaceSalesCount: 0,
+    };
+
+    await harness.addObservation(
+      'obs-1',
+      new Date('2026-08-01T10:00:00Z'),
+      weak,
+    );
+    await harness.addObservation('obs-2', new Date('2026-08-02T11:00:00Z'));
+
+    expect(harness.evaluations[0].decision).toBe('REJECTED_INSUFFICIENT_DATA');
+    expect(harness.evaluations[1].decision).toBe('ELIGIBLE');
+    expect(harness.candidates).toHaveLength(1);
+  });
+
+  it.each(['PENDING', 'DEFERRED', 'QUEUED', 'PUBLISHING'])(
+    'keeps one live candidate when the existing status is %s',
+    async (status) => {
+      const harness = makeLifecycleHarness();
+
+      await harness.addObservation('obs-1', new Date('2026-08-01T10:00:00Z'));
+      harness.candidates[0].status = status;
+      await harness.addObservation('obs-2', new Date('2026-08-02T11:00:00Z'));
+
+      expect(harness.candidates).toHaveLength(1);
+    },
+  );
 });

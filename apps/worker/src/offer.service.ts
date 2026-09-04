@@ -11,6 +11,17 @@ import {
 
 const SCORE_VERSION = 'lia-score-v1';
 const FATIGUE_WINDOW_MS = 12 * 60 * 60 * 1000;
+const RECONSIDERATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const LIVE_CANDIDATE_STATUSES = [
+  'PENDING',
+  'DEFERRED',
+  'QUEUED',
+  'PUBLISHING',
+] as const;
+const COOLDOWN_PUBLICATION_STATUSES = [
+  'PUBLISHED',
+  'DELIVERY_UNKNOWN',
+] as const;
 
 @Injectable()
 export class OfferService {
@@ -59,6 +70,10 @@ export class OfferService {
         (snapshot) => snapshot.observationId !== observation.id,
       );
       const previousPrice = previousSnapshot?.priceCents ?? null;
+      const isDuplicate = this.dedupRule.isDuplicate(
+        canonicalOffer,
+        previousPrice,
+      );
 
       const category =
         canonicalOffer.product.normalizedCategory ||
@@ -73,16 +88,29 @@ export class OfferService {
         reasons = [
           'Mercado Livre permanece em ingestão somente até a calibração do score e monetização.',
         ];
-      } else if (this.dedupRule.isDuplicate(canonicalOffer, previousPrice)) {
-        nextDecision = 'REJECTED_DUPLICATE';
-        reasons = ['No significant price drop'];
-      } else if (breakdown.dataCoverage < 0.6) {
+      } else if (isDuplicate) {
+        if (
+          !(await this.canReconsiderDuplicate(
+            tx,
+            observation,
+            previousSnapshot,
+            new Date(this.clock()),
+          ))
+        ) {
+          nextDecision = 'REJECTED_DUPLICATE';
+          reasons = ['No significant price drop'];
+        } else {
+          reasons = ['Reconsidered after the previous publication lifecycle'];
+        }
+      }
+
+      if (nextDecision === 'ELIGIBLE' && breakdown.dataCoverage < 0.6) {
         nextDecision = 'REJECTED_INSUFFICIENT_DATA';
         reasons = ['Not enough data signals'];
-      } else if (breakdown.finalScore < 40) {
+      } else if (nextDecision === 'ELIGIBLE' && breakdown.finalScore < 40) {
         nextDecision = 'REJECTED_LOW_SCORE';
         reasons = ['Score below threshold'];
-      } else if (category) {
+      } else if (nextDecision === 'ELIGIBLE' && category) {
         const categoryCount = await tx.publication.count({
           where: {
             createdAt: {
@@ -164,7 +192,10 @@ export class OfferService {
         },
       });
 
-      if (nextDecision === 'ELIGIBLE') {
+      if (
+        nextDecision === 'ELIGIBLE' &&
+        !(await this.hasLiveCandidate(tx, observation.offerId))
+      ) {
         await tx.publicationCandidate.upsert({
           where: { evaluationId: evaluation.id },
           update: {},
@@ -196,5 +227,96 @@ export class OfferService {
       `Observation ${observation.id} completed with decision ${decision}.`,
     );
     return decision;
+  }
+
+  private async hasLiveCandidate(tx: any, offerId: string): Promise<boolean> {
+    const candidate = await tx.publicationCandidate.findFirst({
+      where: {
+        status: { in: LIVE_CANDIDATE_STATUSES },
+        evaluation: { observation: { offerId } },
+      },
+      select: { id: true },
+    });
+
+    return Boolean(candidate);
+  }
+
+  private async canReconsiderDuplicate(
+    tx: any,
+    observation: any,
+    previousSnapshot: any,
+    now: Date,
+  ): Promise<boolean> {
+    // Offer is the canonical tenant + marketplace + externalId identity from
+    // ingestion; do not use title-only or fuzzy matching for lifecycle state.
+    if (await this.hasLiveCandidate(tx, observation.offerId)) {
+      return false;
+    }
+
+    const policy = await tx.autopilotCatalogPolicy.findFirst({
+      where: { autopilotConfig: { tenantId: observation.offer.tenantId } },
+      select: { productCooldownHours: true },
+    });
+    const publications = (await tx.publication.findMany({
+      where: {
+        status: { in: COOLDOWN_PUBLICATION_STATUSES },
+        candidate: {
+          evaluation: { observation: { offerId: observation.offerId } },
+        },
+      },
+      select: { publishedAt: true, createdAt: true },
+    })) as Array<{ publishedAt: Date | null; createdAt: Date }>;
+    const latestPublicationAt = publications.reduce(
+      (latest: number | null, publication) => {
+        const publishedAt = publication.publishedAt ?? publication.createdAt;
+        if (!publishedAt) return latest;
+        const timestamp = new Date(publishedAt).getTime();
+        if (!Number.isFinite(timestamp) || timestamp > now.getTime()) {
+          return latest;
+        }
+        return latest == null ? timestamp : Math.max(latest, timestamp);
+      },
+      null,
+    );
+
+    if (latestPublicationAt != null) {
+      const cooldownHours = policy?.productCooldownHours;
+      if (
+        cooldownHours != null &&
+        latestPublicationAt + cooldownHours * 60 * 60 * 1000 > now.getTime()
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    const terminalCandidates = (await tx.publicationCandidate.findMany({
+      where: {
+        status: { notIn: LIVE_CANDIDATE_STATUSES },
+        evaluation: { observation: { offerId: observation.offerId } },
+      },
+      select: { createdAt: true, updatedAt: true },
+    })) as Array<{ createdAt: Date; updatedAt: Date }>;
+    const latestTerminalAt = terminalCandidates.reduce(
+      (latest: number | null, candidate) => {
+        const lifecycleAt = candidate.updatedAt ?? candidate.createdAt;
+        if (!lifecycleAt) return latest;
+        const timestamp = new Date(lifecycleAt).getTime();
+        if (!Number.isFinite(timestamp)) return latest;
+        return latest == null ? timestamp : Math.max(latest, timestamp);
+      },
+      null,
+    );
+    const previousObservedAt = previousSnapshot?.observedAt ?? null;
+    const reconsiderationAnchor = latestTerminalAt ?? previousObservedAt;
+    if (!reconsiderationAnchor) return false;
+
+    return (
+      (typeof reconsiderationAnchor === 'number'
+        ? reconsiderationAnchor
+        : new Date(reconsiderationAnchor).getTime()) +
+        RECONSIDERATION_INTERVAL_MS <=
+      now.getTime()
+    );
   }
 }
