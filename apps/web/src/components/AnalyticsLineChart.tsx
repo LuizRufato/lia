@@ -66,33 +66,29 @@ const formatTooltipTime = (at: string, hourly: boolean, timezone: string) => {
       dateStyle: "short",
     }).format(date);
   }
-  const start = new Intl.DateTimeFormat("pt-BR", {
+  const formatter = new Intl.DateTimeFormat("pt-BR", {
     timeZone: timezone,
     hour: "2-digit",
     minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const start = formatter.format(date);
+  const hour = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    hour: "2-digit",
     hourCycle: "h23",
   }).format(date);
-  const end = new Date(date.getTime() + 60 * 60_000);
-  const endTime = new Intl.DateTimeFormat("pt-BR", {
-    timeZone: timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(end);
-  return `${start} – ${endTime}`;
+  return `${start} – ${hour}:59`;
 };
 
 const smoothPath = (points: Array<{ x: number; y: number }>) => {
   if (points.length === 0) return "";
   if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
-  return points.reduce((path, point, index) => {
-    if (index === 0) return `M ${point.x} ${point.y}`;
-    const previous = points[index - 1];
-    const next = points[index + 1] || point;
-    const control1X = (previous.x + point.x) / 2;
-    const control2X = (point.x + next.x) / 2;
-    return `${path} C ${control1X} ${previous.y}, ${control2X} ${point.y}, ${point.x} ${point.y}`;
-  }, "");
+  return points.slice(1).reduce((path, point, index) => {
+    const previous = points[index];
+    const midpointX = (previous.x + point.x) / 2;
+    return `${path} C ${midpointX} ${previous.y}, ${midpointX} ${point.y}, ${point.x} ${point.y}`;
+  }, `M ${points[0].x} ${points[0].y}`);
 };
 
 export function AnalyticsLineChart({
