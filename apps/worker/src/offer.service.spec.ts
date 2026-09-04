@@ -133,6 +133,21 @@ describe('OfferService historical processing', () => {
               evaluations.push(evaluation);
               return evaluation;
             }),
+            findMany: jest.fn(async () =>
+              evaluations
+                .filter(
+                  (evaluation) => evaluation.decision !== 'REJECTED_DUPLICATE',
+                )
+                .map((evaluation) => {
+                  const observedAt = observations.find(
+                    (item) => item.id === evaluation.observationId,
+                  )?.observedAt;
+                  return {
+                    evaluatedAt: observedAt,
+                    observation: { observedAt },
+                  };
+                }),
+            ),
           },
           publicationCandidate: {
             findFirst: jest.fn(
@@ -301,6 +316,21 @@ const makeLifecycleHarness = (
             evaluations.push(evaluation);
             return evaluation;
           }),
+          findMany: jest.fn(async () =>
+            evaluations
+              .filter(
+                (evaluation) => evaluation.decision !== 'REJECTED_DUPLICATE',
+              )
+              .map((evaluation) => {
+                const observedAt = observations.find(
+                  (item) => item.id === evaluation.observationId,
+                )?.observedAt;
+                return {
+                  evaluatedAt: observedAt,
+                  observation: { observedAt },
+                };
+              }),
+          ),
         },
         publicationCandidate: {
           findFirst: jest.fn(
@@ -320,16 +350,24 @@ const makeLifecycleHarness = (
                   : true,
             ),
           ),
+          update: jest.fn(async ({ where, data }: any) => {
+            const candidate = candidates.find((item) => item.id === where.id);
+            if (candidate) Object.assign(candidate, data);
+            return candidate;
+          }),
           upsert: jest.fn(async ({ create }: any) => {
             const existing = candidates.find(
               (item) => item.evaluationId === create.evaluationId,
             );
             if (existing) return existing;
+            const evaluation = evaluations.find(
+              (item) => item.id === create.evaluationId,
+            );
             const candidate = {
               id: `candidate-${candidates.length + 1}`,
               createdAt: now,
               updatedAt: now,
-              evaluation: { score: 80 },
+              evaluation: { score: evaluation?.score ?? 80 },
               ...create,
             };
             candidates.push(candidate);
@@ -456,6 +494,21 @@ const makeConcurrentHarness = () => {
             evaluations.push(evaluation);
             return evaluation;
           }),
+          findMany: jest.fn(async () =>
+            evaluations
+              .filter(
+                (evaluation) => evaluation.decision !== 'REJECTED_DUPLICATE',
+              )
+              .map((evaluation) => {
+                const observedAt = observations.find(
+                  (item) => item.id === evaluation.observationId,
+                )?.observedAt;
+                return {
+                  evaluatedAt: observedAt,
+                  observation: { observedAt },
+                };
+              }),
+          ),
         },
         publicationCandidate: {
           findMany: jest.fn(async ({ where }: any) =>
@@ -468,8 +521,17 @@ const makeConcurrentHarness = () => {
                   ? where.status.in.includes(item.status)
                   : !where.status.notIn.includes(item.status),
               )
-              .map((item) => ({ evaluation: { score: item.score } })),
+              .map((item) => ({
+                id: item.id,
+                status: item.status,
+                evaluation: { score: item.score },
+              })),
           ),
+          update: jest.fn(async ({ where, data }: any) => {
+            const candidate = candidates.find((item) => item.id === where.id);
+            if (candidate) Object.assign(candidate, data);
+            return candidate;
+          }),
           upsert: jest.fn(async ({ create }: any) => {
             const evaluation = evaluations.find(
               (item) => item.id === create.evaluationId,
@@ -549,6 +611,40 @@ describe('OfferService lifecycle-aware reconsideration', () => {
     ]);
   });
 
+  it('keeps the reconsideration anchor stable across 15-minute duplicate polling', async () => {
+    const harness = makeLifecycleHarness(null);
+    const start = new Date('2026-08-01T10:00:00Z');
+
+    await harness.addObservation('obs-initial', start);
+    harness.candidates[0].status = 'FAILED';
+
+    for (let index = 1; index < 96; index += 1) {
+      const observedAt = new Date(start.getTime() + index * 15 * 60 * 1000);
+      await harness.addObservation(
+        `obs-duplicate-${index}`,
+        observedAt,
+        canonical(1000, observedAt.toISOString()),
+      );
+    }
+
+    expect(harness.candidates).toHaveLength(1);
+    expect(
+      harness.evaluations
+        .slice(1)
+        .every((evaluation) => evaluation.decision === 'REJECTED_DUPLICATE'),
+    ).toBe(true);
+
+    const boundary = new Date(start.getTime() + 96 * 15 * 60 * 1000);
+    await harness.addObservation(
+      'obs-at-reconsideration-boundary',
+      boundary,
+      strongCanonical(1000, boundary.toISOString()),
+    );
+
+    expect(harness.evaluations.at(-1).decision).toBe('ELIGIBLE');
+    expect(harness.candidates).toHaveLength(2);
+  });
+
   it('blocks a republish during the configured cooldown and allows it after expiry', async () => {
     const harness = makeLifecycleHarness(120);
     const publishedAt = new Date('2026-08-01T10:00:00Z');
@@ -617,6 +713,78 @@ describe('OfferService lifecycle-aware reconsideration', () => {
     expect(harness.evaluations[1].decision).toBe('ELIGIBLE');
     expect(harness.candidates).toHaveLength(1);
   });
+
+  it.each(['PENDING', 'DEFERRED'])(
+    'supersedes a legacy below-minScore %s candidate before creating a qualifying one',
+    async (status) => {
+      const harness = makeLifecycleHarness(null, 50);
+
+      await harness.addObservation(
+        'obs-legacy-anchor',
+        new Date('2026-08-01T10:00:00Z'),
+        canonical(1000, '2026-08-01T10:00:00Z'),
+      );
+      harness.candidates.push({
+        id: `legacy-${status.toLowerCase()}`,
+        status,
+        evaluation: { score: 43 },
+        createdAt: new Date('2026-08-01T10:00:00Z'),
+        updatedAt: new Date('2026-08-01T10:00:00Z'),
+      });
+
+      await harness.addObservation(
+        'obs-qualifying',
+        new Date('2026-08-02T10:00:00Z'),
+        strongCanonical(1000, '2026-08-02T10:00:00Z'),
+      );
+
+      const liveCandidates = harness.candidates.filter((candidate) =>
+        ['PENDING', 'DEFERRED', 'QUEUED', 'PUBLISHING'].includes(
+          candidate.status,
+        ),
+      );
+      expect(harness.candidates).toHaveLength(2);
+      expect(liveCandidates).toHaveLength(1);
+      expect(harness.candidates[0]).toMatchObject({
+        status: 'SKIPPED',
+        deferredReason: 'SUPERSEDED_BELOW_CURRENT_MIN_SCORE',
+      });
+      expect(harness.evaluations.at(-1).decision).toBe('ELIGIBLE');
+    },
+  );
+
+  it.each(['QUEUED', 'PUBLISHING'])(
+    'does not supersede or replace a legacy below-minScore %s candidate',
+    async (status) => {
+      const harness = makeLifecycleHarness(null, 50);
+
+      await harness.addObservation(
+        'obs-protected-anchor',
+        new Date('2026-08-01T10:00:00Z'),
+        canonical(1000, '2026-08-01T10:00:00Z'),
+      );
+      harness.candidates.push({
+        id: `legacy-${status.toLowerCase()}`,
+        status,
+        evaluation: { score: 43 },
+        createdAt: new Date('2026-08-01T10:00:00Z'),
+        updatedAt: new Date('2026-08-01T10:00:00Z'),
+      });
+
+      await harness.addObservation(
+        'obs-blocked-qualifying',
+        new Date('2026-08-02T10:00:00Z'),
+        strongCanonical(1000, '2026-08-02T10:00:00Z'),
+      );
+
+      expect(harness.candidates).toHaveLength(1);
+      expect(harness.candidates[0]).toMatchObject({
+        status,
+        evaluation: { score: 43 },
+      });
+      expect(harness.evaluations.at(-1).decision).toBe('ELIGIBLE');
+    },
+  );
 
   it.each(['PENDING', 'DEFERRED', 'QUEUED', 'PUBLISHING'])(
     'keeps one live candidate when the existing status is %s',

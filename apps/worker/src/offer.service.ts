@@ -99,7 +99,6 @@ export class OfferService {
           !(await this.canReconsiderDuplicate(
             tx,
             observation,
-            previousSnapshot,
             new Date(this.clock()),
           ))
         ) {
@@ -206,7 +205,7 @@ export class OfferService {
         nextDecision === 'ELIGIBLE' &&
         autopilotMinScore != null &&
         breakdown.finalScore >= autopilotMinScore &&
-        !(await this.hasLiveCandidate(
+        (await this.prepareCandidateCreation(
           tx,
           observation.offerId,
           autopilotMinScore,
@@ -269,6 +268,54 @@ export class OfferService {
     });
   }
 
+  private async prepareCandidateCreation(
+    tx: any,
+    offerId: string,
+    minScore: number | null,
+  ): Promise<boolean> {
+    const candidates = await tx.publicationCandidate.findMany({
+      where: {
+        status: { in: LIVE_CANDIDATE_STATUSES },
+        evaluation: { observation: { offerId } },
+      },
+      select: {
+        id: true,
+        status: true,
+        evaluation: { select: { score: true } },
+      },
+    });
+
+    if (minScore == null) return candidates.length === 0;
+
+    const numericMinScore = Number(minScore);
+    const hasUnreplaceableCandidate = candidates.some((candidate: any) =>
+      ['QUEUED', 'PUBLISHING'].includes(candidate.status),
+    );
+    if (hasUnreplaceableCandidate) return false;
+
+    const blockers = candidates.filter((candidate: any) => {
+      const score = candidate.evaluation?.score;
+      const numericScore =
+        typeof score?.toNumber === 'function'
+          ? score.toNumber()
+          : Number(score);
+      return !Number.isFinite(numericScore) || numericScore >= numericMinScore;
+    });
+    if (blockers.length > 0) return false;
+
+    for (const candidate of candidates) {
+      await tx.publicationCandidate.update({
+        where: { id: candidate.id },
+        data: {
+          status: 'SKIPPED',
+          deferredReason: 'SUPERSEDED_BELOW_CURRENT_MIN_SCORE',
+        },
+      });
+    }
+
+    return true;
+  }
+
   private async getAutopilotMinScore(
     tx: any,
     tenantId: string,
@@ -290,7 +337,6 @@ export class OfferService {
   private async canReconsiderDuplicate(
     tx: any,
     observation: any,
-    previousSnapshot: any,
     now: Date,
   ): Promise<boolean> {
     // Offer is the canonical tenant + marketplace + externalId identity from
@@ -359,8 +405,35 @@ export class OfferService {
       },
       null,
     );
-    const previousObservedAt = previousSnapshot?.observedAt ?? null;
-    const reconsiderationAnchor = latestTerminalAt ?? previousObservedAt;
+    const meaningfulEvaluations = (await tx.offerEvaluation.findMany({
+      where: {
+        decision: { not: 'REJECTED_DUPLICATE' },
+        observation: { offerId: observation.offerId },
+      },
+      select: { observation: { select: { observedAt: true } } },
+    })) as Array<{
+      observation: { observedAt: Date };
+    }>;
+    const latestMeaningfulEvaluationAt = meaningfulEvaluations.reduce(
+      (latest: number | null, evaluation) => {
+        const timestamp = new Date(evaluation.observation.observedAt).getTime();
+        if (!Number.isFinite(timestamp) || timestamp > now.getTime()) {
+          return latest;
+        }
+        return latest == null ? timestamp : Math.max(latest, timestamp);
+      },
+      null,
+    );
+    const reconsiderationAnchor = [
+      latestTerminalAt,
+      latestMeaningfulEvaluationAt,
+    ].reduce(
+      (latest: number | null, timestamp) =>
+        timestamp == null || (latest != null && timestamp <= latest)
+          ? latest
+          : timestamp,
+      null,
+    );
     if (!reconsiderationAnchor) return false;
 
     return (
