@@ -31,6 +31,25 @@ const canonical = (price: number, observedAt: string) => ({
   discoveredAt: new Date(observedAt),
 });
 
+const strongCanonical = (price: number, observedAt: string) => ({
+  ...canonical(price, observedAt),
+  pricing: {
+    currentPriceCents: price,
+    originalPriceCents: 1200,
+    discountBps: 2500,
+  },
+  commission: {
+    estimatedAmountCents: 1000,
+    rateBps: 1500,
+    source: 'CALCULATED',
+  },
+  metrics: {
+    rating: 4.8,
+    reviewsCount: 500,
+    marketplaceSalesCount: 500,
+  },
+});
+
 describe('OfferService historical processing', () => {
   it('keeps 1000 → 990 → 800 snapshots and uses the prior snapshot for dedup', async () => {
     const observations = [
@@ -88,6 +107,7 @@ describe('OfferService historical processing', () => {
               return next;
             }),
           },
+          $executeRaw: jest.fn().mockResolvedValue(1),
           publication: {
             count: jest.fn().mockResolvedValue(0),
             findMany: jest.fn().mockResolvedValue([]),
@@ -96,6 +116,9 @@ describe('OfferService historical processing', () => {
             findFirst: jest.fn().mockResolvedValue({
               productCooldownHours: 120,
             }),
+          },
+          autopilotConfig: {
+            findUnique: jest.fn().mockResolvedValue({ minScore: 40 }),
           },
           offerEvaluation: {
             upsert: jest.fn(async ({ create }: any) => {
@@ -120,6 +143,15 @@ describe('OfferService historical processing', () => {
                   ),
                 ) || null,
             ),
+            findMany: jest.fn(async ({ where }: any) =>
+              candidates.filter((item) =>
+                where.status?.in
+                  ? where.status.in.includes(item.status)
+                  : where.status?.notIn
+                    ? !where.status.notIn.includes(item.status)
+                    : true,
+              ),
+            ),
             upsert: jest.fn(async ({ create }: any) => {
               const existing = candidates.find(
                 (item) => item.evaluationId === create.evaluationId,
@@ -127,6 +159,7 @@ describe('OfferService historical processing', () => {
               if (existing) return existing;
               const candidate = {
                 id: `candidate-${candidates.length + 1}`,
+                evaluation: { score: 55 },
                 ...create,
               };
               candidates.push(candidate);
@@ -178,7 +211,14 @@ describe('OfferService historical processing', () => {
             findMany: jest.fn().mockResolvedValue([]),
             upsert: jest.fn().mockResolvedValue({}),
           },
-          publication: { count: jest.fn().mockResolvedValue(0) },
+          $executeRaw: jest.fn().mockResolvedValue(1),
+          publication: {
+            count: jest.fn().mockResolvedValue(0),
+            findMany: jest.fn().mockResolvedValue([]),
+          },
+          autopilotConfig: {
+            findUnique: jest.fn().mockResolvedValue({ minScore: 50 }),
+          },
           offerEvaluation: {
             upsert: jest.fn().mockResolvedValue({ id: 'ml-evaluation' }),
           },
@@ -193,7 +233,10 @@ describe('OfferService historical processing', () => {
   });
 });
 
-const makeLifecycleHarness = (policyHours: number | null = 120) => {
+const makeLifecycleHarness = (
+  policyHours: number | null = 120,
+  minScore = 50,
+) => {
   const observations: any[] = [];
   const histories: any[] = [];
   const evaluations: any[] = [];
@@ -211,6 +254,7 @@ const makeLifecycleHarness = (policyHours: number | null = 120) => {
     },
     $transaction: async (callback: (tx: any) => Promise<unknown>) =>
       callback({
+        $executeRaw: jest.fn().mockResolvedValue(1),
         priceHistory: {
           findMany: jest.fn(async () =>
             [...histories].sort(
@@ -241,6 +285,9 @@ const makeLifecycleHarness = (policyHours: number | null = 120) => {
             productCooldownHours: policyHours,
           }),
         },
+        autopilotConfig: {
+          findUnique: jest.fn().mockResolvedValue({ minScore }),
+        },
         offerEvaluation: {
           upsert: jest.fn(async ({ create }: any) => {
             const existing = evaluations.find(
@@ -264,7 +311,15 @@ const makeLifecycleHarness = (policyHours: number | null = 120) => {
                 ),
               ) || null,
           ),
-          findMany: jest.fn(async () => candidates),
+          findMany: jest.fn(async ({ where }: any) =>
+            candidates.filter((item) =>
+              where.status?.in
+                ? where.status.in.includes(item.status)
+                : where.status?.notIn
+                  ? !where.status.notIn.includes(item.status)
+                  : true,
+            ),
+          ),
           upsert: jest.fn(async ({ create }: any) => {
             const existing = candidates.find(
               (item) => item.evaluationId === create.evaluationId,
@@ -274,6 +329,7 @@ const makeLifecycleHarness = (policyHours: number | null = 120) => {
               id: `candidate-${candidates.length + 1}`,
               createdAt: now,
               updatedAt: now,
+              evaluation: { score: 80 },
               ...create,
             };
             candidates.push(candidate);
@@ -292,7 +348,7 @@ const makeLifecycleHarness = (policyHours: number | null = 120) => {
   const addObservation = async (
     id: string,
     observedAt: Date,
-    payload = canonical(1000, observedAt.toISOString()),
+    payload = strongCanonical(1000, observedAt.toISOString()),
   ) => {
     observations.push({
       id,
@@ -312,6 +368,151 @@ const makeLifecycleHarness = (policyHours: number | null = 120) => {
     setNow: (value: Date) => {
       now = value;
     },
+  };
+};
+
+const makeConcurrentHarness = () => {
+  const observations: any[] = [];
+  const histories: any[] = [];
+  const evaluations: any[] = [];
+  const candidates: any[] = [];
+  const lockTails = new Map<string, Promise<void>>();
+  let activeTransactions = 0;
+  let maxActiveTransactions = 0;
+  const lockCalls: string[] = [];
+
+  const acquireLock = async (offerId: string) => {
+    const previous = lockTails.get(offerId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    lockTails.set(offerId, current);
+    await previous;
+    return () => {
+      release();
+      if (lockTails.get(offerId) === current) lockTails.delete(offerId);
+    };
+  };
+
+  const prisma: any = {
+    offerObservation: {
+      findUnique: jest.fn(({ where }: any) => {
+        const observation = observations.find((item) => item.id === where.id);
+        return observation
+          ? {
+              ...observation,
+              offer: {
+                id: observation.offerId,
+                tenantId: 'tenant-1',
+              },
+            }
+          : null;
+      }),
+    },
+    $transaction: async (callback: (tx: any) => Promise<unknown>) => {
+      let release = () => undefined;
+      const tx = {
+        $executeRaw: async (_query: unknown, offerId: string) => {
+          lockCalls.push(offerId);
+          release = await acquireLock(offerId);
+          activeTransactions += 1;
+          maxActiveTransactions = Math.max(
+            maxActiveTransactions,
+            activeTransactions,
+          );
+        },
+        priceHistory: {
+          findMany: jest.fn(async ({ where }: any) => {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            return histories.filter((item) => item.offerId === where.offerId);
+          }),
+          upsert: jest.fn(async ({ create }: any) => {
+            histories.push(create);
+            return create;
+          }),
+        },
+        publication: {
+          count: jest.fn().mockResolvedValue(0),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+        autopilotConfig: {
+          findUnique: jest.fn().mockResolvedValue({ minScore: 50 }),
+        },
+        autopilotCatalogPolicy: {
+          findFirst: jest.fn().mockResolvedValue({
+            productCooldownHours: 120,
+          }),
+        },
+        offerEvaluation: {
+          upsert: jest.fn(async ({ create }: any) => {
+            const evaluation = {
+              id: `evaluation-${evaluations.length + 1}`,
+              observationOfferId: observations.find(
+                (item) => item.id === create.observationId,
+              )?.offerId,
+              ...create,
+            };
+            evaluations.push(evaluation);
+            return evaluation;
+          }),
+        },
+        publicationCandidate: {
+          findMany: jest.fn(async ({ where }: any) =>
+            candidates
+              .filter(
+                (item) => item.offerId === where.evaluation.observation.offerId,
+              )
+              .filter((item) =>
+                where.status.in
+                  ? where.status.in.includes(item.status)
+                  : !where.status.notIn.includes(item.status),
+              )
+              .map((item) => ({ evaluation: { score: item.score } })),
+          ),
+          upsert: jest.fn(async ({ create }: any) => {
+            const evaluation = evaluations.find(
+              (item) => item.id === create.evaluationId,
+            );
+            const candidate = {
+              id: `candidate-${candidates.length + 1}`,
+              offerId: evaluation?.observationOfferId,
+              score: evaluation?.score ?? 80,
+              ...create,
+            };
+            candidate.offerId = evaluation?.observationOfferId;
+            candidates.push(candidate);
+            return candidate;
+          }),
+        },
+        offer: { update: jest.fn().mockResolvedValue({}) },
+      };
+
+      try {
+        return await callback(tx);
+      } finally {
+        activeTransactions -= 1;
+        release();
+      }
+    },
+  };
+
+  const service = new OfferService(prisma);
+  const addObservation = (id: string, offerId: string, observedAt: string) => {
+    observations.push({
+      id,
+      offerId,
+      observedAt: new Date(observedAt),
+      canonicalPayload: strongCanonical(1000, observedAt),
+    });
+  };
+
+  return {
+    addObservation,
+    candidates,
+    lockCalls,
+    maxActiveTransactions: () => maxActiveTransactions,
+    process: (id: string) => service.processObservation(id),
   };
 };
 
@@ -380,30 +581,39 @@ describe('OfferService lifecycle-aware reconsideration', () => {
   });
 
   it('allows a later strong observation after an earlier below-score observation', async () => {
-    const harness = makeLifecycleHarness(null);
-    const weak = canonical(1000, '2026-08-01T10:00:00Z');
-    weak.commission = {
-      estimatedAmountCents: null,
-      rateBps: null,
-      source: 'UNAVAILABLE',
-    };
-    weak.pricing.discountBps = null;
-    weak.shipping = { isFree: null };
-    weak.seller = { isOfficial: null };
-    weak.metrics = {
-      rating: null,
-      reviewsCount: 0,
-      marketplaceSalesCount: 0,
-    };
+    const harness = makeLifecycleHarness(null, 50);
+    const belowMinScore = canonical(1000, '2026-08-01T10:00:00Z');
 
     await harness.addObservation(
       'obs-1',
       new Date('2026-08-01T10:00:00Z'),
-      weak,
+      belowMinScore,
     );
     await harness.addObservation('obs-2', new Date('2026-08-02T11:00:00Z'));
 
-    expect(harness.evaluations[0].decision).toBe('REJECTED_INSUFFICIENT_DATA');
+    expect(harness.evaluations[0].score).toBeLessThan(50);
+    expect(harness.evaluations[0].decision).toBe('ELIGIBLE');
+    expect(harness.candidates).toHaveLength(1);
+    expect(harness.evaluations[1].score).toBeGreaterThanOrEqual(50);
+    expect(harness.evaluations[1].decision).toBe('ELIGIBLE');
+  });
+
+  it('is not blocked by a later significant price drop after a below-minScore observation', async () => {
+    const harness = makeLifecycleHarness(null, 50);
+
+    await harness.addObservation(
+      'obs-1',
+      new Date('2026-08-01T10:00:00Z'),
+      canonical(1000, '2026-08-01T10:00:00Z'),
+    );
+    await harness.addObservation(
+      'obs-2',
+      new Date('2026-08-01T10:05:00Z'),
+      strongCanonical(900, '2026-08-01T10:05:00Z'),
+    );
+
+    expect(harness.evaluations[0].score).toBeLessThan(50);
+    expect(harness.evaluations[1].score).toBeGreaterThanOrEqual(50);
     expect(harness.evaluations[1].decision).toBe('ELIGIBLE');
     expect(harness.candidates).toHaveLength(1);
   });
@@ -420,4 +630,27 @@ describe('OfferService lifecycle-aware reconsideration', () => {
       expect(harness.candidates).toHaveLength(1);
     },
   );
+
+  it('serializes true concurrent processing for the same canonical Offer', async () => {
+    const harness = makeConcurrentHarness();
+    harness.addObservation('obs-a', 'offer-a', '2026-08-01T10:00:00Z');
+    harness.addObservation('obs-b', 'offer-a', '2026-08-01T10:05:00Z');
+
+    await Promise.all([harness.process('obs-a'), harness.process('obs-b')]);
+
+    expect(harness.candidates).toHaveLength(1);
+    expect(harness.maxActiveTransactions()).toBe(1);
+    expect(harness.lockCalls).toEqual(['offer-a', 'offer-a']);
+  });
+
+  it('does not globally serialize concurrent processing for different Offers', async () => {
+    const harness = makeConcurrentHarness();
+    harness.addObservation('obs-a', 'offer-a', '2026-08-01T10:00:00Z');
+    harness.addObservation('obs-b', 'offer-b', '2026-08-01T10:00:00Z');
+
+    await Promise.all([harness.process('obs-a'), harness.process('obs-b')]);
+
+    expect(harness.maxActiveTransactions()).toBe(2);
+    expect(new Set(harness.lockCalls)).toEqual(new Set(['offer-a', 'offer-b']));
+  });
 });

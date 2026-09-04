@@ -61,6 +61,12 @@ export class OfferService {
     const scoreVersion = isMercadoLivre ? 'lia-score-ml-v1' : SCORE_VERSION;
 
     const decision = await this.prisma.$transaction(async (tx) => {
+      // Serialize lifecycle reads and candidate creation per canonical Offer
+      // across all Worker processes; PostgreSQL releases this lock on commit.
+      await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(hashtextextended(${observation.offerId}, 0))
+      `;
+
       const previousHistory = await tx.priceHistory.findMany({
         where: { offerId: observation.offerId },
         orderBy: [{ observedAt: 'desc' }, { createdAt: 'desc' }],
@@ -192,9 +198,19 @@ export class OfferService {
         },
       });
 
+      const autopilotMinScore = await this.getAutopilotMinScore(
+        tx,
+        observation.offer.tenantId,
+      );
       if (
         nextDecision === 'ELIGIBLE' &&
-        !(await this.hasLiveCandidate(tx, observation.offerId))
+        autopilotMinScore != null &&
+        breakdown.finalScore >= autopilotMinScore &&
+        !(await this.hasLiveCandidate(
+          tx,
+          observation.offerId,
+          autopilotMinScore,
+        ))
       ) {
         await tx.publicationCandidate.upsert({
           where: { evaluationId: evaluation.id },
@@ -229,16 +245,46 @@ export class OfferService {
     return decision;
   }
 
-  private async hasLiveCandidate(tx: any, offerId: string): Promise<boolean> {
-    const candidate = await tx.publicationCandidate.findFirst({
+  private async hasLiveCandidate(
+    tx: any,
+    offerId: string,
+    minScore: number | null,
+  ): Promise<boolean> {
+    const candidates = await tx.publicationCandidate.findMany({
       where: {
         status: { in: LIVE_CANDIDATE_STATUSES },
         evaluation: { observation: { offerId } },
       },
-      select: { id: true },
+      select: { evaluation: { select: { score: true } } },
     });
 
-    return Boolean(candidate);
+    return candidates.some((candidate: any) => {
+      if (minScore == null) return true;
+      const score = candidate.evaluation?.score;
+      const numericScore =
+        typeof score?.toNumber === 'function'
+          ? score.toNumber()
+          : Number(score);
+      return Number.isFinite(numericScore) && numericScore >= minScore;
+    });
+  }
+
+  private async getAutopilotMinScore(
+    tx: any,
+    tenantId: string,
+  ): Promise<number | null> {
+    const config = await tx.autopilotConfig.findUnique({
+      where: { tenantId },
+      select: { minScore: true },
+    });
+    if (config?.minScore == null) return null;
+
+    const minScore = config.minScore;
+    const numericScore =
+      typeof minScore?.toNumber === 'function'
+        ? minScore.toNumber()
+        : Number(minScore);
+    return Number.isFinite(numericScore) ? numericScore : null;
   }
 
   private async canReconsiderDuplicate(
@@ -249,7 +295,13 @@ export class OfferService {
   ): Promise<boolean> {
     // Offer is the canonical tenant + marketplace + externalId identity from
     // ingestion; do not use title-only or fuzzy matching for lifecycle state.
-    if (await this.hasLiveCandidate(tx, observation.offerId)) {
+    const autopilotMinScore = await this.getAutopilotMinScore(
+      tx,
+      observation.offer.tenantId,
+    );
+    if (
+      await this.hasLiveCandidate(tx, observation.offerId, autopilotMinScore)
+    ) {
       return false;
     }
 
