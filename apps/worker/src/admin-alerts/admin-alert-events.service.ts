@@ -196,7 +196,7 @@ export class AdminAlertEventsService {
         where: {
           tenantId,
           provider: 'SHOPEE',
-          purchaseTime: { gte: start, lte: end },
+          createdAt: { gte: start, lte: end },
           commissionStatus: { not: 'CANCELLED' },
         },
         select: {

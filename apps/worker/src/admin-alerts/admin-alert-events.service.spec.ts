@@ -40,6 +40,30 @@ describe('AdminAlertEventsService', () => {
     service = new AdminAlertEventsService(prisma, queue);
   });
 
+  const runDailySummary = async (
+    now: Date,
+    conversions: any[] | ((query: any) => any[]) = [],
+  ) => {
+    prisma.adminAlertConfig.findMany.mockResolvedValue([
+      { tenantId: 'tenant-a' },
+    ]);
+    prisma.publication.count.mockResolvedValue(0);
+    prisma.clickEvent.count.mockResolvedValue(0);
+    prisma.marketplaceConversion.findMany.mockImplementation((query: any) =>
+      Promise.resolve(
+        typeof conversions === 'function' ? conversions(query) : conversions,
+      ),
+    );
+    prisma.adminAlert.upsert.mockResolvedValue({
+      id: 'alert-a',
+      createdAt: now,
+      deliveryStatus: 'PENDING',
+    });
+
+    await service.scheduleDailySummaries(now);
+    return prisma.adminAlert.upsert.mock.calls[0][0];
+  };
+
   it('does not create a summary when the feature is disabled', async () => {
     prisma.adminAlertConfig.findMany.mockResolvedValue([]);
 
@@ -143,6 +167,99 @@ describe('AdminAlertEventsService', () => {
         data: [{ alertId: 'alert-a', recipientId: 'legacy-recipient' }],
       }),
     );
+  });
+
+  it('includes a Shopee conversion that arrived late in the creation day summary', async () => {
+    const lateConversion = {
+      attributionStatus: 'ATTRIBUTED',
+      totalCommissionCents: 1234,
+      orders: [
+        {
+          items: [{ itemName: 'Produto tardio', actualAmountCents: 5000 }],
+        },
+      ],
+    };
+
+    const call = await runDailySummary(new Date('2026-08-29T02:10:00.000Z'), [
+      lateConversion,
+    ]);
+
+    expect(call.create.payload).toEqual(
+      expect.objectContaining({
+        period: '2026-08-28',
+        sales: 1,
+        commissionCents: 1234,
+        topProduct: 'Produto tardio',
+      }),
+    );
+    const conversionQuery =
+      prisma.marketplaceConversion.findMany.mock.calls[0][0];
+    expect(conversionQuery.where.createdAt).toEqual({
+      gte: new Date('2026-08-28T04:00:00.000Z'),
+      lte: new Date('2026-08-29T02:10:00.000Z'),
+    });
+    expect(conversionQuery.where.purchaseTime).toBeUndefined();
+  });
+
+  it('does not count the same late conversion again on the following day', async () => {
+    const call = await runDailySummary(new Date('2026-08-30T02:10:00.000Z'));
+
+    expect(call.create.payload).toEqual(
+      expect.objectContaining({ period: '2026-08-29', sales: 0 }),
+    );
+    expect(
+      prisma.marketplaceConversion.findMany.mock.calls[0][0].where.createdAt,
+    ).toEqual({
+      gte: new Date('2026-08-29T04:00:00.000Z'),
+      lte: new Date('2026-08-30T02:10:00.000Z'),
+    });
+  });
+
+  it('counts a conversion created on the same local day', async () => {
+    const call = await runDailySummary(new Date('2026-08-29T02:10:00.000Z'), [
+      {
+        attributionStatus: 'UNATTRIBUTED',
+        totalCommissionCents: 999,
+        orders: [],
+      },
+    ]);
+
+    expect(call.create.payload).toEqual(
+      expect.objectContaining({ period: '2026-08-28', sales: 1 }),
+    );
+  });
+
+  it('keeps cancelled conversions out of the daily summary query', async () => {
+    const cancelledConversion = {
+      attributionStatus: 'ATTRIBUTED',
+      totalCommissionCents: 1234,
+      orders: [],
+    };
+    const call = await runDailySummary(
+      new Date('2026-08-29T02:10:00.000Z'),
+      ({ where }: any) =>
+        where.commissionStatus?.not === 'CANCELLED'
+          ? []
+          : [cancelledConversion],
+    );
+
+    expect(
+      prisma.marketplaceConversion.findMany.mock.calls[0][0].where
+        .commissionStatus,
+    ).toEqual({ not: 'CANCELLED' });
+    expect(call.create.payload).toEqual(
+      expect.objectContaining({ sales: 0, commissionCents: 0 }),
+    );
+  });
+
+  it('uses the America/Campo_Grande local day for conversion boundaries', async () => {
+    const call = await runDailySummary(new Date('2026-08-29T03:30:00.000Z'));
+
+    expect(call.create.payload.period).toBe('2026-08-28');
+    expect(
+      prisma.marketplaceConversion.findMany.mock.calls[0][0].where.createdAt
+        .gte,
+    ).toEqual(new Date('2026-08-28T04:00:00.000Z'));
   });
 
   it('suppresses a repeated incident within its sixty-minute cooldown', async () => {
