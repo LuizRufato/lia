@@ -159,7 +159,7 @@ fastify.get("/:slug", async (request, reply) => {
 
 const start = async () => {
   try {
-    const port = parseInt(process.env.TRACKER_PORT || "3002", 10);
+    const port = parseInt(process.env.TRACKER_PORT || "6002", 10);
     await fastify.listen({ port, host: "0.0.0.0" });
     console.log(`Tracker listening on http://0.0.0.0:${port}`);
   } catch (err) {

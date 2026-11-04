@@ -29,7 +29,7 @@ import { ChannelsModule } from './channels/channels.module';
         JWT_SECRET: Joi.string().min(32).required(),
         DATABASE_URL: Joi.string().required(),
         REDIS_URL: Joi.string().required(),
-        WEB_URL: Joi.string().default('http://localhost:3001'),
+        WEB_URL: Joi.string().default('http://localhost:6000'),
       }),
     }),
     // The API only enqueues jobs, but it must use the exact same Redis

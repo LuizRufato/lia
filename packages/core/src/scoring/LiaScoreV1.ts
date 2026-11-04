@@ -1,3 +1,4 @@
+import Decimal from "decimal.js";
 import { CanonicalOffer } from "../models/CanonicalOffer";
 import { LIA_SCORE_V1_CONFIG, ScoreConfig } from "./ScoreConfig";
 
@@ -60,7 +61,6 @@ export class LiaScoreV1 {
     }
 
     // Final Score = rawScore * sqrt(dataCoverage)
-    const Decimal = require("decimal.js");
     const finalScoreDec = new Decimal(rawScore).mul(
       new Decimal(dataCoverage).sqrt(),
     );

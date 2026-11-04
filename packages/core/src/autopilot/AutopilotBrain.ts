@@ -123,15 +123,15 @@ export class AutopilotBrain {
       };
     }
 
-    // Hard guard: an unknown commission is not safe enough for automatic posting.
-    if (monetization.estimatedCommissionCents == null) {
-      return {
-        reason: AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
-        approved: false,
-        details: "Comissão não informada para a oferta.",
-      };
-    }
-    if (monetization.estimatedCommissionCents < config.minimumCommissionCents) {
+    // Commission guard: a KNOWN commission below the minimum always blocks
+    // (AUTO and DRY_RUN, so simulations stay honest). A null commission is
+    // deferred to the VERIFIED rule in AUTO (the hard stop) and does not
+    // block DRY_RUN, so the simulator can surface candidates whose
+    // marketplace API omits the value.
+    if (
+      monetization.estimatedCommissionCents != null &&
+      monetization.estimatedCommissionCents < config.minimumCommissionCents
+    ) {
       return {
         reason: AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
         approved: false,

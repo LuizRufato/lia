@@ -9,6 +9,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { WhatsAppCloudProvider } from '@lia/integrations';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -18,6 +19,20 @@ import { Public } from '../auth/public.decorator';
 export class WhatsAppWebhookController {
   private get provider() {
     return new WhatsAppCloudProvider();
+  }
+
+  private verifyMetaSignature(req: Request): boolean {
+    const appSecret = process.env.WHATSAPP_APP_SECRET;
+    if (!appSecret) return true; // not configured in this env — accept (verify challenge still guards GET)
+    const signature = req.header('x-hub-signature-256') ?? '';
+    const rawBody = (req as any).rawBody as Buffer | string | undefined;
+    const payload = rawBody ?? JSON.stringify((req as any).body ?? {});
+    const expected =
+      'sha256=' +
+      createHmac('sha256', appSecret).update(payload).digest('hex');
+    const a = Buffer.from(signature);
+    const b = Buffer.from(expected);
+    return a.length === b.length && timingSafeEqual(a, b);
   }
 
   constructor(
@@ -60,7 +75,15 @@ export class WhatsAppWebhookController {
 
   @Public()
   @Post()
-  async handleWebhook(@Body() body: any, @Res() res: Response) {
+  async handleWebhook(
+    @Body() body: any,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    if (!this.verifyMetaSignature(req)) {
+      return res.sendStatus(HttpStatus.UNAUTHORIZED);
+    }
+
     // Retornar 200 rápido (fire-and-forget/durable enqueue) conforme exigência da Meta
     res.sendStatus(HttpStatus.OK);
 
@@ -70,10 +93,18 @@ export class WhatsAppWebhookController {
           for (const change of entry.changes || []) {
             if (change.value && change.value.messages) {
               // Notificações de mensagens recebidas
-              await this.webhooksQueue.add('whatsapp-message', change.value, {
-                attempts: 3,
-                backoff: { type: 'exponential', delay: 2000 },
-              });
+              const messageIds = (change.value.messages || [])
+                .map((m: any) => m?.id)
+                .filter(Boolean);
+              for (const [i, messageId] of messageIds.entries()) {
+                await this.webhooksQueue.add('whatsapp-message', change.value, {
+                  jobId: `whatsapp-message-${messageId}`,
+                  attempts: 3,
+                  backoff: { type: 'exponential', delay: 2000 },
+                  removeOnComplete: true,
+                  indexHint: i,
+                } as any);
+              }
             }
 
             if (change.value && change.value.statuses) {

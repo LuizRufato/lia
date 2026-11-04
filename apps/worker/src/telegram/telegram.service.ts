@@ -27,7 +27,10 @@ export class TelegramService {
       throw new Error('TELEGRAM_BOT_TOKEN is not configured');
     }
 
-    const { chatId, caption, imageUrl, link } = options;
+    const { chatId, imageUrl, link } = options;
+    // escapeMarkdown was previously dead code; with parse_mode MarkdownV2
+    // any special char in the product title made Telegram reject the send.
+    const caption = this.escapeMarkdown(options.caption);
 
     // Inline button via reply_markup
     const replyMarkup = {

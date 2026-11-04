@@ -1,4 +1,6 @@
+import { timingSafeEqual } from "crypto";
 import { decryptSecret } from "../security/encryption";
+import { getEncryptionKey } from "../security/encryption-config";
 
 export interface WhatsAppConfig {
   wabaId: string;
@@ -44,15 +46,29 @@ export class WhatsAppCloudProvider {
    * Decrypts the access token and returns it.
    */
   private getDecryptedToken(config: WhatsAppConfig): string {
-    if (!process.env.INTEGRATION_SECRET_KEY) {
-      throw new Error("INTEGRATION_SECRET_KEY is not defined.");
-    }
-    return decryptSecret(
-      config.encryptedAccessToken,
-      config.tokenIv,
-      config.tokenAuthTag,
+    // INTEGRATION_SECRET_KEY was a divergent env name (only this provider
+    // used it, while the rest of the system uses INTEGRATION_ENCRYPTION_KEY
+    // via getEncryptionKey()). Tokens encrypted by the rest of the system
+    // were produced with INTEGRATION_ENCRYPTION_KEY, so that key must be
+    // tried first; fall back to the legacy name for tokens stored that way.
+    const candidates = [
+      getEncryptionKey(),
       process.env.INTEGRATION_SECRET_KEY,
-    );
+    ].filter(Boolean) as string[];
+    let lastError: unknown;
+    for (const key of candidates) {
+      try {
+        return decryptSecret(
+          config.encryptedAccessToken,
+          config.tokenIv,
+          config.tokenAuthTag,
+          key,
+        );
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    throw lastError ?? new Error("INTEGRATION_ENCRYPTION_KEY is not configured.");
   }
 
   /**
@@ -62,12 +78,13 @@ export class WhatsAppCloudProvider {
     params: WebhookChallengeParams,
     expectedVerifyToken: string,
   ): string | null {
-    if (
-      params["hub.mode"] === "subscribe" &&
-      params["hub.verify_token"] === expectedVerifyToken
-    ) {
-      return params["hub.challenge"];
-    }
+    if (params["hub.mode"] !== "subscribe") return null;
+    const given = Buffer.from(params["hub.verify_token"] ?? "");
+    const expected = Buffer.from(expectedVerifyToken ?? "");
+    const matches =
+      given.length === expected.length &&
+      timingSafeEqual(given, expected);
+    if (matches) return params["hub.challenge"];
     return null;
   }
 

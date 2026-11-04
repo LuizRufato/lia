@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import Redis from 'ioredis';
 import {
   HealthCheck,
   HealthCheckService,
@@ -50,13 +51,13 @@ export class HealthController {
     // Redis & Worker Health
     let redisStatus = 'OPERACIONAL';
     let workerStatus = 'ERRO';
+    // Import at module level; always close the connection (previously a
+    // failed ping leaked one Redis connection per call under the 30s
+    // dashboard polling).
+    const redisClient = new Redis(
+      this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
+    );
     try {
-      // I need to inject ioredis or use the RedisService. Let's just instantiate a temporary connection for the health check.
-      const Redis = require('ioredis');
-      const redisClient = new Redis(
-        this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
-      );
-
       const ping = await redisClient.ping();
       redisStatus = ping === 'PONG' ? 'OPERACIONAL' : 'ERRO';
 
@@ -66,10 +67,10 @@ export class HealthController {
       } else {
         workerStatus = 'INDISPONÍVEL';
       }
-
-      redisClient.quit();
     } catch {
       redisStatus = 'ERRO';
+    } finally {
+      redisClient.quit().catch(() => undefined);
     }
 
     // Tracker Health
@@ -88,30 +89,17 @@ export class HealthController {
       trackerStatus = 'INDISPONÍVEL';
     }
 
-    // Integrations Status
-    const integrations = [
-      {
-        name: 'Shopee',
-        status: 'AGUARDANDO CONFIGURAÇÃO',
-        type: 'marketplace',
-      },
-      {
-        name: 'Mercado Livre Developer',
-        status: 'AGUARDANDO CONFIGURAÇÃO',
-        type: 'marketplace',
-      },
-      {
-        name: 'Mercado Livre Afiliados',
-        status: 'INDISPONÍVEL',
-        type: 'marketplace',
-      },
-      {
-        name: 'WhatsApp',
-        status: 'CANAL PRINCIPAL — AGUARDANDO CONFIGURAÇÃO',
-        type: 'channel',
-      },
-      { name: 'Telegram', status: 'PLANEJADO PARA O FUTURO', type: 'channel' },
-    ];
+    // Integrations Status — now reported from persisted MarketplaceIntegration
+    // rows instead of hardcoded strings, so the dashboard reflects reality.
+    const integrations = await this.getMarketplaceHealthStatus();
+    integrations.push(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { name: 'WhatsApp', status: 'CANAL PRINCIPAL — AGUARDANDO CONFIGURAÇÃO', type: 'channel' } as any,
+    );
+    integrations.push(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { name: 'Telegram', status: 'PLANEJADO PARA O FUTURO', type: 'channel' } as any,
+    );
 
     return {
       core: [
@@ -123,5 +111,42 @@ export class HealthController {
       ],
       integrations,
     };
+  }
+
+  private async getMarketplaceHealthStatus(): Promise<
+    Array<{ name: string; status: string; type: string }>
+  > {
+    const label: Record<string, string> = {
+      SHOPEE: 'Shopee',
+      MERCADO_LIVRE: 'Mercado Livre',
+    };
+    try {
+      const rows = await this.prisma.marketplaceIntegration.findMany({
+        select: { provider: true, status: true },
+      });
+      const byProvider = new Map<string, string[]>();
+      for (const row of rows) {
+        byProvider.set(row.provider, [
+          ...(byProvider.get(row.provider) ?? []),
+          row.status ?? 'NOT_CONNECTED',
+        ]);
+      }
+      const out: Array<{ name: string; status: string; type: string }> = [];
+      for (const [provider, name] of Object.entries(label)) {
+        const statuses = byProvider.get(provider);
+        const status =
+          !statuses?.length
+            ? 'AGUARDANDO CONFIGURAÇÃO'
+            : statuses.includes('CONNECTED')
+              ? 'CONECTADO'
+              : statuses.includes('NEEDS_REAUTH')
+                ? 'PRECISA REAUTENTICAR'
+                : 'DESCONECTADO';
+        out.push({ name, status, type: 'marketplace' });
+      }
+      return out;
+    } catch {
+      return [];
+    }
   }
 }
