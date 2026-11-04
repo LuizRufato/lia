@@ -504,16 +504,9 @@ export class IntegrationsService {
       throw new BadRequestException('WhatsApp is not connected.');
     }
 
-    const masterKey = getEncryptionKey();
-
-    // Set environment variable temporary if needed by provider, but it's better to pass it.
-    // In our WhatsAppCloudProvider we read process.env.INTEGRATION_SECRET_KEY,
-    // let's ensure it's set or we modify it to read from config.
-    // For now we'll just set it on process.env dynamically if not present.
-    if (!process.env.INTEGRATION_SECRET_KEY) {
-      process.env.INTEGRATION_SECRET_KEY = masterKey;
-    }
-
+    // The provider now resolves keys through getEncryptionKey() directly;
+    // no process.env mutation needed (that hack created a global side
+    // effect that masked the env-name divergence).
     const provider = new WhatsAppCloudProvider();
     const success = await provider.testConnection({
       wabaId: integration.wabaId!,
@@ -750,16 +743,19 @@ export class IntegrationsService {
 
     // Groups no longer returned by Evolution are stale and disabled. Existing
     // enabled groups remain enabled only while they continue to be observed.
-    await this.prisma.channel.updateMany({
-      where: {
-        tenantId,
-        provider: 'WHATSAPP',
-        ...(groups.length
-          ? { externalChatId: { notIn: groups.map((group) => group.id) } }
-          : {}),
-      },
-      data: { enabled: false, staleAt: new Date() },
-    });
+    // A zero-length fetch is treated as an error and never disables every
+    // channel: a transient Evolution/permission failure would otherwise
+    // silently wipe the whole tenant's configuration.
+    if (groups.length) {
+      await this.prisma.channel.updateMany({
+        where: {
+          tenantId,
+          provider: 'WHATSAPP',
+          externalChatId: { notIn: groups.map((group) => group.id) },
+        },
+        data: { enabled: false, staleAt: new Date() },
+      });
+    }
 
     return { success: true, groups: results };
   }

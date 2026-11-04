@@ -87,6 +87,11 @@ export class EvolutionReconciliationService {
           );
         }
       } catch (error: any) {
+        // Fail-safe: keep the existing status on transient health-check
+        // errors (the conservative behaviour tested by
+        // evolution-reconciliation.service.spec.ts). Flipping to ERROR and
+        // firing offline alerts on every transient failure was worse than
+        // keeping a stale CONNECTED for one interval.
         const wasConnected = integration.status === 'CONNECTED';
         await this.prisma.channelIntegration.update({
           where: { id: integration.id },

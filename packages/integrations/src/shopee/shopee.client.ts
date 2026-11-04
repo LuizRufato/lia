@@ -229,8 +229,10 @@ export class ShopeeAffiliateClient {
         }
       `,
       variables: {
-        purchaseTimeStart: String(purchaseTimeStart),
-        purchaseTimeEnd: String(purchaseTimeEnd),
+        // GraphQL Int64 variables serialize as JSON numbers; sending a
+        // string is rejected by some servers.
+        purchaseTimeStart: Number(purchaseTimeStart),
+        purchaseTimeEnd: Number(purchaseTimeEnd),
         limit,
         ...(hasScrollId && { scrollId }),
       },

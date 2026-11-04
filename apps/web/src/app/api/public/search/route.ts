@@ -3,10 +3,16 @@ import { NextResponse } from "next/server";
 const MAX_BODY_BYTES = 10_000;
 
 async function forward(path: string, init?: RequestInit) {
-  const apiUrl = (process.env.API_INTERNAL_URL || "http://api:3000").replace(
-    /\/$/,
-    "",
-  );
+  // Same fallback rule as the auth BFF (apps/web/src/app/api/auth/cookie.ts):
+  // in dev/test fall back to NEXT_PUBLIC_API_URL (default localhost:3000)
+  // so the public search works without API_INTERNAL_URL.
+  const raw =
+    process.env.API_INTERNAL_URL ||
+    (process.env.NODE_ENV === "development" ||
+    process.env.NODE_ENV === "test"
+      ? process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000"
+      : "http://api:3000");
+  const apiUrl = raw.replace(/\/$/, "");
   try {
     const response = await fetch(`${apiUrl}/public/search${path}`, {
       ...init,

@@ -13,7 +13,11 @@ type RouteInfo = {
   };
 };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+// Call the same-origin BFF instead of the API directly: cross-origin calls
+// require CORS with credentials and break in prod when NEXT_PUBLIC_API_URL
+// is not baked into the build (falls back to localhost in the visitor's
+// browser).
+const API_URL = "/api/public/group";
 
 function eventId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -31,7 +35,7 @@ export default function GroupLanding({ token }: { token?: string }) {
     const load = async () => {
       try {
         const response = await fetch(
-          `${API_URL}/public/acquisition/group/${token}`,
+          `${API_URL}/${encodeURIComponent(token)}`,
           {
             cache: "no-store",
           },
@@ -128,7 +132,7 @@ async function sendEvent(
   type: "LANDING_VIEW" | "JOIN_CTA_CLICK" | "WHATSAPP_REDIRECT",
 ) {
   try {
-    await fetch(`${API_URL}/public/acquisition/group/${token}/events`, {
+    await fetch(`${API_URL}/${encodeURIComponent(token)}/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -81,12 +81,24 @@ export class AutopilotSchedulerService
         enabledChannels: { include: { channel: true } },
         enabledMarketplaces: true,
         catalogPolicy: true,
+        tenant: { include: { whatsappSafetyConfig: true } },
       },
     });
 
     if (configs.length === 0) return;
 
     for (const dbConfig of configs) {
+      // Global kill switch (WhatsApp safety) stops the whole automatic
+      // pipeline for the tenant before any enqueue — previously only the
+      // manual preflight checked it, so the scheduler kept queueing jobs
+      // while the operator expected everything stopped.
+      const safety = (dbConfig as any).tenant?.whatsappSafetyConfig;
+      if (safety?.killSwitch) {
+        this.logger.warn(
+          `Autopilot paused for tenant ${dbConfig.tenantId}: WhatsApp kill switch is ON`,
+        );
+        continue;
+      }
       await this.processConfig(dbConfig);
     }
   }
@@ -141,8 +153,12 @@ export class AutopilotSchedulerService
       minScore: dbConfig.minScore.toNumber(),
       minimumCommissionCents: dbConfig.minimumCommissionCents,
       maxDailyPosts: dbConfig.maxDailyPosts,
-      intervalMinutes:
-        dbConfig.minSendIntervalMinutes != null ? 0 : dbConfig.intervalMinutes,
+      // Pacing (minSendIntervalMinutes) governs the real gate via
+      // nextEligibleSendAt. The Brain keeps the plain interval check so a
+      // pacing misconfiguration cannot silently disable interval gating;
+      // previously this was zeroed whenever pacing existed, turning the
+      // Brain's interval deferral into dead code.
+      intervalMinutes: dbConfig.intervalMinutes,
       enabledChannelIds: dbConfig.enabledChannels.map((c: any) => c.channelId),
       enabledMarketplaceIds: dbConfig.enabledMarketplaces.map(
         (m: any) => m.marketplaceId,
@@ -385,7 +401,9 @@ export class AutopilotSchedulerService
         }
 
         // DRY_RUN is intentionally read-only for candidates/publications and
-        // never verifies links or enqueues a publisher job.
+        // never verifies links or enqueues a publisher job. Continue the
+        // whole batch (up to 50) instead of returning after the first
+        // candidate, so a single simulation tick can drain the queue.
         if (configSnapshot.mode === AutopilotMode.DRY_RUN) {
           await this.createAudit(
             tenantId,
@@ -396,7 +414,7 @@ export class AutopilotSchedulerService
             decision.channelId,
             decision.details,
           );
-          return;
+          continue;
         }
 
         const claimed = await this.prisma.publicationCandidate.updateMany({

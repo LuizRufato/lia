@@ -43,6 +43,7 @@ model Tenant {
 
   createdAt                     DateTime                      @default(now())
   updatedAt                     DateTime                      @updatedAt
+  allowMercadoLivrePublish      Boolean                    @default(false)
   marketplaceConversions        MarketplaceConversion[]
   marketplaceBrowserSessions    MarketplaceBrowserSession[]
   publicationTemplates          PublicationTemplate[]
@@ -879,8 +880,8 @@ model AutopilotConfig {
   allowedEndMinute   Int    @default(1200) // 20:00
   timezone           String @default("America/Campo_Grande")
 
-  minScore               Decimal   @default(70)
-  minimumCommissionCents Int       @default(500)
+  minScore               Decimal   @default(40)
+  minimumCommissionCents Int       @default(50)
   maxDailyPosts          Int       @default(30)
   intervalMinutes        Int       @default(30)
   minSendIntervalMinutes Int?

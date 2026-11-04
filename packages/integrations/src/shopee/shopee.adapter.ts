@@ -18,9 +18,14 @@ export class ShopeeAdapter {
       new Decimal(item.commission || "0").mul(100).toNumber(),
     );
 
-    // Discount rate (Number -> bps)
-    // E.g. 10 -> 1000 bps
-    const discountBps = Math.round((item.priceDiscountRate || 0) * 100);
+    // Discount rate (Number -> bps). Shopee's priceDiscountRate is a
+    // percent (e.g. 10 = 10% -> 1000 bps), while commissionRate is a
+    // fraction (e.g. "0.25" = 25% -> 2500 bps) — the asymmetry is real
+    // in the Shopee API; clamp to the CanonicalOffer max (100%).
+    const discountBps = Math.min(
+      Math.round((item.priceDiscountRate || 0) * 100),
+      10000,
+    );
 
     // Commission rate (String -> bps)
     // E.g. "0.25" -> 25% -> 2500 bps

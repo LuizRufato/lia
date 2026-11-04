@@ -89,7 +89,23 @@ export class OfferService {
       let nextDecision: string = 'ELIGIBLE';
       let reasons: string[] = ['Offer is eligible for publication'];
 
+      // Mercado Livre publication is a per-tenant flag (legacy behaviour was
+      // a hardcoded reject before calibration). Default stays false so ML
+      // never publishes without an explicit opt-in.
+      let mlAllowed = false;
       if (canonicalOffer.marketplace === 'MERCADO_LIVRE') {
+        try {
+          const tenantRow = await tx.tenant.findUnique({
+            where: { id: observation.offer.tenantId },
+            select: { allowMercadoLivrePublish: true },
+          });
+          mlAllowed = tenantRow?.allowMercadoLivrePublish ?? false;
+        } catch {
+          mlAllowed = false; // old/manual mocks without the column
+        }
+      }
+
+      if (canonicalOffer.marketplace === 'MERCADO_LIVRE' && !mlAllowed) {
         nextDecision = 'REJECTED_MARKETPLACE_POLICY';
         reasons = [
           'Mercado Livre permanece em ingestão somente até a calibração do score e monetização.',

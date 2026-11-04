@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import Redis from 'ioredis';
 import {
   HealthCheck,
   HealthCheckService,
@@ -53,11 +54,8 @@ export class HealthController {
     // Redis & Worker Health
     let redisStatus = 'OPERACIONAL';
     let workerStatus = 'ERRO';
+    const redisClient = new Redis(getRedisConfig().url);
     try {
-      // I need to inject ioredis or use the RedisService. Let's just instantiate a temporary connection for the health check.
-      const Redis = require('ioredis');
-      const redisClient = new Redis(getRedisConfig().url);
-
       const ping = await redisClient.ping();
       redisStatus = ping === 'PONG' ? 'OPERACIONAL' : 'ERRO';
 
@@ -67,10 +65,12 @@ export class HealthController {
       } else {
         workerStatus = 'INDISPONÍVEL';
       }
-
-      redisClient.quit();
     } catch {
       redisStatus = 'ERRO';
+    } finally {
+      // Always close the connection — previously a failed ping leaked one
+      // Redis connection per call under the 30s dashboard polling.
+      redisClient.quit().catch(() => undefined);
     }
 
     // Tracker Health
@@ -90,31 +90,18 @@ export class HealthController {
       trackerStatus = 'INDISPONÍVEL';
     }
 
-    // Integrations Status
+    // Integrations Status — now reported from persisted MarketplaceIntegration
+    // rows instead of hardcoded strings, so the dashboard reflects reality.
     const whatsappStatus = await this.getWhatsAppHealthStatus();
-    const integrations = [
-      {
-        name: 'Shopee',
-        status: 'AGUARDANDO CONFIGURAÇÃO',
-        type: 'marketplace',
-      },
-      {
-        name: 'Mercado Livre Developer',
-        status: 'AGUARDANDO CONFIGURAÇÃO',
-        type: 'marketplace',
-      },
-      {
-        name: 'Mercado Livre Afiliados',
-        status: 'INDISPONÍVEL',
-        type: 'marketplace',
-      },
-      {
-        name: 'WhatsApp',
-        status: whatsappStatus,
-        type: 'channel',
-      },
-      { name: 'Telegram', status: 'PLANEJADO PARA O FUTURO', type: 'channel' },
-    ];
+    const integrations = await this.getMarketplaceHealthStatus();
+    integrations.push(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { name: 'WhatsApp', status: whatsappStatus, type: 'channel' } as any,
+    );
+    integrations.push(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { name: 'Telegram', status: 'PLANEJADO PARA O FUTURO', type: 'channel' } as any,
+    );
 
     return {
       core: [
@@ -126,6 +113,43 @@ export class HealthController {
       ],
       integrations,
     };
+  }
+
+  private async getMarketplaceHealthStatus(): Promise<
+    Array<{ name: string; status: string; type: string }>
+  > {
+    const label: Record<string, string> = {
+      SHOPEE: 'Shopee',
+      MERCADO_LIVRE: 'Mercado Livre',
+    };
+    try {
+      const rows = await this.prisma.marketplaceIntegration.findMany({
+        select: { provider: true, status: true },
+      });
+      const byProvider = new Map<string, string[]>();
+      for (const row of rows) {
+        byProvider.set(row.provider, [
+          ...(byProvider.get(row.provider) ?? []),
+          row.status ?? 'NOT_CONNECTED',
+        ]);
+      }
+      const out: Array<{ name: string; status: string; type: string }> = [];
+      for (const [provider, name] of Object.entries(label)) {
+        const statuses = byProvider.get(provider);
+        const status =
+          !statuses?.length
+            ? 'AGUARDANDO CONFIGURAÇÃO'
+            : statuses.includes('CONNECTED')
+              ? 'CONECTADO'
+              : statuses.includes('NEEDS_REAUTH')
+                ? 'PRECISA REAUTENTICAR'
+                : 'DESCONECTADO';
+        out.push({ name, status, type: 'marketplace' });
+      }
+      return out;
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -180,9 +204,8 @@ export class HealthController {
             return 'NOT_CONNECTED';
           }
           try {
-            if (!process.env.INTEGRATION_SECRET_KEY) {
-              process.env.INTEGRATION_SECRET_KEY = getEncryptionKey();
-            }
+            // Provider resolves INTEGRATION_ENCRYPTION_KEY via
+            // getEncryptionKey() itself; no env mutation needed.
             const connected = await new WhatsAppCloudProvider().testConnection({
               wabaId: integration.wabaId,
               phoneNumberId: integration.phoneNumberId,

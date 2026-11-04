@@ -162,9 +162,30 @@ describe("AutopilotBrain", () => {
       defaultContext,
       dummyClock,
     );
+    // AUTO: null commission is NOT a commission block — the VERIFIED rule
+    // below is the hard stop. With status VERIFIED, it falls through and
+    // approves; without VERIFIED it rejects as REJECTED_MONETIZATION.
+    // (Previously this rejected as REJECTED_MINIMUM_COMMISSION, which made
+    // every AUTO candidate die before any other check when the API omitted
+    // the commission value.)
+    expect(decision.approved).toBe(true);
+  });
+
+  it("null commission + UNVERIFIED em AUTO ainda rejeita como monetização", () => {
+    const decision = AutopilotBrain.evaluate(
+      defaultOffer,
+      defaultConfig,
+      {
+        ...defaultMonetization,
+        estimatedCommissionCents: null,
+        status: MonetizationStatus.UNVERIFIED,
+      },
+      defaultContext,
+      dummyClock,
+    );
     expect(decision.approved).toBe(false);
     expect(decision.reason).toBe(
-      AutopilotDecisionReason.REJECTED_MINIMUM_COMMISSION,
+      AutopilotDecisionReason.REJECTED_MONETIZATION,
     );
   });
 
