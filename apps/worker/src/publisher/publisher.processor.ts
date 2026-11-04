@@ -612,7 +612,7 @@ export class PublisherProcessor extends WorkerHost {
     const trackerBaseUrl =
       process.env.TRACKER_PUBLIC_BASE_URL ||
       process.env.TRACKER_BASE_URL ||
-      'http://localhost:3002';
+      'http://localhost:6002';
     const finalUrl = `${trackerBaseUrl}/${slug}`;
 
     const { CopyEngine } = require('@lia/core');

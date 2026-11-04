@@ -33,7 +33,7 @@ async function bootstrap() {
   // Security
   app.use(helmet());
   app.enableCors({
-    origin: process.env.WEB_URL || 'http://localhost:3001',
+    origin: process.env.WEB_URL || 'http://localhost:6000',
     credentials: true,
   });
 

@@ -43,7 +43,7 @@ import { EvolutionWebhookController } from './webhooks/evolution.controller';
         REDIS_HOST: Joi.string().hostname().default('localhost'),
         REDIS_PORT: Joi.number().port().default(6379),
         REDIS_PREFIX: Joi.string().default('{lia}'),
-        WEB_URL: Joi.string().default('http://localhost:3001'),
+        WEB_URL: Joi.string().default('http://localhost:6000'),
         AUTH_COOKIE_DOMAIN: Joi.string().trim().hostname().allow('').optional(),
         TRACKER_URL: Joi.string()
           .uri({ scheme: ['http', 'https'] })

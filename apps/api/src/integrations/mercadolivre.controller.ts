@@ -42,11 +42,11 @@ export class MercadoLivreController {
   ) {
     try {
       await this.meliService.handleCallback(state, code);
-      const webUrl = process.env.WEB_URL || 'http://localhost:3001';
+      const webUrl = process.env.WEB_URL || 'http://localhost:6000';
       return res.redirect(`${webUrl}/integrations/mercadolivre?status=success`);
     } catch (err) {
       console.error('Meli callback error:', err);
-      const webUrl = process.env.WEB_URL || 'http://localhost:3001';
+      const webUrl = process.env.WEB_URL || 'http://localhost:6000';
       return res.redirect(`${webUrl}/integrations/mercadolivre?status=error`);
     }
   }
